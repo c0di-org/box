@@ -159,9 +159,10 @@ Expect `Guest command probe: exit=0 stdout=device-agentd-ok` in logcat. Run `STA
 first on a fresh install: only `START` provisions the guest image, so `EXEC_PROBE` on
 an unprovisioned device fails with `No complete verified guest image is installed yet`.
 
-Tap-to-Ready on a Galaxy Z Fold 7 measured 170–260 seconds against the protocol-v2
-image, versus a ~90 second figure quoted for earlier builds. Almost all of it is the
-guest waiting on emulated udev; see [guest/README.md](guest/README.md).
+Tap-to-Ready on a Galaxy Z Fold 7 measured ~170 seconds against the protocol-v2 image
+(171 s cooled, 168 s on a first cold provision, 252 s with the SoC already hot from
+back-to-back runs), versus a ~90 second figure quoted for earlier builds. Nearly all of
+it is the guest waiting on emulated udev; see [guest/README.md](guest/README.md).
 
 Reinstalling the APK does **not** replace an already-provisioned guest disk —
 `base-system.qcow2` is installed only when absent, since it is mutable once booted. To
