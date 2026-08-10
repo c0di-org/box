@@ -231,7 +231,7 @@ private fun ComputerPane(onClose: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(18.dp))
                 Button(
                     onClick = {
-                        context.startService(Intent(context, RuntimeService::class.java).apply {
+                        context.startForegroundService(Intent(context, RuntimeService::class.java).apply {
                             action = RuntimeService.ACTION_START
                         })
                     },

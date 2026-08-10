@@ -21,6 +21,7 @@ class RuntimeStorage(context: Context) {
     val workspace = File(disks, "workspace.qcow2")
     val qmpSocket = File(sockets, "qmp.sock")
     val agentSocket = File(sockets, "agentd.sock")
+    val serialSocket = File(sockets, "serial.sock")
 
     fun hasUefiBootSet(): Boolean = baseSystem.isFile && uefiCode.isFile && uefiVars.isFile
 

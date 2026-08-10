@@ -7,11 +7,14 @@ user. Privileged package installation will be a separately audited method.
 from __future__ import annotations
 
 import base64
+import argparse
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Any
 
 PROTOCOL_VERSION = 1
@@ -19,13 +22,18 @@ WORKSPACE = Path("/workspace").resolve()
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
 
-def response(request_id: str, result: Any = None, error: dict[str, str] | None = None) -> None:
+def response(
+    request_id: str,
+    output: io.TextIOBase,
+    result: Any = None,
+    error: dict[str, str] | None = None,
+) -> None:
     payload: dict[str, Any] = {"version": PROTOCOL_VERSION, "id": request_id}
     if error is not None:
         payload["error"] = error
     else:
         payload["result"] = result
-    print(json.dumps(payload, separators=(",", ":")), flush=True)
+    print(json.dumps(payload, separators=(",", ":")), file=output, flush=True)
 
 
 def resolve_path(value: str) -> Path:
@@ -68,14 +76,13 @@ def handle(method: str, params: dict[str, Any]) -> Any:
 
     if method == "list_files":
         path = resolve_path(params.get("path", "/workspace"))
-        return [{"name": entry.name, "path": str(entry), "directory": entry.is_dir(), "size": entry.stat().st_size} for entry in sorted(path.iterdir())]
+        return {"items": [{"name": entry.name, "path": str(entry), "directory": entry.is_dir(), "size": entry.stat().st_size} for entry in sorted(path.iterdir())]}
 
     raise ValueError("unsupported method")
 
 
-def main() -> int:
-    WORKSPACE.mkdir(parents=True, exist_ok=True)
-    for line in sys.stdin:
+def serve(stream: io.TextIOBase) -> None:
+    for line in stream:
         request_id = ""
         try:
             request = json.loads(line)
@@ -83,11 +90,34 @@ def main() -> int:
             if request.get("version") != PROTOCOL_VERSION or not request_id:
                 raise ValueError("version and id are required")
             result = handle(request["method"], request.get("params", {}))
-            response(request_id, result=result)
+            response(request_id, stream, result=result)
         except subprocess.TimeoutExpired:
-            response(request_id, error={"code": "timeout", "message": "command exceeded its time limit"})
+            response(request_id, stream, error={"code": "timeout", "message": "command exceeded its time limit"})
         except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
-            response(request_id, error={"code": "invalid_request", "message": str(exc)})
+            response(request_id, stream, error={"code": "invalid_request", "message": str(exc)})
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--device", help="Dedicated virtio-serial device to use for protocol I/O")
+    args = parser.parse_args()
+
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+    if not args.device:
+        serve(sys.stdin)
+        return 0
+
+    # QEMU reports EOF from a virtio port until a host endpoint connects, and
+    # again after a client disconnects. Keep the service alive and reopen the
+    # *single* bidirectional descriptor for the next LocalSocket connection.
+    while True:
+        try:
+            with open(args.device, "r+b", buffering=0) as raw:
+                stream = io.TextIOWrapper(raw, encoding="utf-8", newline="\n", line_buffering=True)
+                serve(stream)
+        except OSError:
+            pass
+        time.sleep(0.2)
     return 0
 
 

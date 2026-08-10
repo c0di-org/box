@@ -1,19 +1,17 @@
 [Unit]
 Description=Local Agent private guest control service
-After=multi-user.target
+After=local-agent-workspace-prepare.service dev-virtio\x2dports-dev.localagent.agentd.device
+Requires=local-agent-workspace-prepare.service
+Requires=dev-virtio\x2dports-dev.localagent.agentd.device
 
 [Service]
 Type=simple
 User=agent
 Group=agent
 WorkingDirectory=/workspace
-ExecStart=/usr/bin/python3 /opt/local-agent/agentd.py
+ExecStart=/usr/bin/python3 -u /opt/local-agent/agentd.py --device /dev/virtio-ports/dev.localagent.agentd
 Restart=always
 RestartSec=1
-StandardInput=tty
-StandardOutput=tty
-TTYPath=/dev/virtio-ports/dev.localagent.agentd
-TTYReset=yes
 
 [Install]
 WantedBy=multi-user.target

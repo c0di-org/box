@@ -10,7 +10,7 @@ class VmProbeActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val requestedAction = intent.getStringExtra(EXTRA_RUNTIME_ACTION) ?: RuntimeService.ACTION_START
-        startService(Intent(this, RuntimeService::class.java).setAction(requestedAction))
+        startForegroundService(Intent(this, RuntimeService::class.java).setAction(requestedAction))
         finish()
     }
 

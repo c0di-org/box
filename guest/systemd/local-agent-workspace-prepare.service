@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare Local Agent guest workspace and control device
+After=workspace.mount dev-virtio\x2dports-dev.localagent.agentd.device
+Requires=workspace.mount dev-virtio\x2dports-dev.localagent.agentd.device
+Before=local-agentd.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/chown agent:agent /workspace /dev/virtio-ports/dev.localagent.agentd
+RemainAfterExit=yes
+
