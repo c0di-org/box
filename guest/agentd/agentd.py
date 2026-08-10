@@ -812,9 +812,14 @@ class Connection:
     def _start_exec(self, stream: Stream, request: dict[str, Any]) -> None:
         command = require_command(request)
         cwd = resolve_working_directory(request.get("cwd", str(WORKSPACE)))
-        timeout = min(
-            max(int(request.get("timeoutSeconds", DEFAULT_EXEC_TIMEOUT_SECONDS)), 1),
-            MAX_EXEC_TIMEOUT_SECONDS,
+        # 0 means no deadline. An agent harness works for as long as the task takes, and a
+        # wall-clock limit that kills it mid-edit is worse than none: the stream is still bounded
+        # by CANCEL, and _abort_all kills every child when the host disconnects. A pty has never
+        # had a deadline for the same reason.
+        requested = int(request.get("timeoutSeconds", DEFAULT_EXEC_TIMEOUT_SECONDS))
+        timeout = (
+            None if requested == 0
+            else min(max(requested, 1), MAX_EXEC_TIMEOUT_SECONDS)
         )
         wants_stdin = bool(request.get("stdin", False))
         process = subprocess.Popen(
@@ -827,7 +832,8 @@ class Connection:
             start_new_session=True,
         )
         stream.process = process
-        stream.deadline = time.monotonic() + timeout
+        if timeout is not None:
+            stream.deadline = time.monotonic() + timeout
         # Popen owns these descriptors; the sources borrow them and close through it.
         stream.sources.append((CHANNEL_STDOUT, FdSource(process.stdout.fileno(), process.stdout.close)))
         stream.sources.append((CHANNEL_STDERR, FdSource(process.stderr.fileno(), process.stderr.close)))

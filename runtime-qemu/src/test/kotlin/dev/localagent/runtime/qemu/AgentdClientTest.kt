@@ -3,6 +3,7 @@ package dev.localagent.runtime.qemu
 import dev.localagent.runtime.api.ExecEvent
 import dev.localagent.runtime.api.ExecRequest
 import dev.localagent.runtime.api.PtyRequest
+import dev.localagent.runtime.api.SessionRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -230,5 +231,94 @@ class AgentdClientTest {
         assertEquals(1L, slowOpen.streamId)
         assertEquals(3L, quickOpen.streamId)
         assertEquals(ExecEvent.Exited(0), slow.await().last())
+    }
+
+    @Test
+    fun `a session opens an exec stream that keeps stdin open and asks for no deadline`() =
+        runBlocking {
+            guest.handshake()
+
+            async(Dispatchers.IO) { client.openSession(SessionRequest(listOf("harness"))) }
+            val open = guest.read()
+
+            val request = JSONObject(open.text)
+            assertEquals("exec", request.getString("kind"))
+            assertTrue(request.getBoolean("stdin"))
+            // Unbounded: a harness working through a real task has no honest wall-clock limit.
+            assertEquals(0, request.getInt("timeoutSeconds"))
+        }
+
+    @Test
+    fun `a session is answered while it is still running`() = runBlocking {
+        guest.handshake()
+
+        val session = async(Dispatchers.IO) {
+            client.openSession(SessionRequest(listOf("harness")))
+        }.await()
+        val open = guest.read()
+        val collected = mutableListOf<ExecEvent>()
+        val reader = launch(Dispatchers.IO) { session.output.collect { collected += it } }
+
+        // The harness asks…
+        guest.writeText(
+            AgentdProtocol.DATA, open.streamId, AgentdProtocol.CHANNEL_STDOUT,
+            """{"type":"permission","requestId":"p1"}""" + "\n",
+        )
+        // …and the answer travels back down the same stream that is still open.
+        session.write("""{"requestId":"p1","decision":"allow"}""".plus("\n").toByteArray())
+        val answer = guest.readUntil(AgentdProtocol.DATA)
+
+        guest.close(open.streamId, """{"status":"ok","exitCode":0}""")
+        reader.join()
+
+        assertEquals(AgentdProtocol.CHANNEL_STDIN, answer.channel)
+        assertEquals("""{"requestId":"p1","decision":"allow"}""" + "\n", answer.text)
+        assertEquals(ExecEvent.Exited(0), collected.last())
+    }
+
+    @Test
+    fun `a session separates stderr from the events on stdout`() = runBlocking {
+        guest.handshake()
+
+        val session = async(Dispatchers.IO) {
+            client.openSession(SessionRequest(listOf("harness")))
+        }.await()
+        val open = guest.read()
+        val collected = async(Dispatchers.IO) { session.output.toList() }
+
+        guest.writeText(
+            AgentdProtocol.DATA, open.streamId, AgentdProtocol.CHANNEL_STDERR, "npm warn\n",
+        )
+        guest.writeText(
+            AgentdProtocol.DATA, open.streamId, AgentdProtocol.CHANNEL_STDOUT, """{"type":"ok"}""",
+        )
+        guest.close(open.streamId, """{"status":"ok","exitCode":0}""")
+
+        // A harness narrating structured events on stdout must never have them interleaved with
+        // whatever npm decided to say — which is exactly what a PTY would have done.
+        val events = collected.await()
+        assertEquals("npm warn\n", (events[0] as ExecEvent.Stderr).bytes.decodeToString())
+        assertEquals("""{"type":"ok"}""", (events[1] as ExecEvent.Stdout).bytes.decodeToString())
+        assertEquals(ExecEvent.Exited(0), events[2])
+    }
+
+    @Test
+    fun `a session reports its exit code to a caller that never collected output`() = runBlocking {
+        guest.handshake()
+
+        val session = async(Dispatchers.IO) {
+            client.openSession(SessionRequest(listOf("harness")))
+        }.await()
+        val open = guest.read()
+        val exit = async(Dispatchers.IO) { session.awaitExit() }
+
+        guest.writeText(
+            AgentdProtocol.DATA, open.streamId, AgentdProtocol.CHANNEL_STDOUT, "ignored",
+        )
+        guest.close(open.streamId, """{"status":"ok","exitCode":3}""")
+
+        // Terminal state lives on the stream: the UI process may have died mid-session, and
+        // whoever rebinds still needs to learn how it ended.
+        assertEquals(3, exit.await())
     }
 }

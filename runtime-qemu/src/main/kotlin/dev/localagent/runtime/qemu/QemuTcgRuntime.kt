@@ -9,12 +9,14 @@ import dev.localagent.runtime.api.ExecEvent
 import dev.localagent.runtime.api.ExecRequest
 import dev.localagent.runtime.api.ExecResult
 import dev.localagent.runtime.api.FileEntry
+import dev.localagent.runtime.api.GuestSession
 import dev.localagent.runtime.api.PortForward
 import dev.localagent.runtime.api.PortForwardRequest
 import dev.localagent.runtime.api.PtyRequest
 import dev.localagent.runtime.api.PtySession
 import dev.localagent.runtime.api.RuntimeFailure
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.runtime.api.SessionRequest
 import dev.localagent.runtime.api.SnapshotId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -198,6 +200,16 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             ensureReady()
             emitAll(agentd.exec(request))
         }
+    }
+
+    override suspend fun openSession(request: SessionRequest): GuestSession {
+        ensureReady()
+        require(request.command.isNotEmpty()) { "Command must not be empty" }
+        // 0 is the unbounded case and the default; anything else is still held to the guest's cap.
+        require(request.timeoutSeconds == 0 || request.timeoutSeconds in 1..MAX_EXEC_TIMEOUT_SECONDS) {
+            "Session timeout must be 0 or between 1 and $MAX_EXEC_TIMEOUT_SECONDS seconds"
+        }
+        return agentd.openSession(request)
     }
 
     override suspend fun createPty(request: PtyRequest): PtySession {

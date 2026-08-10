@@ -89,6 +89,19 @@ class Client:
             elif frame_type == agentd.FRAME_CLOSE:
                 return json.loads(payload), bytes(stdout), bytes(stderr)
 
+    def read_until(self, stream_id: int, channel: int, marker: bytes) -> bytes:
+        """Reads one channel until `marker` arrives, leaving the stream running."""
+        buffered = bytearray()
+        while marker not in buffered:
+            frame_type, frame_channel, frame_stream, payload = self.receive()
+            self.assert_stream(frame_stream, stream_id)
+            if frame_type == agentd.FRAME_CLOSE:
+                raise AssertionError(f"stream closed before {marker!r} arrived: {payload!r}")
+            if frame_type == agentd.FRAME_DATA and frame_channel == channel:
+                buffered.extend(payload)
+                self.grant(stream_id, len(payload))
+        return bytes(buffered)
+
     def assert_stream(self, actual: int, expected: int) -> None:
         if actual != expected:
             raise AssertionError(f"frame for stream {actual}, expected {expected}")
@@ -358,6 +371,48 @@ class ExecTests(WorkspaceTestCase):
 
         self.assertEqual("error", close["status"])
         self.assertEqual("timeout", close["error"]["code"])
+
+    def test_a_zero_timeout_means_no_deadline_at_all(self) -> None:
+        # Not merely "a long deadline": the clamp used to floor every request at one second, so a
+        # session asking for none was killed almost immediately. Sleeping past that proves it.
+        with connected() as client:
+            stream_id = client.open({
+                "kind": "exec",
+                "command": [sys.executable, "-c", "import time; time.sleep(1.5); print('alive')"],
+                "cwd": str(agentd.WORKSPACE),
+                "timeoutSeconds": 0,
+            })
+            close, stdout, _ = client.collect(stream_id)
+
+        self.assertEqual("ok", close["status"])
+        self.assertEqual(0, close["exitCode"])
+        self.assertEqual(b"alive\n", stdout)
+
+    def test_a_running_process_can_be_answered_mid_run(self) -> None:
+        # The permission round-trip in one test: the child asks, the host answers while it is still
+        # running, and the child acts on the answer. Without this the sheet can render but never
+        # decide anything.
+        script = (
+            "import sys\n"
+            "sys.stdout.write('may-i\\n'); sys.stdout.flush()\n"
+            "answer = sys.stdin.readline().strip()\n"
+            "sys.stdout.write('heard:' + answer + '\\n'); sys.stdout.flush()\n"
+        )
+        with connected() as client:
+            stream_id = client.open({
+                "kind": "exec",
+                "command": [sys.executable, "-u", "-c", script],
+                "cwd": str(agentd.WORKSPACE),
+                "stdin": True,
+                "timeoutSeconds": 0,
+            })
+            asked = client.read_until(stream_id, agentd.CHANNEL_STDOUT, b"may-i\n")
+            self.assertEqual(b"may-i\n", asked)
+            client.send(agentd.FRAME_DATA, stream_id, agentd.CHANNEL_STDIN, b"allow\n")
+            close, stdout, _ = client.collect(stream_id)
+
+        self.assertEqual(0, close["exitCode"])
+        self.assertIn(b"heard:allow", stdout)
 
     def test_cancel_kills_the_whole_process_group(self) -> None:
         marker = agentd.WORKSPACE / "child-was-here"

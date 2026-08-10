@@ -4,8 +4,10 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import dev.localagent.runtime.api.ExecEvent
 import dev.localagent.runtime.api.ExecRequest
+import dev.localagent.runtime.api.GuestSession
 import dev.localagent.runtime.api.PtyRequest
 import dev.localagent.runtime.api.PtySession
+import dev.localagent.runtime.api.SessionRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -101,6 +103,26 @@ internal class AgentdClient private constructor(
         } finally {
             withContext(NonCancellable) { stream.cancel(EMPTY_JSON) }
         }
+    }
+
+    /**
+     * The same `exec` stream as [exec], opened with `stdin` so the host can answer it mid-run.
+     *
+     * The flow returned by [exec] is deliberately not reused: it owns its stream and closes it
+     * when the collector leaves, which is exactly wrong for a session the UI process may stop
+     * collecting — and later re-attach to — without the agent noticing.
+     */
+    suspend fun openSession(request: SessionRequest): GuestSession {
+        val open = JSONObject()
+            .put("kind", "exec")
+            .put("command", JSONArray().apply { request.command.forEach(::put) })
+            .put("cwd", request.workingDirectory)
+            .put("timeoutSeconds", request.timeoutSeconds)
+            .put("stdin", true)
+            .put("env", jsonOf(request.environment))
+        return AgentdGuestSession(
+            connection().openStream(open.toString().toByteArray(Charsets.UTF_8)),
+        )
     }
 
     suspend fun openPty(request: PtyRequest): PtySession {
@@ -225,6 +247,49 @@ internal class AgentdClient private constructor(
         private const val HANDSHAKE_TIMEOUT_MILLIS = 2_000L
         private const val READ_POLL_MILLIS = 1_000
         internal val EMPTY_JSON = "{}".toByteArray(Charsets.UTF_8)
+    }
+}
+
+/**
+ * A session is an `exec` stream that nobody closes early: output up, decisions down.
+ *
+ * The [AgentdPtySession] shape does not fit — a PTY merges stdout and stderr the way a terminal
+ * does, and a harness that narrates structured events on stdout must not have its lines
+ * interleaved with anything else.
+ */
+internal class AgentdGuestSession(private val stream: AgentdStream) : GuestSession {
+    override val output: Flow<ExecEvent> = flow {
+        for (event in stream.incoming) {
+            if (event !is AgentdEvent.Data) continue
+            when (event.channel) {
+                AgentdProtocol.CHANNEL_STDOUT -> emit(ExecEvent.Stdout(event.bytes))
+                AgentdProtocol.CHANNEL_STDERR -> emit(ExecEvent.Stderr(event.bytes))
+                else -> Unit
+            }
+            // Credit returns only once the collector took the bytes, so a chatty harness throttles
+            // itself against the app rather than filling its heap.
+            stream.acknowledge(event.bytes.size)
+        }
+        emit(ExecEvent.Exited(awaitExit()))
+    }
+
+    override suspend fun write(data: ByteArray) = stream.send(AgentdProtocol.CHANNEL_STDIN, data)
+
+    override suspend fun closeInput() = stream.endChannel(AgentdProtocol.CHANNEL_STDIN)
+
+    override suspend fun awaitExit(): Int =
+        JSONObject(stream.closePayload.await().toString(Charsets.UTF_8)).optInt("exitCode", -1)
+
+    override suspend fun cancel() {
+        withContext(NonCancellable) {
+            stream.cancel(JSONObject().put("signal", "TERM").toString().toByteArray(Charsets.UTF_8))
+            // The guest answers CLOSE even for a cancel; do not wait forever if it cannot.
+            withTimeoutOrNull(CANCEL_TIMEOUT_MILLIS) { runCatching { stream.closePayload.await() } }
+        }
+    }
+
+    private companion object {
+        const val CANCEL_TIMEOUT_MILLIS = 5_000L
     }
 }
 

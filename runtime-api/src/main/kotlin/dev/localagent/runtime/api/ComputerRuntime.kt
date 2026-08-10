@@ -18,6 +18,16 @@ interface ComputerRuntime {
      * process rather than buffering without limit.
      */
     fun execStream(request: ExecRequest): Flow<ExecEvent>
+
+    /**
+     * A long-lived guest process the host reads from *and writes to while it runs*.
+     *
+     * [execStream] is one-way once started: it streams output, but the command's stdin is closed,
+     * so nothing can answer it. An agent harness is the opposite shape — it runs for minutes and
+     * has to be told, mid-run, whether it may edit a file. That answer is the whole point of the
+     * permission sheet, so it needs a channel that stays open in both directions.
+     */
+    suspend fun openSession(request: SessionRequest): GuestSession
     suspend fun createPty(request: PtyRequest): PtySession
     suspend fun readFile(path: String): ByteArray
     suspend fun writeFile(path: String, data: ByteArray)
@@ -53,6 +63,38 @@ sealed interface ExecEvent {
     class Stdout(val bytes: ByteArray) : ExecEvent
     class Stderr(val bytes: ByteArray) : ExecEvent
     data class Exited(val exitCode: Int) : ExecEvent
+}
+
+data class SessionRequest(
+    val command: List<String>,
+    val workingDirectory: String = "/workspace",
+    val environment: Map<String, String> = emptyMap(),
+    /**
+     * Guest-enforced wall-clock limit, or `0` for none.
+     *
+     * Unbounded is the default here and nowhere else. An agent working through a real task has no
+     * honest upper bound, and a deadline that kills it mid-edit is worse than one that never
+     * fires: the session is still bounded by [GuestSession.cancel], by the user interrupting, and
+     * by the guest killing every child when the host disconnects.
+     */
+    val timeoutSeconds: Int = 0,
+)
+
+/**
+ * A running guest process with both pipes open.
+ *
+ * [output] carries stdout and stderr as they arrive and ends with [ExecEvent.Exited]; [write]
+ * reaches the process's stdin while it runs. Terminal state lives on the session, so [awaitExit]
+ * answers whether or not anyone is collecting [output].
+ */
+interface GuestSession {
+    val output: Flow<ExecEvent>
+    suspend fun write(data: ByteArray)
+    /** Half-close: the process sees EOF on stdin and can still finish writing its own output. */
+    suspend fun closeInput()
+    suspend fun awaitExit(): Int
+    /** Stop the process now. Safe to call twice, and safe to call on an already-dead session. */
+    suspend fun cancel()
 }
 
 data class PtyRequest(
