@@ -13,9 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
@@ -71,6 +71,22 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel()) {
         BoxApp(
             state = state,
             onDestinationSelected = boxViewModel::selectDestination,
+            onSelectSession = boxViewModel::selectSession,
+            onToggleHarness = boxViewModel::toggleHarness,
+            onNewConversation = { harnessId -> boxViewModel.startSession(harnessId) },
+            onSend = boxViewModel::sendMessage,
+            onInterrupt = boxViewModel::interruptSession,
+            onPermissionDecision = boxViewModel::resolvePermission,
+            onOpenArtifact = { artifact ->
+                boxViewModel.openArtifact(
+                    when (artifact) {
+                        dev.localagent.workstation.agent.Artifact.Computer -> "The live desktop"
+                        is dev.localagent.workstation.agent.Artifact.Preview -> "The preview"
+                    },
+                )
+            },
+            onCloseSession = boxViewModel::closeSession,
+            onSelectComputerTool = boxViewModel::selectComputerTool,
             onSetupAndStart = { withNotificationPermission("setup") },
             onStart = { withNotificationPermission("start") },
             onStop = boxViewModel::stop,
