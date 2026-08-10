@@ -16,7 +16,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
@@ -412,6 +412,22 @@ async function loadSdk() {
   }
 }
 
+/**
+ * Whether some credential appears to be present. Diagnostics only — never a gate.
+ *
+ * Deliberately loose about where a profile lives, for the same reason Box's sign-in screen does not
+ * match on exact wording: the layout moves between CLI versions. A miss here costs one stderr line.
+ */
+function hasSomeCredential() {
+  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return true;
+  const configDir = process.env.CLAUDE_CONFIG_DIR
+    || (process.env.HOME ? `${process.env.HOME}/.claude` : null);
+  return configDir ? existsSync(`${configDir}/.credentials.json`) : false;
+}
+
+/** Loose match on what an auth failure tends to say, across SDK and CLI versions. */
+const AUTH_FAILURE = /unauthor|authentication|not logged in|invalid api key|api key|oauth|credential/i;
+
 async function main() {
   const cwd = process.env.BOX_SESSION_CWD || '/workspace';
 
@@ -429,16 +445,15 @@ async function main() {
     }
   }
 
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    emit({
-      type: 'error',
-      message: 'Box is not signed in yet.',
-      detail: 'Add your Anthropic API key in Box to let the agent work.',
-      recoverable: false,
-    });
-    emit({ type: 'session_ended', outcome: { status: 'failed', message: 'Not signed in' } });
-    return;
-  }
+  // An env credential is not the only way to be signed in, and this is deliberately not a gate.
+  //
+  // Box's sign-in runs Claude Code's own `auth login`, which writes an OAuth profile into the
+  // guest's config directory — no API key exists anywhere in that flow. Refusing to start without
+  // one would reject the *supported* way to sign in. The SDK has its own resolution order and knows
+  // about profiles this file does not, so the honest thing is to let it try and report what it
+  // actually says. Box's sign-in screen is the real gate; this is a backstop, and a permissive
+  // backstop that occasionally attempts a doomed query beats one that refuses a valid credential.
+  if (!hasSomeCredential()) diagnostic('no credential found up front; letting the SDK resolve');
 
   const query = await loadSdk();
   if (!query) return;
@@ -502,10 +517,24 @@ async function main() {
       emit({ type: 'session_ended', outcome: { status: 'interrupted' } });
     }
   } catch (error) {
+    const raw = String(error?.message ?? error);
+    // An auth failure is the one error whose text is never repeated. It can quote the key it
+    // rejected, and the event stream and logcat are exactly where a credential must never land —
+    // so this branch says what to do about it and discards the original entirely.
+    if (AUTH_FAILURE.test(raw)) {
+      emit({
+        type: 'error',
+        message: 'Box is not signed in yet.',
+        detail: 'Sign in to Claude in Box, then send this again.',
+        recoverable: false,
+      });
+      emit({ type: 'session_ended', outcome: { status: 'failed', message: 'Not signed in' } });
+      return;
+    }
     emit({
       type: 'error',
       message: 'The agent stopped unexpectedly.',
-      detail: clip(String(error?.message ?? error), 2048),
+      detail: clip(raw, 2048),
       recoverable: true,
     });
     emit({ type: 'session_ended', outcome: { status: 'failed', message: 'The agent stopped' } });

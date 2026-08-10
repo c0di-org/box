@@ -81,6 +81,12 @@ fun BoxApp(
     onOpenFile: (FileEntry) -> Unit,
     onCloseFile: () -> Unit,
     onNoticeShown: () -> Unit,
+    onShowSignIn: () -> Unit = {},
+    onDismissSignIn: () -> Unit = {},
+    onBeginSignIn: () -> Unit = {},
+    onOpenSignInUrl: (String) -> Unit = {},
+    onSubmitSignInCode: (String) -> Unit = {},
+    onCancelSignIn: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
@@ -132,6 +138,7 @@ fun BoxApp(
                         },
                         modifier = modifier,
                         showComputerAction = showComputerAction,
+                        onSignIn = onShowSignIn,
                     )
                 }
 
@@ -213,6 +220,18 @@ fun BoxApp(
                 onPermissionDecision(pending.requestId, decision)
             },
             onDismiss = { dismissedRequestId = pending.requestId },
+        )
+    }
+
+    if (state.signInVisible) {
+        SignInSheet(
+            state = state.signIn,
+            computerReady = state.computerReady,
+            onBegin = onBeginSignIn,
+            onOpenUrl = onOpenSignInUrl,
+            onSubmitCode = onSubmitSignInCode,
+            onCancel = onCancelSignIn,
+            onDismiss = onDismissSignIn,
         )
     }
 

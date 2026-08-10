@@ -2,6 +2,7 @@ package dev.localagent.workstation
 
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.SessionStatus
@@ -34,6 +35,15 @@ data class OpenedFile(
 
 data class UiNotice(val id: Long, val message: String)
 
+/**
+ * A message that has been sent but not yet taken by a harness.
+ *
+ * [sessionId] is null for the very first message of a conversation, which is typed before the
+ * session it starts has an id. It is filled in as soon as the session exists — without that, the
+ * act of selecting the new conversation would drop the message the user just typed.
+ */
+data class QueuedPrompt(val sessionId: String?, val text: String)
+
 /** One harness and its sessions, in the order the session list draws them. */
 data class HarnessGroup(
     val harness: HarnessDescriptor,
@@ -58,6 +68,15 @@ data class BoxUiState(
     /** Scopes the user granted with "Always allow". Suppresses matching sheets. */
     val alwaysAllowed: Set<String> = emptySet(),
     val startingSession: Boolean = false,
+    /**
+     * What the user typed before the guest could take it. Shown in the transcript's place so a
+     * message sent to a booting computer is visibly waiting rather than apparently lost.
+     */
+    val queued: List<QueuedPrompt> = emptyList(),
+
+    // ---- signing in ----
+    val signIn: GuestAuth.State = GuestAuth.State.Unknown,
+    val signInVisible: Boolean = false,
 
     // ---- computer ----
     val computerTool: ComputerTool = ComputerTool.Overview,
@@ -74,6 +93,12 @@ data class BoxUiState(
     val selectedSession: SessionSummary?
         get() = sessions.firstOrNull { it.id == selectedSessionId }
 
+    /** Queued messages belonging to the conversation on screen, oldest first. */
+    val queuedForSelected: List<String>
+        get() = queued
+            .filter { it.sessionId == null || it.sessionId == selectedSessionId }
+            .map { it.text }
+
     /** Harness-grouped session list, harnesses in declaration order, sessions newest first. */
     val groups: List<HarnessGroup>
         get() = harnesses.map { harness ->
@@ -84,6 +109,13 @@ data class BoxUiState(
                     .sortedByDescending { it.updatedAt },
             )
         }
+
+    /**
+     * The guest answered, and said no credential. Deliberately not true for `Unknown` — before the
+     * computer has booted Box has not asked yet, and guessing would nag every cold start.
+     */
+    val needsSignIn: Boolean
+        get() = signIn is GuestAuth.State.SignedOut
 
     /** The computer can be reached but is not usable yet. Chat never blocks on this. */
     val computerReady: Boolean

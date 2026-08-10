@@ -52,6 +52,7 @@ class BoxViewModel @JvmOverloads constructor(
     private val ids = AtomicLong()
 
     private val agents: AgentBackend = backend ?: FakeAgentBackend(viewModelScope)
+    private val auth = BoxContainer.auth
     private var transcriptJob: Job? = null
     private var connectionJob: Job? = null
 
@@ -70,9 +71,13 @@ class BoxViewModel @JvmOverloads constructor(
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            control = IRuntimeControl.Stub.asInterface(binder)
+            val bound = IRuntimeControl.Stub.asInterface(binder)
+            control = bound
             // Files opens on /workspace, so fill it as soon as the guest can answer.
             refreshFiles()
+            // Whether the guest already holds a credential is only answerable once there is a
+            // guest to ask. Until then the sign-in state is honestly Unknown.
+            auth.check(bound)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -106,6 +111,9 @@ class BoxViewModel @JvmOverloads constructor(
         )
         resyncRuntimeState()
         observeAgents()
+        viewModelScope.launch {
+            auth.state.collect { signIn -> mutableUiState.update { it.copy(signIn = signIn) } }
+        }
     }
 
     private fun observeAgents() {
@@ -193,6 +201,21 @@ class BoxViewModel @JvmOverloads constructor(
             agents.events(id).collect { event ->
                 builder.accept(event)
                 if (event is AgentEvent.PermissionRequested) autoApprove(id, event)
+                // The harness echoing a prompt is the proof it arrived, so the queued copy the UI
+                // was showing in its place can go. One echo clears one copy, so the same message
+                // sent twice stays visible twice.
+                if (event is AgentEvent.UserMessage) {
+                    mutableUiState.update { state ->
+                        val index = state.queued.indexOfFirst {
+                            it.text == event.text && (it.sessionId == null || it.sessionId == id)
+                        }
+                        if (index < 0) {
+                            state
+                        } else {
+                            state.copy(queued = state.queued.filterIndexed { at, _ -> at != index })
+                        }
+                    }
+                }
                 val transcript = builder.build()
                 mutableUiState.update {
                     if (it.selectedSessionId == id) {
@@ -214,10 +237,22 @@ class BoxViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Sending is never refused because the computer is off.
+     *
+     * A message to a cold runtime starts it and is held until the guest can take it — the backend
+     * queues the write, and the boot is ~3 minutes of visible, normal waiting rather than an error.
+     * The text is shown as queued in the meantime so the user's own words never vanish for the
+     * length of a boot; the harness echoes each prompt into the session log when it finally runs,
+     * and that echo is what clears the queued copy.
+     */
     fun sendMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        wakeComputerIfNeeded()
         val sessionId = mutableUiState.value.selectedSessionId
+        mutableUiState.update { it.copy(queued = it.queued + QueuedPrompt(sessionId, trimmed)) }
+
         viewModelScope.launch {
             if (sessionId == null) {
                 val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@launch
@@ -228,6 +263,16 @@ class BoxViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Start the VM if a message needs it. Never restarts one that is already on its way up. */
+    private fun wakeComputerIfNeeded() {
+        val state = mutableUiState.value
+        val needsWaking = state.runtimeState == RuntimeState.Stopped ||
+            state.runtimeState == RuntimeState.NotProvisioned ||
+            state.runtimeState == RuntimeState.Suspended ||
+            state.runtimeState is RuntimeState.Failed
+        if (needsWaking) start()
+    }
+
     fun startSession(harnessId: String, prompt: String? = null) {
         if (mutableUiState.value.startingSession) return
         mutableUiState.update { it.copy(startingSession = true) }
@@ -235,7 +280,18 @@ class BoxViewModel @JvmOverloads constructor(
             val id = runCatching { agents.startSession(harnessId, prompt) }
                 .onFailure { error -> showNotice(error.message ?: "Box could not start that session.") }
                 .getOrNull()
-            mutableUiState.update { it.copy(startingSession = false) }
+            mutableUiState.update { state ->
+                state.copy(
+                    startingSession = false,
+                    // The first message was typed before this session had an id. Give it one now,
+                    // so selecting the conversation does not take it for another session's.
+                    queued = if (id == null) {
+                        state.queued
+                    } else {
+                        state.queued.map { if (it.sessionId == null) it.copy(sessionId = id) else it }
+                    },
+                )
+            }
             if (id != null) selectSession(id)
         }
     }
@@ -259,6 +315,31 @@ class BoxViewModel @JvmOverloads constructor(
             if (mutableUiState.value.selectedSessionId == sessionId) selectSession(null)
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Signing in
+    // -----------------------------------------------------------------------
+
+    fun showSignIn() {
+        mutableUiState.update { it.copy(signInVisible = true) }
+        // The computer has to be up before Claude Code can be asked to log in at all.
+        wakeComputerIfNeeded()
+        control?.let(auth::check)
+    }
+
+    fun dismissSignIn() {
+        mutableUiState.update { it.copy(signInVisible = false) }
+    }
+
+    fun beginSignIn() {
+        val runtime = control ?: return showNotice("The computer is still starting.")
+        auth.beginSignIn(runtime)
+    }
+
+    /** The code the user brought back from their browser. Never stored, never logged. */
+    fun submitSignInCode(code: String) = auth.submitCode(code)
+
+    fun cancelSignIn() = auth.cancel()
 
     /** Wired but inert: the display transport and port forwarding do not exist yet. */
     fun openArtifact(label: String) {

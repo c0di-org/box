@@ -2,9 +2,12 @@ package dev.localagent.workstation
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -23,6 +26,27 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.localagent.workstation.ui.BoxApp
 import dev.localagent.workstation.ui.BoxTheme
 
+/**
+ * The one step of signing in that has to leave Box.
+ *
+ * The guest has no browser, so Claude's authorisation page is handed to the phone's. The scheme is
+ * checked rather than trusted: the URL is lifted out of another program's output, and `ACTION_VIEW`
+ * on an arbitrary scheme is a way to reach components that were never meant to be reachable here.
+ */
+private fun openInBrowser(context: Context, url: String) {
+    val parsed = runCatching { Uri.parse(url) }.getOrNull()
+    if (parsed?.scheme?.lowercase() !in setOf("http", "https")) {
+        Toast.makeText(context, "That sign-in link could not be opened.", Toast.LENGTH_LONG).show()
+        return
+    }
+    val intent = Intent(Intent.ACTION_VIEW, parsed)
+        .addCategory(Intent.CATEGORY_BROWSABLE)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(intent) }.onFailure {
+        Toast.makeText(context, "No browser to open the sign-in page.", Toast.LENGTH_LONG).show()
+    }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,7 +56,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun BoxRoot(boxViewModel: BoxViewModel = viewModel()) {
+private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContainer.factory)) {
     val state by boxViewModel.uiState.collectAsState()
     val context = LocalContext.current
     val preferences = remember(context) {
@@ -98,6 +122,12 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel()) {
             onOpenFile = boxViewModel::openFile,
             onCloseFile = boxViewModel::closeFile,
             onNoticeShown = boxViewModel::noticeShown,
+            onShowSignIn = boxViewModel::showSignIn,
+            onDismissSignIn = boxViewModel::dismissSignIn,
+            onBeginSignIn = boxViewModel::beginSignIn,
+            onOpenSignInUrl = { url -> openInBrowser(context, url) },
+            onSubmitSignInCode = boxViewModel::submitSignInCode,
+            onCancelSignIn = boxViewModel::cancelSignIn,
         )
     }
 }

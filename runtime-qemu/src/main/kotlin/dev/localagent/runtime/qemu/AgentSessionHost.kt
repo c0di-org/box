@@ -25,6 +25,11 @@ internal class AgentSessionHost(
     /** Null for a session that must leave no trace — see `openEphemeralSession`. */
     private val logFile: File?,
     private val scope: CoroutineScope,
+    /**
+     * Told when the session reaches something worth interrupting the user for. Never called for an
+     * ephemeral session: sign-in output is exactly the stream that must not be inspected.
+     */
+    private val onSignal: (String, SessionSignals.Signal) -> Unit = { _, _ -> },
 ) {
     private data class Ending(val exitCode: Int, val error: String?)
 
@@ -97,6 +102,7 @@ internal class AgentSessionHost(
                             written.also { written += event.bytes.size }
                         }
                         deliver { it.onData(offset, event.bytes) }
+                        if (sink != null) readSignals(event.bytes)
                     }
                     is ExecEvent.Stderr -> {
                         val text = event.bytes.toString(Charsets.UTF_8)
@@ -114,6 +120,31 @@ internal class AgentSessionHost(
         } finally {
             runCatching { sink?.close() }
         }
+    }
+
+    /** Partial trailing line from the last chunk. A chunk boundary is not a line boundary. */
+    private val unread = StringBuilder()
+
+    /**
+     * Watches the same bytes that went to the log for the two events worth a notification.
+     *
+     * Reading the stream here rather than asking the UI to report back is what makes the promise
+     * work: the Compose process may be long dead by the time the agent finishes, and this one is
+     * still alive because it is the one running the VM.
+     */
+    private fun readSignals(bytes: ByteArray) {
+        unread.append(bytes.toString(Charsets.UTF_8))
+        while (true) {
+            val newline = unread.indexOf("\n")
+            if (newline < 0) break
+            val line = unread.substring(0, newline)
+            unread.delete(0, newline + 1)
+            val signal = runCatching { SessionSignals.read(line) }.getOrNull() ?: continue
+            runCatching { onSignal(sessionId, signal) }
+                .onFailure { Log.w(TAG, "Could not raise a session signal", it) }
+        }
+        // A harness that never emits a newline must not grow this without bound.
+        if (unread.length > MAX_PARTIAL_LINE) unread.setLength(0)
     }
 
     /**
@@ -161,5 +192,8 @@ internal class AgentSessionHost(
 
     private companion object {
         const val TAG = "BoxAgentSession"
+
+        /** Generous next to a real event, small next to the damage an unbounded buffer does. */
+        const val MAX_PARTIAL_LINE = 256 * 1024
     }
 }

@@ -1,16 +1,21 @@
 package dev.localagent.workstation.agent
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
+import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.IAgentSession
 import dev.localagent.runtime.qemu.IAgentSessionCallback
 import dev.localagent.runtime.qemu.IRuntimeControl
 import dev.localagent.runtime.qemu.RuntimeService
+import dev.localagent.runtime.qemu.RuntimeStateCodec
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
@@ -29,6 +34,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The real [AgentBackend]: agent harnesses running in the guest.
@@ -67,7 +73,19 @@ class GuestAgentBackend(
         val connection = MutableStateFlow<SessionConnection>(SessionConnection.Connecting)
         val logPath = CompletableDeferred<String>()
         @Volatile var handle: IAgentSession? = null
-        @Volatile var attached = false
+
+        /** Claimed atomically: `events()` and `send()` both attach, and they race on a cold start. */
+        val attached = AtomicBoolean(false)
+
+        /**
+         * Commands written before the guest process could take them.
+         *
+         * Not only a cold-boot concern. `openAgentSession` returns before `onAttached` arrives —
+         * the VM has to start the process first — so even on a warm computer the first prompt of a
+         * new session is written to a handle that does not exist yet. Without this queue that
+         * prompt is silently dropped and the agent simply never begins.
+         */
+        val outbox = mutableListOf<String>()
     }
 
     init {
@@ -87,6 +105,42 @@ class GuestAgentBackend(
     private val controlState = MutableStateFlow<IRuntimeControl?>(null)
     private var bound = false
 
+    /**
+     * Whether the guest is actually up — which is *not* the same question as whether `:computer`
+     * can be bound.
+     *
+     * The service binds instantly whether or not a VM is running, so a bind result says nothing
+     * about readiness. Opening a session against a cold runtime does not queue or retry: it throws
+     * inside the guest, the session ends before it began, and the conversation shows a failure the
+     * user cannot act on. So readiness is tracked explicitly, from the one authority on it.
+     */
+    @Volatile private var runtimeReady = false
+
+    /**
+     * The computer reaching Ready is the moment a session that was waiting on it can finally open.
+     *
+     * Box lets you send a message to a computer that is off — it starts it and holds what you typed
+     * — so something has to notice when the ~3 minute boot finishes. Listening here rather than
+     * having the ViewModel poke the backend keeps that behaviour true even if the UI is elsewhere.
+     */
+    private val runtimeStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val payload = intent?.getBundleExtra(RuntimeService.EXTRA_STATE) ?: return
+            val state = RuntimeStateCodec.decode(payload) ?: return
+            val ready = state == RuntimeState.Ready
+            runtimeReady = ready
+            if (!ready) {
+                // The guest is gone or not there yet; anything held for it is held a while longer.
+                records.values.forEach {
+                    it.attached.set(false)
+                    it.handle = null
+                }
+                return
+            }
+            scope.launch { records.values.forEach { attach(it) } }
+        }
+    }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             controlState.value = IRuntimeControl.Stub.asInterface(binder)
@@ -96,11 +150,27 @@ class GuestAgentBackend(
             // `:computer` died. Sessions in it died with it; their logs did not.
             controlState.value = null
             records.values.forEach {
-                it.attached = false
+                it.attached.set(false)
                 it.handle = null
                 it.connection.value = SessionConnection.Disconnected("The computer stopped", true)
             }
         }
+    }
+
+    init {
+        // Registered after the receiver above exists, not in the constructor's first init block.
+        ContextCompat.registerReceiver(
+            appContext,
+            runtimeStateReceiver,
+            IntentFilter(RuntimeService.ACTION_STATE),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        // A UI process that restarted while the VM kept running would otherwise believe the
+        // computer is down until something happened to change its state. Asking cannot start
+        // `:computer` — silence is a legitimate answer meaning no VM is running.
+        appContext.sendBroadcast(
+            Intent(RuntimeService.ACTION_QUERY_STATE).setPackage(appContext.packageName),
+        )
     }
 
     private suspend fun control(): IRuntimeControl? {
@@ -231,13 +301,20 @@ class GuestAgentBackend(
 
     /** Idempotent: opens the session if it is new, re-attaches if `:computer` already has it. */
     private suspend fun attach(record: Record) {
-        if (record.attached) return
+        if (record.attached.get()) return
+        if (!runtimeReady) {
+            // Not a failure, and deliberately not an attempt. The broadcast for Ready brings us
+            // back here with whatever the user typed still in the outbox.
+            record.connection.value =
+                SessionConnection.Disconnected("The computer is still starting", true)
+            return
+        }
         val control = control() ?: run {
             record.connection.value =
                 SessionConnection.Disconnected("The computer is still starting", true)
             return
         }
-        record.attached = true
+        if (!record.attached.compareAndSet(false, true)) return
         val callback = Listener(record)
         runCatching {
             if (record.logPath.isCompleted) {
@@ -258,7 +335,7 @@ class GuestAgentBackend(
                 )
             }
         }.onFailure {
-            record.attached = false
+            record.attached.set(false)
             record.connection.value = SessionConnection.Disconnected("Could not reach the computer", true)
         }
     }
@@ -269,6 +346,13 @@ class GuestAgentBackend(
             record.connection.value =
                 if (session == null) SessionConnection.Ended else SessionConnection.Live
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
+            if (session != null) {
+                // Whatever the user asked for while the computer was still starting.
+                record.flushOutbox()
+                // A session that failed to open earlier is no longer failed, and the list has to
+                // stop saying so.
+                scope.launch { publish(record, SessionStatus.Active) }
+            }
         }
 
         override fun onData(offset: Long, chunk: ByteArray) {
@@ -284,7 +368,7 @@ class GuestAgentBackend(
 
         override fun onClosed(exitCode: Int, error: String?) {
             record.handle = null
-            record.attached = false
+            record.attached.set(false)
             record.connection.value = SessionConnection.Ended
             scope.launch {
                 publish(record, if (error == null) SessionStatus.Finished else SessionStatus.Failed(error))
@@ -292,13 +376,47 @@ class GuestAgentBackend(
         }
     }
 
-    private suspend fun Record.write(command: Map<String, String>) {
-        val handle = this.handle ?: return
+    /**
+     * Send a command, or hold it until there is something to send it to.
+     *
+     * The lock covers the delivery as well as the decision, which matters more than it looks:
+     * without it a message written just as the session attaches can overtake one that has been
+     * queued since before the boot, and the agent would read the user's turns out of order.
+     * `IAgentSession.write` is `oneway`, so nothing waits on the guest while the lock is held.
+     */
+    private fun Record.write(command: Map<String, String>) {
         val json = command.entries.joinToString(",", "{", "}") { (key, value) ->
             "${JsonString(key)}:${JsonString(value)}"
         }
-        runCatching { handle.write((json + "\n").toByteArray()) }
-            .onFailure { Log.e(TAG, "could not answer the harness", it) }
+        synchronized(outbox) {
+            val live = handle
+            if (live == null || outbox.isNotEmpty()) {
+                outbox += json
+                return
+            }
+            runCatching { live.write((json + "\n").toByteArray()) }
+                .onFailure {
+                    Log.e(TAG, "could not answer the harness", it)
+                    outbox += json
+                }
+        }
+    }
+
+    /** Everything written while the guest process was still starting, in the order it was written. */
+    private fun Record.flushOutbox() {
+        synchronized(outbox) {
+            val live = handle ?: return
+            val undelivered = mutableListOf<String>()
+            for (json in outbox) {
+                runCatching { live.write((json + "\n").toByteArray()) }
+                    .onFailure {
+                        Log.e(TAG, "could not deliver a queued command", it)
+                        undelivered += json
+                    }
+            }
+            outbox.clear()
+            outbox += undelivered
+        }
     }
 
     // ---- session list ------------------------------------------------------

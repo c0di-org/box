@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -80,9 +81,11 @@ fun ConversationPane(
     modifier: Modifier = Modifier,
     onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = false,
+    onSignIn: () -> Unit = {},
 ) {
     val session = state.selectedSession
     val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
+    val queued = state.queuedForSelected
 
     Column(modifier.fillMaxSize()) {
         ConversationHeader(
@@ -97,17 +100,24 @@ fun ConversationPane(
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        ConnectionBanner(state.connection)
+        // While the computer is down, its own banner is the true and actionable one. Showing the
+        // transport's view as well says the same thing twice, in red, about a normal state.
+        if (state.computerReady) ConnectionBanner(state.connection)
         ComputerBanner(state.runtimeState, onStartComputer)
+        if (state.needsSignIn) SignInBanner(onSignIn)
+
+        val nothingToShow = (state.transcript == null || state.transcript.items.isEmpty()) &&
+            queued.isEmpty()
 
         Box(Modifier.weight(1f)) {
             when {
-                session == null -> NoSessionState()
-                state.transcriptLoading && state.transcript == null -> TranscriptLoading()
-                state.transcript == null || state.transcript.items.isEmpty() ->
-                    EmptyTranscriptState(harness)
+                session == null && queued.isEmpty() -> NoSessionState()
+                state.transcriptLoading && state.transcript == null && queued.isEmpty() ->
+                    TranscriptLoading()
+                nothingToShow -> EmptyTranscriptState(harness)
                 else -> TranscriptList(
                     transcript = state.transcript,
+                    queued = queued,
                     harness = harness,
                     onOpenArtifact = onOpenArtifact,
                     onRetry = onStartComputer,
@@ -119,7 +129,10 @@ fun ConversationPane(
             enabled = state.harnesses.isNotEmpty(),
             blockedReason = when {
                 state.transcript?.pendingPermission != null -> "Answer the request above to continue."
-                state.connection is SessionConnection.Disconnected ->
+                // A booting computer is not a lost connection, and typing into one is supported:
+                // the message waits. Only a session that dropped while the computer was up is a
+                // reason to stop the user mid-thought.
+                state.computerReady && state.connection is SessionConnection.Disconnected ->
                     "Box lost the connection to this session."
                 else -> null
             },
@@ -241,7 +254,12 @@ private fun ConnectionBanner(connection: SessionConnection) {
 private fun ComputerBanner(runtimeState: RuntimeState, onStart: () -> Unit) {
     val banner: Triple<String, String?, String?> = when (runtimeState) {
         RuntimeState.Ready -> return
-        RuntimeState.Starting -> Triple("The computer is booting", "About 90 seconds. You can keep typing.", null)
+        // Measured on the Fold 7, not estimated: the guest is fully emulated under TCG.
+        RuntimeState.Starting -> Triple(
+            "The computer is booting",
+            "About three minutes. You can keep typing — Box will send when it's ready.",
+            null,
+        )
         RuntimeState.Connecting -> Triple("Almost ready", "Waiting for the private control channel.", null)
         is RuntimeState.Provisioning -> Triple("Setting up the computer", "Preparing the Linux workspace.", null)
         RuntimeState.NotProvisioned -> Triple("No computer yet", "Agents need a Linux box to work in.", "Set up")
@@ -303,17 +321,18 @@ private fun Banner(
 
 @Composable
 private fun TranscriptList(
-    transcript: Transcript,
+    transcript: Transcript?,
+    queued: List<String>,
     harness: HarnessDescriptor?,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
 ) {
+    val items = transcript?.items.orEmpty()
     val listState = rememberLazyListState()
-    val lastKey = transcript.items.lastOrNull()?.key
-    LaunchedEffect(lastKey, transcript.items.size, transcript.activity) {
-        if (transcript.items.isNotEmpty()) {
-            listState.animateScrollToItem(transcript.items.size)
-        }
+    val lastKey = items.lastOrNull()?.key
+    LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity) {
+        val total = items.size + queued.size
+        if (total > 0) listState.animateScrollToItem(total)
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -322,7 +341,7 @@ private fun TranscriptList(
             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            transcript.items.forEach { entry ->
+            items.forEach { entry ->
                 item(key = entry.key) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                         TranscriptRow(
@@ -335,13 +354,68 @@ private fun TranscriptList(
                     }
                 }
             }
-            item(key = "activity") {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                    ActivityRow(transcript.activity, Modifier.widthIn(max = 760.dp))
+            queued.forEachIndexed { index, text ->
+                item(key = "queued-$index-$text") {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                        QueuedMessage(text, Modifier.widthIn(max = 760.dp))
+                    }
+                }
+            }
+            transcript?.let { live ->
+                item(key = "activity") {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                        ActivityRow(live.activity, Modifier.widthIn(max = 760.dp))
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * What the user typed, before the computer was awake enough to take it.
+ *
+ * Drawn as their own message but visibly unsent, because the alternative — showing nothing for the
+ * three minutes a cold VM takes to boot — reads as the app having lost it. It disappears the moment
+ * the harness echoes the prompt into the session log, so it is never a second copy of a real one.
+ */
+@Composable
+private fun QueuedMessage(text: String, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+        ) {
+            Text(
+                text,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(
+            "Waiting for the computer",
+            style = MaterialTheme.typography.bodyMedium,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+        )
+    }
+}
+
+/**
+ * The one thing the agent cannot work around by itself. Quiet, and never a blocking wall: the
+ * conversation stays usable, because a user who is mid-thought should be able to finish typing.
+ */
+@Composable
+private fun SignInBanner(onSignIn: () -> Unit) {
+    Banner(
+        tint = MaterialTheme.colorScheme.primary,
+        icon = { Icon(Icons.Outlined.Lock, null, Modifier.size(17.dp)) },
+        title = "Sign in to Claude",
+        body = "The agent needs your account before it can start work.",
+        action = "Sign in" to onSignIn,
+    )
 }
 
 @Composable

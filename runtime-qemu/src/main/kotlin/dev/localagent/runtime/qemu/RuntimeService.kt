@@ -3,6 +3,7 @@ package dev.localagent.runtime.qemu
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -126,7 +127,7 @@ class RuntimeService : Service() {
                 existing.attach(callback)
                 return
             }
-            val host = AgentSessionHost(sessionId, logFileFor(sessionId), scope)
+            val host = AgentSessionHost(sessionId, logFileFor(sessionId), scope, ::notifySession)
             sessions[sessionId] = host
             host.start(
                 runtime,
@@ -279,6 +280,64 @@ class RuntimeService : Service() {
         )
     }
 
+    /**
+     * The other half of "start work and pocket the phone".
+     *
+     * Posted from `:computer` because this process is the one that survives: the Compose process is
+     * routinely killed while an agent keeps working, and a notification it was supposed to post
+     * would die with it.
+     */
+    private fun notifySession(sessionId: String, signal: SessionSignals.Signal) {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                SESSION_CHANNEL_ID,
+                "Agent sessions",
+                // Higher than the runtime's own channel on purpose. This one is the product
+                // promise; the ongoing "VM is running" notice is furniture.
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
+
+        val (title, body) = when (signal) {
+            is SessionSignals.Signal.NeedsYou -> "Box needs you" to signal.label
+            is SessionSignals.Signal.Finished -> if (signal.failed) {
+                "The agent stopped" to (signal.summary ?: "It could not finish.")
+            } else {
+                "The agent finished" to (signal.summary ?: "Your task is done.")
+            }
+        }
+
+        // Launching by package keeps the dependency pointing one way: `:app` knows about the
+        // runtime, and the runtime never learns the name of an Activity.
+        val open = packageManager.getLaunchIntentForPackage(packageName)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val pending = open?.let {
+            PendingIntent.getActivity(
+                this,
+                sessionId.hashCode(),
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        val notification = Notification.Builder(this, SESSION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(title)
+            .setContentText(body.take(MAX_NOTIFICATION_CHARS))
+            .setStyle(Notification.BigTextStyle().bigText(body.take(MAX_NOTIFICATION_CHARS)))
+            .setAutoCancel(true)
+            // The summary is the user's own work, but a lock screen is a shoulder-surfing surface.
+            // Respect whatever they chose for private content rather than deciding for them.
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .apply { pending?.let(::setContentIntent) }
+            .build()
+
+        // Keyed by session, so "needs you" is replaced by "finished" rather than stacking up.
+        runCatching { manager.notify(sessionId.hashCode(), notification) }
+            .onFailure { Log.w(TAG, "Could not post a session notification", it) }
+    }
+
     companion object {
         /** Binder transactions are capped near 1 MB; keep well clear for text the UI can show. */
         private const val MAX_STREAM_CHARS = 128 * 1024
@@ -298,6 +357,10 @@ class RuntimeService : Service() {
         private const val TAG = "LocalAgentRuntime"
         private const val CHANNEL_ID = "local_agent_runtime"
         private const val NOTIFICATION_ID = 1001
+
+        /** Separate from the runtime's ongoing notice so the user can silence one and not both. */
+        private const val SESSION_CHANNEL_ID = "box_agent_sessions"
+        private const val MAX_NOTIFICATION_CHARS = 480
 
         /** Session logs live beside the VM, in `:computer`'s half of the app's private storage. */
         private const val AGENT_SESSION_DIRECTORY = "agent-sessions"
