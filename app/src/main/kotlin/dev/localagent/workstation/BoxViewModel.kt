@@ -10,6 +10,7 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.IExecCallback
@@ -19,20 +20,40 @@ import dev.localagent.runtime.qemu.IRuntimeControl
 import dev.localagent.runtime.qemu.RuntimeService
 import dev.localagent.runtime.qemu.RuntimeStateCodec
 import dev.localagent.runtime.qemu.RuntimeStorage
+import dev.localagent.workstation.agent.AgentBackend
+import dev.localagent.workstation.agent.AgentEvent
+import dev.localagent.workstation.agent.FakeAgentBackend
+import dev.localagent.workstation.agent.PermissionDecision
+import dev.localagent.workstation.agent.SessionConnection
+import dev.localagent.workstation.agent.TranscriptBuilder
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Product state for Box. Runtime operations are intentionally routed through RuntimeService;
- * the VM is never instantiated in the UI process.
+ * Product state for Box.
+ *
+ * Two independent sources feed it. Agent sessions come from an [AgentBackend] — today a scripted
+ * fake, tomorrow the harness transport — and the VM's own state comes from RuntimeService in the
+ * `:computer` process. They are deliberately not coupled: the conversation stays usable while the
+ * VM boots, dies, or was never provisioned, because chat is the product and the VM is substrate.
  */
-class BoxViewModel(application: Application) : AndroidViewModel(application) {
+class BoxViewModel @JvmOverloads constructor(
+    application: Application,
+    // The default ViewModel factory reflects on a single-argument constructor, hence @JvmOverloads.
+    backend: AgentBackend? = null,
+) : AndroidViewModel(application) {
     private val mutableUiState = MutableStateFlow(BoxUiState())
     val uiState: StateFlow<BoxUiState> = mutableUiState.asStateFlow()
     private val ids = AtomicLong()
+
+    private val agents: AgentBackend = backend ?: FakeAgentBackend(viewModelScope)
+    private var transcriptJob: Job? = null
+    private var connectionJob: Job? = null
 
     /** RuntimeService owns the VM in another process; this is the only source of runtime truth. */
     private val stateReceiver = object : BroadcastReceiver() {
@@ -84,6 +105,20 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         resyncRuntimeState()
+        observeAgents()
+    }
+
+    private fun observeAgents() {
+        viewModelScope.launch {
+            agents.harnesses.collect { list ->
+                mutableUiState.update { it.copy(harnesses = list) }
+            }
+        }
+        viewModelScope.launch {
+            agents.sessions.collect { list ->
+                mutableUiState.update { it.copy(sessions = list) }
+            }
+        }
     }
 
     /**
@@ -110,9 +145,130 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
+    // -----------------------------------------------------------------------
+    // Conversations
+    // -----------------------------------------------------------------------
+
     fun selectDestination(destination: BoxDestination) {
         mutableUiState.update { it.copy(destination = destination) }
     }
+
+    fun selectComputerTool(tool: ComputerTool) {
+        mutableUiState.update { it.copy(computerTool = tool, openedFile = null) }
+        if (tool == ComputerTool.Files) refreshFiles()
+    }
+
+    fun toggleHarness(harnessId: String) {
+        mutableUiState.update { state ->
+            val collapsed = state.collapsedHarnesses
+            state.copy(
+                collapsedHarnesses = if (harnessId in collapsed) collapsed - harnessId else collapsed + harnessId,
+            )
+        }
+    }
+
+    fun selectSession(sessionId: String?) {
+        if (mutableUiState.value.selectedSessionId == sessionId) return
+        transcriptJob?.cancel()
+        connectionJob?.cancel()
+        mutableUiState.update {
+            it.copy(
+                selectedSessionId = sessionId,
+                transcript = null,
+                transcriptLoading = sessionId != null,
+                connection = SessionConnection.Connecting,
+            )
+        }
+        val id = sessionId ?: return
+
+        connectionJob = viewModelScope.launch {
+            agents.connection(id).collect { connection ->
+                mutableUiState.update {
+                    if (it.selectedSessionId == id) it.copy(connection = connection) else it
+                }
+            }
+        }
+        transcriptJob = viewModelScope.launch {
+            val builder = TranscriptBuilder(id)
+            agents.events(id).collect { event ->
+                builder.accept(event)
+                if (event is AgentEvent.PermissionRequested) autoApprove(id, event)
+                val transcript = builder.build()
+                mutableUiState.update {
+                    if (it.selectedSessionId == id) {
+                        it.copy(transcript = transcript, transcriptLoading = false)
+                    } else {
+                        it
+                    }
+                }
+            }
+        }
+    }
+
+    /** "Always allow" is remembered per scope string; matching later asks never raise the sheet. */
+    private fun autoApprove(sessionId: String, event: AgentEvent.PermissionRequested) {
+        val scope = event.ask.alwaysAllowScope ?: return
+        if (scope !in mutableUiState.value.alwaysAllowed) return
+        viewModelScope.launch {
+            agents.resolvePermission(sessionId, event.requestId, PermissionDecision.AllowAlways(scope))
+        }
+    }
+
+    fun sendMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val sessionId = mutableUiState.value.selectedSessionId
+        viewModelScope.launch {
+            if (sessionId == null) {
+                val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@launch
+                startSession(harness.id, trimmed)
+            } else {
+                agents.send(sessionId, trimmed)
+            }
+        }
+    }
+
+    fun startSession(harnessId: String, prompt: String? = null) {
+        if (mutableUiState.value.startingSession) return
+        mutableUiState.update { it.copy(startingSession = true) }
+        viewModelScope.launch {
+            val id = runCatching { agents.startSession(harnessId, prompt) }
+                .onFailure { error -> showNotice(error.message ?: "Box could not start that session.") }
+                .getOrNull()
+            mutableUiState.update { it.copy(startingSession = false) }
+            if (id != null) selectSession(id)
+        }
+    }
+
+    fun resolvePermission(requestId: String, decision: PermissionDecision) {
+        val sessionId = mutableUiState.value.selectedSessionId ?: return
+        if (decision is PermissionDecision.AllowAlways) {
+            mutableUiState.update { it.copy(alwaysAllowed = it.alwaysAllowed + decision.scope) }
+        }
+        viewModelScope.launch { agents.resolvePermission(sessionId, requestId, decision) }
+    }
+
+    fun interruptSession() {
+        val sessionId = mutableUiState.value.selectedSessionId ?: return
+        viewModelScope.launch { agents.interrupt(sessionId) }
+    }
+
+    fun closeSession(sessionId: String) {
+        viewModelScope.launch {
+            agents.closeSession(sessionId)
+            if (mutableUiState.value.selectedSessionId == sessionId) selectSession(null)
+        }
+    }
+
+    /** Wired but inert: the display transport and port forwarding do not exist yet. */
+    fun openArtifact(label: String) {
+        mutableUiState.update { it.copy(destination = BoxDestination.Computer) }
+        showNotice("$label isn’t connected yet — the runtime transport for it is still being built.")
+    }
+
+    // -----------------------------------------------------------------------
+    // Computer
+    // -----------------------------------------------------------------------
 
     fun setupAndStart() = start()
 

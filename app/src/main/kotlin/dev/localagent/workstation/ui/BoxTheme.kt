@@ -12,6 +12,14 @@ val BoxGreenLight = Color(0xFF8CE3B5)
 val BoxInk = Color(0xFF181B19)
 val BoxTerminal = Color(0xFF101412)
 
+/**
+ * The user's own turns. Green belongs to the *agent's* work — its status, its successes — so the
+ * person typing gets the one non-green surface in the app, which is also what keeps a long
+ * transcript scannable at arm's length.
+ */
+val BoxUserBubble = Color(0xFF33407E)
+val BoxUserBubbleLight = Color(0xFFDDE1FB)
+
 private val LightColors = lightColorScheme(
     primary = Color(0xFF146C48),
     onPrimary = Color.White,

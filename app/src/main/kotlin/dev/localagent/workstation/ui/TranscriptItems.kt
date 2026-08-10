@@ -1,0 +1,602 @@
+package dev.localagent.workstation.ui
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.localagent.workstation.agent.AgentActivity
+import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.agent.CodeLanguage
+import dev.localagent.workstation.agent.HarnessDescriptor
+import dev.localagent.workstation.agent.PermissionDecision
+import dev.localagent.workstation.agent.SessionOutcome
+import dev.localagent.workstation.agent.TaskItem
+import dev.localagent.workstation.agent.TaskState
+import dev.localagent.workstation.agent.ToolCall
+import dev.localagent.workstation.agent.ToolOutcome
+import dev.localagent.workstation.agent.TranscriptItem
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+private val clockFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a")
+
+fun formatClock(epochMillis: Long): String =
+    clockFormat.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))
+
+/** Dispatches one folded transcript item to its renderer. */
+@Composable
+fun TranscriptRow(
+    item: TranscriptItem,
+    harness: HarnessDescriptor?,
+    onOpenArtifact: (Artifact) -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (item) {
+        is TranscriptItem.User -> UserBubble(item, modifier)
+        is TranscriptItem.Agent -> AgentProse(item, harness, modifier)
+        is TranscriptItem.Thinking -> ThinkingBlock(item, modifier)
+        is TranscriptItem.Tool -> ToolCard(item, modifier)
+        is TranscriptItem.Diff -> DiffCard(item, modifier)
+        is TranscriptItem.Checklist -> ChecklistCard(item, modifier)
+        is TranscriptItem.Permission -> PermissionRecord(item, modifier)
+        is TranscriptItem.Artifacts -> ArtifactRow(item, onOpenArtifact, modifier)
+        is TranscriptItem.Error -> ErrorCard(item, onRetry, modifier)
+        is TranscriptItem.Ended -> EndedRow(item, modifier)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Turns
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun UserBubble(item: TranscriptItem.User, modifier: Modifier = Modifier) {
+    val dark = MaterialTheme.colorScheme.background.luminanceIsDark()
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = if (dark) BoxUserBubble else BoxUserBubbleLight,
+        contentColor = if (dark) Color(0xFFEEF0FF) else Color(0xFF1B2151),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("You", style = MaterialTheme.typography.labelLarge, fontSize = 13.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    formatClock(item.at),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = 12.sp,
+                    modifier = Modifier.alpha(0.7f),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            SelectionContainer {
+                Text(item.text, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentProse(
+    item: TranscriptItem.Agent,
+    harness: HarnessDescriptor?,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (harness != null) {
+                HarnessMark(harness, 22.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    harness.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                formatClock(item.at),
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        SelectionContainer {
+            Text(
+                if (item.streaming) item.text + "▍" else item.text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThinkingBlock(item: TranscriptItem.Thinking, modifier: Modifier = Modifier) {
+    var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier.clickable { expanded = !expanded }.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Psychology,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (expanded) "Hide reasoning" else "Reasoning",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        AnimatedVisibility(expanded) {
+            Text(
+                item.text,
+                Modifier.padding(start = 24.dp, top = 4.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ToolCard(item: TranscriptItem.Tool, modifier: Modifier = Modifier) {
+    var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
+    val outcome = item.outcome
+    val failed = outcome is ToolOutcome.Failure
+    val denied = outcome is ToolOutcome.Denied
+    val accent = when {
+        failed -> MaterialTheme.colorScheme.error
+        denied -> MaterialTheme.colorScheme.onSurfaceVariant
+        item.running -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val hasBody = item.output.isNotBlank()
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    ) {
+        Column {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .then(if (hasBody) Modifier.clickable { expanded = !expanded } else Modifier)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        item.running -> CircularProgressIndicator(Modifier.size(15.dp), strokeWidth = 2.dp, color = accent)
+                        failed -> Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(17.dp), tint = accent)
+                        denied -> Icon(Icons.Outlined.Close, null, Modifier.size(17.dp), tint = accent)
+                        else -> Icon(toolIcon(item.call), null, Modifier.size(17.dp), tint = accent)
+                    }
+                }
+                Spacer(Modifier.width(11.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        item.call.label,
+                        fontFamily = if (item.call is ToolCall.Shell) FontFamily.Monospace else FontFamily.Default,
+                        fontSize = if (item.call is ToolCall.Shell) 13.sp else 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = if (expanded) 4 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    toolSubtitle(item)?.let { subtitle ->
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            color = if (failed) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (hasBody) {
+                    Icon(
+                        if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = if (expanded) "Hide output" else "Show output",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (item.call is ToolCall.Generic && item.call.arguments.isNotEmpty()) {
+                Column(Modifier.padding(start = 45.dp, end = 14.dp, bottom = 12.dp)) {
+                    item.call.arguments.forEach { (key, value) ->
+                        Row {
+                            Text(
+                                "$key ",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                value,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+            AnimatedVisibility(expanded && hasBody) {
+                CodeBlock(
+                    text = item.output,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 10.dp),
+                    language = CodeLanguage.Plain,
+                )
+            }
+        }
+    }
+}
+
+private fun toolIcon(call: ToolCall): ImageVector = when (call) {
+    is ToolCall.Shell -> Icons.Outlined.Terminal
+    is ToolCall.ReadFile -> Icons.Outlined.Description
+    is ToolCall.EditFile, is ToolCall.WriteFile -> Icons.Outlined.Description
+    is ToolCall.Search -> Icons.Outlined.Search
+    is ToolCall.Fetch -> Icons.Outlined.Language
+    is ToolCall.Generic -> Icons.Outlined.Terminal
+}
+
+@Composable
+private fun toolSubtitle(item: TranscriptItem.Tool): String? = when (val outcome = item.outcome) {
+    null -> when (val call = item.call) {
+        is ToolCall.Shell -> "Running in ${call.workingDirectory}"
+        else -> "Running…"
+    }
+    is ToolOutcome.Success -> outcome.summary
+    is ToolOutcome.Failure -> outcome.message
+    ToolOutcome.Denied -> "You denied this"
+    ToolOutcome.Cancelled -> "Cancelled"
+}
+
+@Composable
+private fun DiffCard(item: TranscriptItem.Diff, modifier: Modifier = Modifier) {
+    var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        DiffView(
+            diff = item.diff,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = if (expanded) null else 14,
+        )
+        val total = item.diff.hunks.sumOf { it.lines.size }
+        if (total > 14) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Show less" else "Show whole diff")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ChecklistCard(item: TranscriptItem.Checklist, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    ) {
+        Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+            item.items.forEachIndexed { index, task ->
+                if (index > 0) Spacer(Modifier.height(11.dp))
+                ChecklistRow(task)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChecklistRow(task: TaskItem) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+            when (task.state) {
+                TaskState.Done -> Icon(
+                    Icons.Outlined.Check,
+                    contentDescription = "done",
+                    modifier = Modifier.size(17.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+
+                TaskState.Running -> CircularProgressIndicator(
+                    Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+
+                TaskState.Failed -> Icon(
+                    Icons.Outlined.ErrorOutline,
+                    contentDescription = "failed",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+
+                TaskState.Skipped -> Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = "skipped",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                TaskState.Pending -> Icon(
+                    Icons.Outlined.RadioButtonUnchecked,
+                    contentDescription = "pending",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            task.text,
+            style = MaterialTheme.typography.bodyLarge,
+            fontSize = 15.sp,
+            color = when (task.state) {
+                TaskState.Pending -> MaterialTheme.colorScheme.onSurfaceVariant
+                TaskState.Skipped -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> MaterialTheme.colorScheme.onSurface
+            },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Permission, artifacts, errors
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun PermissionRecord(item: TranscriptItem.Permission, modifier: Modifier = Modifier) {
+    val decision = item.decision
+    val (label, tint) = when (decision) {
+        null -> "Waiting for your decision" to MaterialTheme.colorScheme.tertiary
+        PermissionDecision.Allow -> "You allowed this" to MaterialTheme.colorScheme.primary
+        is PermissionDecision.AllowAlways ->
+            "You allowed ${decision.scope}" to MaterialTheme.colorScheme.primary
+        PermissionDecision.Deny -> "You denied this" to MaterialTheme.colorScheme.error
+        PermissionDecision.Abandoned -> "Left unanswered" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Lock, null, Modifier.size(15.dp), tint = tint)
+        Spacer(Modifier.width(9.dp))
+        Text(
+            "${item.ask.headline} · $label",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ArtifactRow(
+    item: TranscriptItem.Artifacts,
+    onOpen: (Artifact) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        item.artifacts.forEach { artifact ->
+            OutlinedButton(
+                onClick = { onOpen(artifact) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Icon(
+                    when (artifact) {
+                        Artifact.Computer -> Icons.Outlined.Computer
+                        is Artifact.Preview -> Icons.Outlined.Language
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    when (artifact) {
+                        Artifact.Computer -> "Open computer"
+                        is Artifact.Preview -> "Open preview"
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ErrorCard(
+    item: TranscriptItem.Error,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+            Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(19.dp))
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.message, style = MaterialTheme.typography.titleMedium, fontSize = 15.sp)
+                item.detail?.let {
+                    Spacer(Modifier.height(3.dp))
+                    Text(it, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (item.recoverable) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = onRetry, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                        Text("Reconnect")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EndedRow(item: TranscriptItem.Ended, modifier: Modifier = Modifier) {
+    val text = when (val outcome = item.outcome) {
+        is SessionOutcome.Completed -> outcome.summary?.let { "Session finished · $it" } ?: "Session finished"
+        is SessionOutcome.Failed -> "Session failed · ${outcome.message}"
+        SessionOutcome.Interrupted -> "Session stopped"
+    }
+    Row(
+        modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        )
+        Text(
+            text,
+            Modifier.padding(horizontal = 12.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live activity
+// ---------------------------------------------------------------------------
+
+/** The "agent is doing something" line that trails the transcript. */
+@Composable
+fun ActivityRow(activity: AgentActivity, modifier: Modifier = Modifier) {
+    val label = when (activity) {
+        is AgentActivity.Thinking -> activity.label ?: "Thinking"
+        is AgentActivity.Working -> activity.label
+        is AgentActivity.AwaitingPermission -> "Waiting for your approval"
+        AgentActivity.AwaitingInput -> "Waiting for your reply"
+        AgentActivity.Idle, AgentActivity.Ended -> return
+    }
+    val transition = rememberInfiniteTransition(label = "activity")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "pulse",
+    )
+    Row(modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        StatusDot(MaterialTheme.colorScheme.primary.copy(alpha = pulse), 8.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            "$label…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Chevron affordance shared by list rows. */
+@Composable
+fun RowChevron(modifier: Modifier = Modifier) {
+    Icon(
+        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+        contentDescription = null,
+        modifier = modifier.size(20.dp),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** True when a background colour is dark enough to want light ink on top. */
+fun Color.luminanceIsDark(): Boolean = (red * 0.299f + green * 0.587f + blue * 0.114f) < 0.5f
