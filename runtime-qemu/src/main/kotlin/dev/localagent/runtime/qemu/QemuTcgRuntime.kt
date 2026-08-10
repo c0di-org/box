@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -280,6 +281,18 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
                     "Guest agent protocol mismatch"
                 }
                 return@withContext
+            } catch (timeout: TimeoutCancellationException) {
+                // The v2 handshake bounds itself with withTimeout, so a guest that has not started
+                // agentd yet fails with a TimeoutCancellationException — a CancellationException
+                // subclass. Rethrowing it as cancellation would abandon the boot on the very first
+                // attempt, which is exactly what the guest needs ~90 seconds of retries to survive.
+                // ensureActive still lets a genuine stop() cancel us.
+                currentCoroutineContext().ensureActive()
+                lastError = timeout
+                if (attempt == 0 || (attempt + 1) % 20 == 0) {
+                    Log.i(TAG, "Waiting for guest agent (attempt ${attempt + 1})")
+                }
+                delay(AGENT_RETRY_MILLIS)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

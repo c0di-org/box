@@ -33,8 +33,24 @@ printf 'virtio_console\n' > "$ROOTFS/etc/modules-load.d/local-agent.conf"
 ln -sf /etc/systemd/system/local-agentd.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agentd.service"
 cat > "$ROOTFS/etc/fstab" <<'EOF'
 /dev/vda / ext4 defaults 0 1
-/dev/vdb /workspace ext4 defaults,nofail 0 2
+/dev/vdb /workspace ext4 defaults,nofail,x-systemd.device-timeout=300s 0 2
 EOF
+
+# QEMU runs under TCG on the phone, so udev coldplug takes ~90s -- right at systemd's default
+# device timeout. When it loses that race, dev-vdb.device fails, workspace.mount fails with it,
+# and local-agentd never starts even though the kernel enumerated the disk in 15 seconds.
+install -d -m 0755 "$ROOTFS/etc/systemd/system.conf.d"
+cat > "$ROOTFS/etc/systemd/system.conf.d/local-agent.conf" <<'EOF'
+[Manager]
+DefaultDeviceTimeoutSec=300s
+EOF
+
+# Background maintenance that only competes for emulated CPU during boot. e2scrub_reap alone
+# occupied 80 seconds of the first boot.
+for unit in e2scrub_reap.service e2scrub_all.timer apt-daily.timer apt-daily-upgrade.timer \
+    dpkg-db-backup.timer fstrim.timer; do
+  ln -sf /dev/null "$ROOTFS/etc/systemd/system/$unit"
+done
 
 KERNEL="$(find "$ROOTFS/boot" -maxdepth 1 -type f -name 'vmlinuz-*' | sort | tail -n 1)"
 INITRD="$(find "$ROOTFS/boot" -maxdepth 1 -type f -name 'initrd.img-*' | sort | tail -n 1)"

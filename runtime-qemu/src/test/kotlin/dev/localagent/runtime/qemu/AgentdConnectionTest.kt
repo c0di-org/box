@@ -1,6 +1,9 @@
 package dev.localagent.runtime.qemu
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -35,6 +38,35 @@ class AgentdConnectionTest {
 
         assertEquals(AgentdProtocol.HELLO, first.type)
         assertEquals(0L, first.streamId)
+        assertEquals(
+            FakeGuest.GUEST_HELLO,
+            connection.awaitPeerHello(FakeGuest.TIMEOUT_MILLIS).toString(Charsets.UTF_8),
+        )
+    }
+
+    /**
+     * A booting guest accepts the virtio port long before it starts agentd, so the handshake times
+     * out on every attempt for the first minute or two. The boot loop in QemuTcgRuntime can only
+     * retry through that if the timeout leaves the caller alive: TimeoutCancellationException is a
+     * CancellationException, and treating it as one tore the VM down on the first attempt.
+     */
+    @Test
+    fun `a handshake timeout does not cancel the coroutine waiting on it`() = runBlocking {
+        connection.start(AgentdClient.clientHello())
+        guest.read()
+        // The guest never replies with HELLO, exactly like a guest that has not reached agentd yet.
+
+        var timedOut = false
+        try {
+            connection.awaitPeerHello(50)
+        } catch (expected: TimeoutCancellationException) {
+            timedOut = true
+        }
+
+        assertTrue("the handshake should have timed out", timedOut)
+        assertTrue("the caller must stay active so it can retry", currentCoroutineContext().isActive)
+        // Still usable: a later attempt against a guest that has come up must succeed.
+        guest.writeText(AgentdProtocol.HELLO, 0, AgentdProtocol.CHANNEL_CONTROL, FakeGuest.GUEST_HELLO)
         assertEquals(
             FakeGuest.GUEST_HELLO,
             connection.awaitPeerHello(FakeGuest.TIMEOUT_MILLIS).toString(Charsets.UTF_8),
