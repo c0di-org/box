@@ -15,6 +15,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicLong
 
@@ -89,9 +90,10 @@ internal class AgentdClient(private val socketFile: File) {
     private fun connectIfNeeded(): Connection = synchronized(connectionLock) {
         connection?.takeIf { it.socket.isConnected } ?: LocalSocket().let { socket ->
             try {
+                // LocalSocketImpl throws UnsupportedOperationException for the timeout overload of
+                // connect(); the caller's retry loop owns the deadline instead.
                 socket.connect(
                     LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM),
-                    CONNECT_TIMEOUT_MILLIS,
                 )
                 // Polling lets coroutine cancellation and the overall operation deadline win.
                 socket.setSoTimeout(READ_POLL_MILLIS)
@@ -120,8 +122,8 @@ internal class AgentdClient(private val socketFile: File) {
             if (System.nanoTime() >= deadlineNanos) throw SocketTimeoutException("agentd response timed out")
             val value = try {
                 connection.input.read()
-            } catch (_: SocketTimeoutException) {
-                continue
+            } catch (error: IOException) {
+                if (error.isSocketReadTimeout()) continue else throw error
             }
             if (value < 0) error("agentd closed its control channel")
             if (value == '\n'.code) return bytes.toString(Charsets.UTF_8.name())
@@ -152,7 +154,6 @@ internal class AgentdClient(private val socketFile: File) {
         const val FILE_MAX_RESPONSE_BYTES = 12 * 1024 * 1024
         const val MAX_FRAME_BYTES = 12 * 1024 * 1024
         const val MAX_CALL_TIMEOUT_MILLIS = 905_000L
-        private const val CONNECT_TIMEOUT_MILLIS = 2_000
         private const val READ_POLL_MILLIS = 1_000
         private const val INITIAL_RESPONSE_CAPACITY = 16 * 1024
         private const val NANOS_PER_MILLI = 1_000_000L

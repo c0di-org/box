@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,6 +54,9 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     private var serialLogger: SerialConsoleLogger? = null
 
     override fun state(): StateFlow<RuntimeState> = runtimeState.asStateFlow()
+
+    /** True when a complete verified boot set is already installed in app-private storage. */
+    fun isProvisioned(): Boolean = storage.hasHeadlessBootSet() || storage.hasUefiBootSet()
 
     override suspend fun provision(): Result<Unit> = lifecycleMutex.withLock {
         if (NativeQemu.isRunning()) return@withLock Result.failure(

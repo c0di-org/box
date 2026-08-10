@@ -12,9 +12,11 @@ internal class QmpClient(private val socketFile: File) {
     fun queryStatus(): Status {
         val socket = LocalSocket()
         try {
+            // LocalSocketImpl does not implement the timeout overload of connect(); it throws
+            // UnsupportedOperationException. A Unix socket connect resolves immediately anyway,
+            // and awaitQmp() supplies the overall deadline.
             socket.connect(
                 LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM),
-                CONNECT_TIMEOUT_MILLIS,
             )
             socket.setSoTimeout(READ_TIMEOUT_MILLIS)
             val reader = socket.inputStream.bufferedReader(Charsets.UTF_8)
@@ -55,7 +57,6 @@ internal class QmpClient(private val socketFile: File) {
     }
 
     private companion object {
-        const val CONNECT_TIMEOUT_MILLIS = 2_000
         const val READ_TIMEOUT_MILLIS = 2_000
         const val MAX_MESSAGES_PER_COMMAND = 32
         const val CAPABILITIES_ID = "box-capabilities"

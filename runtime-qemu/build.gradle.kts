@@ -7,6 +7,8 @@ android {
     namespace = "dev.localagent.runtime.qemu"
     compileSdk = 35
 
+    buildFeatures { aidl = true }
+
     defaultConfig {
         minSdk = 29
         ndk { abiFilters += "arm64-v8a" }
@@ -29,5 +31,6 @@ kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarg
 
 dependencies {
     implementation(project(":runtime-api"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 }
