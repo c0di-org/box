@@ -2,10 +2,10 @@ package dev.localagent.runtime.qemu
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
-import android.util.Base64
 import android.util.Log
 import dev.localagent.runtime.api.ComputerRuntime
 import dev.localagent.runtime.api.DesktopSession
+import dev.localagent.runtime.api.ExecEvent
 import dev.localagent.runtime.api.ExecRequest
 import dev.localagent.runtime.api.ExecResult
 import dev.localagent.runtime.api.FileEntry
@@ -26,17 +26,21 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicLong
 
 /** App-private QEMU/TCG runtime. Guest operations are never substituted with Android shell work. */
@@ -157,40 +161,58 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         }
     }
 
+    /**
+     * The buffered form of [execStream], kept for callers that only want the result. Output is
+     * accumulated as bytes and decoded once, so a multi-byte character split across two frames is
+     * still decoded correctly.
+     */
     override suspend fun exec(request: ExecRequest): ExecResult {
-        ensureReady()
+        val stdout = ByteArrayOutputStream()
+        val stderr = ByteArrayOutputStream()
+        var exitCode = -1
+        // The guest owns the deadline and always answers; this is only a transport backstop, and
+        // it wraps the collection rather than the emission so the flow stays in one coroutine.
+        withTimeout((request.timeoutSeconds + EXEC_TRANSPORT_GRACE_SECONDS) * 1_000L) {
+            execStream(request).collect { event ->
+                when (event) {
+                    is ExecEvent.Stdout -> stdout.write(event.bytes)
+                    is ExecEvent.Stderr -> stderr.write(event.bytes)
+                    is ExecEvent.Exited -> exitCode = event.exitCode
+                }
+            }
+        }
+        return ExecResult(
+            exitCode,
+            stdout.toString(Charsets.UTF_8.name()),
+            stderr.toString(Charsets.UTF_8.name()),
+        )
+    }
+
+    override fun execStream(request: ExecRequest): Flow<ExecEvent> {
         require(request.command.isNotEmpty()) { "Command must not be empty" }
         require(request.timeoutSeconds in 1..MAX_EXEC_TIMEOUT_SECONDS) {
             "Command timeout must be between 1 and $MAX_EXEC_TIMEOUT_SECONDS seconds"
         }
-        val command = JSONArray().apply { request.command.forEach(::put) }
-        val result = agentd.call(
-            "exec",
-            JSONObject()
-                .put("command", command)
-                .put("cwd", request.workingDirectory)
-                .put("timeoutSeconds", request.timeoutSeconds),
-            timeoutMillis = (request.timeoutSeconds + EXEC_TRANSPORT_GRACE_SECONDS) * 1_000L,
-        )
-        return ExecResult(
-            result.getInt("exitCode"),
-            result.getString("stdout"),
-            result.getString("stderr"),
-        )
+        return flow {
+            ensureReady()
+            emitAll(agentd.exec(request))
+        }
     }
 
-    override suspend fun createPty(request: PtyRequest): PtySession = unavailable("Interactive PTY")
+    override suspend fun createPty(request: PtyRequest): PtySession {
+        ensureReady()
+        require(request.command.isNotEmpty()) { "Command must not be empty" }
+        return agentd.openPty(request)
+    }
 
     override suspend fun readFile(path: String): ByteArray {
         ensureReady()
-        return Base64.decode(
-            agentd.call(
-                "read_file",
-                JSONObject().put("path", path),
-                timeoutMillis = AgentdClient.FILE_CALL_TIMEOUT_MILLIS,
-                maxResponseBytes = AgentdClient.FILE_MAX_RESPONSE_BYTES,
-            ).getString("dataBase64"),
-            Base64.DEFAULT,
+        // v2 streams the file itself, so there is no base64 body and no whole-response cap.
+        return agentd.call(
+            "read_file",
+            JSONObject().put("path", path),
+            timeoutMillis = AgentdClient.FILE_CALL_TIMEOUT_MILLIS,
+            maxResultBytes = AgentdClient.FILE_MAX_RESULT_BYTES,
         )
     }
 
@@ -199,16 +221,17 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         require(data.size <= MAX_FILE_BYTES) { "File exceeds ${MAX_FILE_BYTES / (1024 * 1024)} MiB limit" }
         agentd.call(
             "write_file",
-            JSONObject()
-                .put("path", path)
-                .put("dataBase64", Base64.encodeToString(data, Base64.NO_WRAP)),
+            JSONObject().put("path", path),
             timeoutMillis = AgentdClient.FILE_CALL_TIMEOUT_MILLIS,
+            body = data,
         )
     }
 
     override suspend fun listFiles(path: String): List<FileEntry> {
         ensureReady()
-        val entries = agentd.call("list_files", JSONObject().put("path", path)).getJSONArray("items")
+        val entries = JSONObject(
+            agentd.callJson("list_files", JSONObject().put("path", path)),
+        ).getJSONArray("items")
         check(entries.length() <= MAX_LIST_ENTRIES) { "Guest returned too many directory entries" }
         return List(entries.length()) { index ->
             entries.getJSONObject(index).let { entry ->
@@ -251,7 +274,7 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             currentCoroutineContext().ensureActive()
             check(NativeQemu.isRunning()) { "QEMU exited while the guest was booting" }
             try {
-                val health = agentd.call("health", timeoutMillis = HEALTH_TIMEOUT_MILLIS)
+                val health = agentd.health()
                 check(health.optBoolean("ready")) { "Guest agent is not ready" }
                 check(health.optInt("protocol", -1) == AgentdClient.PROTOCOL_VERSION) {
                     "Guest agent protocol mismatch"

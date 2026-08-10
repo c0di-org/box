@@ -16,6 +16,13 @@ The verified asset set includes the Debian kernel and initrd for direct boot. QE
 sockets below `filesDir/computer/sockets`; no control endpoint is exposed on the
 network. `QemuCommand` is the single source of truth for that launch contract.
 
+The `agentd` channel speaks [protocol v2](../protocol/agentd-v2.md): length-prefixed
+binary frames multiplexing many logical streams over that one port, so a command's
+output streams as it happens, a stream can be cancelled, and a chatty process
+throttles itself against the app instead of filling its heap. `AgentdClient` owns
+the protocol vocabulary; `AgentdConnection` owns framing and flow control and has no
+Android dependency, so both are covered by JVM unit tests.
+
 ## Current implementation state
 
 The storage/verification, agent protocol, guest-image source and isolated service
