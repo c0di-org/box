@@ -6,7 +6,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/guest/image/out}"
 SUITE="${DEBIAN_SUITE:-bookworm}"
-IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-4096}"
+# Raised from 4096 to fit the baked harness (~315 MB). Unused space costs almost nothing in the
+# APK: the image ships as a compressed qcow2, and empty blocks compress to nearly zero.
+IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-6144}"
 mkdir -p "$OUT_DIR"
 command -v mmdebstrap >/dev/null || { echo 'mmdebstrap is required (use the CI image)' >&2; exit 1; }
 command -v qemu-img >/dev/null || { echo 'qemu-img is required' >&2; exit 1; }
@@ -26,6 +28,29 @@ if [[ -n "${DEBUG_ROOT_PASSWORD:-}" ]]; then
   printf 'root:%s\n' "$DEBUG_ROOT_PASSWORD" | chroot "$ROOTFS" chpasswd
 fi
 install -m 0755 "$ROOT_DIR/guest/agentd/agentd.py" "$ROOTFS/opt/local-agent/agentd.py"
+
+# The Claude Code harness is baked in rather than installed on first run.
+#
+# Not the obvious choice — users pick their own harness, so installing on demand keeps the image
+# small and the harness current. What decides it is the size: the Agent SDK pulls a
+# platform-specific native binary that unpacks to ~295 MB. Fetching that through the guest's
+# emulated network and unpacking it under TCG is minutes of dead time on a first run that already
+# waits ~170s for boot. Installed here, it is present the moment the VM is ready, and Box works
+# with no network at all.
+#
+# This runs on the build host (linux/arm64, per the Dockerfile), so npm resolves the same
+# linux-arm64 optional dependency the guest would have chosen, at native speed. The version is
+# pinned in guest/harness/package.json and the lockfile beside it.
+install -d -m 0755 "$ROOTFS/opt/local-agent/harness"
+install -m 0644 "$ROOT_DIR/guest/harness/package.json" "$ROOTFS/opt/local-agent/harness/package.json"
+install -m 0644 "$ROOT_DIR/guest/harness/package-lock.json" "$ROOTFS/opt/local-agent/harness/package-lock.json"
+install -m 0755 "$ROOT_DIR/guest/harness/box-claude-harness.mjs" "$ROOTFS/opt/local-agent/harness/box-claude-harness.mjs"
+npm --prefix "$ROOTFS/opt/local-agent/harness" ci --omit=dev --no-audit --no-fund
+test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent-sdk" \
+  || { echo 'the Claude Code harness did not install' >&2; exit 1; }
+# A harness that installed for the wrong architecture would fail only once it reached the phone.
+test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64" \
+  || { echo 'the harness installed without its linux-arm64 runtime' >&2; exit 1; }
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agentd.service" "$ROOTFS/etc/systemd/system/local-agentd.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-workspace-prepare.service" "$ROOTFS/etc/systemd/system/local-agent-workspace-prepare.service"
 install -d -m 0755 "$ROOTFS/etc/modules-load.d"

@@ -5,6 +5,7 @@ RUN apt-get update \
         ca-certificates \
         e2fsprogs \
         mmdebstrap \
+        npm \
         qemu-utils \
     && rm -rf /var/lib/apt/lists/*
 
