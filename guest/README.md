@@ -49,6 +49,22 @@ itself rather than leaving them to be written by hand.
 `guest/image/out/` is gitignored and must stay that way — `base-system.qcow2` is well
 over GitHub's 100 MB limit.
 
+### Why the image fights systemd's default timeouts
+
+QEMU runs under TCG on the phone, so everything in the guest is emulated and slow in a
+way no CI runner reproduces. `systemd-udev-trigger` needs about 92 seconds to coldplug
+the virtual hardware — just past systemd's 90-second default device timeout. When it
+loses that race, `dev-vdb.device` is considered failed even though the kernel
+enumerated the disk at 15 seconds, `workspace.mount` fails with it, and
+`local-agentd.service` never starts because it `Requires` the mount. The boot looks
+completely healthy on the console right up to the point where nothing is listening.
+
+The builder therefore sets `DefaultDeviceTimeoutSec=300s`, gives the workspace mount a
+matching `x-systemd.device-timeout`, and masks background maintenance that only
+competes for emulated CPU during boot (`e2scrub_reap` alone spent 80 seconds of the
+first boot). If you add packages that pull in new boot-time units, re-check the boot
+console before assuming the image is fine.
+
 To build into a different directory (useful when a Gradle build might be reading the
 current one), override `OUT_DIR` with a path inside the mounted workspace:
 

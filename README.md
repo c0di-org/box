@@ -143,12 +143,30 @@ adb logcat "BoxRuntime:*" "LocalAgentRuntime:*" "LocalAgentQemu:*" "BoxGuestSeri
 ```
 
 A healthy boot logs `QMP confirmed running guest`, then `Guest agent confirmed ready`,
-then `QEMU runtime launch accepted`. Tap-to-Ready is around 90 seconds on a Galaxy Fold.
+then `QEMU runtime launch accepted`. Start the runtime with:
 
-The debug build ships a probe that exercises the guest control channel end to end:
+```bash
+adb shell am start -n dev.localagent.workstation.stock/dev.localagent.workstation.VmProbeActivity --es runtime_action dev.localagent.runtime.qemu.START
+```
+
+Then exercise the guest control channel end to end:
 
 ```bash
 adb shell am start -n dev.localagent.workstation.stock/dev.localagent.workstation.VmProbeActivity --es runtime_action dev.localagent.runtime.qemu.EXEC_PROBE
 ```
 
-Expect `Guest command probe: exit=0 stdout=device-agentd-ok` in logcat.
+Expect `Guest command probe: exit=0 stdout=device-agentd-ok` in logcat. Run `START`
+first on a fresh install: only `START` provisions the guest image, so `EXEC_PROBE` on
+an unprovisioned device fails with `No complete verified guest image is installed yet`.
+
+Tap-to-Ready on a Galaxy Z Fold 7 measured 170–260 seconds against the protocol-v2
+image, versus a ~90 second figure quoted for earlier builds. Almost all of it is the
+guest waiting on emulated udev; see [guest/README.md](guest/README.md).
+
+Reinstalling the APK does **not** replace an already-provisioned guest disk —
+`base-system.qcow2` is installed only when absent, since it is mutable once booted. To
+pick up a rebuilt image, drop the provisioned copy first (this keeps the workspace):
+
+```bash
+adb shell run-as dev.localagent.workstation.stock rm -f files/computer/disks/system.qcow2
+```
