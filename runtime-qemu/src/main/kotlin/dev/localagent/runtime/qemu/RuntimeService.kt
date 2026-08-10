@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -18,6 +19,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Process boundary for QEMU. The manifest pins this service to `:computer`, so a native VM
@@ -95,7 +98,93 @@ class RuntimeService : Service() {
                 }
             }
         }
+
+        override fun writeFile(path: String, data: ByteArray, callback: IWriteCallback) {
+            scope.launch {
+                try {
+                    runtime.writeFile(path, data)
+                    callback.onResult(data.size.toLong())
+                } catch (error: Exception) {
+                    // Deliberately not logging the path's contents: this is how credentials reach
+                    // the guest, and a stack trace is the one place they must never appear.
+                    Log.e(TAG, "Guest file write failed")
+                    runCatching { callback.onError(error.readableMessage("Could not write $path")) }
+                }
+            }
+        }
+
+        override fun openAgentSession(
+            sessionId: String,
+            command: Array<out String>,
+            workingDirectory: String,
+            environment: Bundle?,
+            callback: IAgentSessionCallback,
+        ) {
+            val existing = sessions[sessionId]
+            if (existing != null && existing.isRunning) {
+                // Re-opening a live session is a resumed UI, not a second agent.
+                existing.attach(callback)
+                return
+            }
+            val host = AgentSessionHost(sessionId, logFileFor(sessionId), scope)
+            sessions[sessionId] = host
+            host.start(
+                runtime,
+                command.toList(),
+                workingDirectory,
+                environment.toStringMap(),
+                callback,
+            )
+        }
+
+        override fun attachAgentSession(sessionId: String, callback: IAgentSessionCallback) {
+            val host = sessions[sessionId]
+            if (host != null) {
+                host.attach(callback)
+                return
+            }
+            // Nothing running under that id. The log still holds everything the agent did, so an
+            // agent that finished while the UI was dead is read back rather than lost.
+            val log = logFileFor(sessionId)
+            runCatching {
+                callback.onAttached(null, log.absolutePath)
+                callback.onClosed(-1, null)
+            }
+        }
+
+        override fun openEphemeralSession(
+            sessionId: String,
+            command: Array<out String>,
+            workingDirectory: String,
+            environment: Bundle?,
+            callback: IAgentSessionCallback,
+        ) {
+            // Any previous attempt is torn down rather than resumed: a half-finished sign-in
+            // should be restarted, never re-entered.
+            sessions.remove(sessionId)?.cancel()
+            val host = AgentSessionHost(sessionId, logFile = null, scope = scope)
+            sessions[sessionId] = host
+            host.start(runtime, command.toList(), workingDirectory, environment.toStringMap(), callback)
+        }
+
+        override fun closeAgentSession(sessionId: String) {
+            sessions.remove(sessionId)?.cancel()
+        }
     }
+
+    /** Live sessions, keyed by Box's own session id so a restarted UI can find them again. */
+    private val sessions = ConcurrentHashMap<String, AgentSessionHost>()
+
+    private fun logFileFor(sessionId: String): File {
+        val directory = File(filesDir, AGENT_SESSION_DIRECTORY).apply { mkdirs() }
+        // Box generates these ids, but a path separator arriving here would escape the directory.
+        return File(directory, sessionId.replace(UNSAFE_ID, "_") + ".ndjson")
+    }
+
+    private fun Bundle?.toStringMap(): Map<String, String> =
+        this?.keySet().orEmpty().mapNotNull { key ->
+            this?.getString(key)?.let { key to it }
+        }.toMap()
 
     override fun onBind(intent: Intent?): IBinder = control
 
@@ -190,10 +279,6 @@ class RuntimeService : Service() {
         )
     }
 
-    /** Exception messages reach the UI verbatim, so never surface an empty one. */
-    private fun Throwable.readableMessage(fallback: String): String =
-        message?.takeIf(String::isNotBlank) ?: fallback
-
     companion object {
         /** Binder transactions are capped near 1 MB; keep well clear for text the UI can show. */
         private const val MAX_STREAM_CHARS = 128 * 1024
@@ -213,5 +298,13 @@ class RuntimeService : Service() {
         private const val TAG = "LocalAgentRuntime"
         private const val CHANNEL_ID = "local_agent_runtime"
         private const val NOTIFICATION_ID = 1001
+
+        /** Session logs live beside the VM, in `:computer`'s half of the app's private storage. */
+        private const val AGENT_SESSION_DIRECTORY = "agent-sessions"
+        private val UNSAFE_ID = Regex("[^A-Za-z0-9_-]")
     }
 }
+
+/** Exception messages reach the UI verbatim, so never surface an empty one. */
+internal fun Throwable.readableMessage(fallback: String): String =
+    message?.takeIf(String::isNotBlank) ?: fallback
