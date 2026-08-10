@@ -137,4 +137,6 @@ dependencies {
     implementation(libs.androidx.compose.material.icons)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
+    // A real org.json, because the stub in the mockable android.jar throws from every method.
+    testImplementation(libs.json)
 }
