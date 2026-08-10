@@ -1,4 +1,8 @@
-# agentd protocol v1
+# agentd protocol v1 (superseded)
+
+> Superseded by [agentd-v2.md](agentd-v2.md), which replaces this wire format with
+> multiplexed length-prefixed frames. Kept as the record of what v1 promised and
+> why streaming had to replace it. No shipping code speaks v1.
 
 `agentd` is the only host-facing service inside the guest. It uses a private QEMU
 virtio-serial port (`dev.localagent.agentd`), not a TCP listener. Each message is

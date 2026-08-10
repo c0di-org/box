@@ -33,4 +33,9 @@ dependencies {
     implementation(project(":runtime-api"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // The agentd framing and multiplexer carry no Android dependency precisely so they can be
+    // covered here, on the JVM, without a device or a booted guest.
+    testImplementation(libs.junit)
+    // A real org.json, because the stub in the mockable android.jar throws from every method.
+    testImplementation(libs.json)
 }

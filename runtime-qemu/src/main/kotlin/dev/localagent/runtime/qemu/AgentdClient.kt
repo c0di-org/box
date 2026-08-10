@@ -2,160 +2,266 @@ package dev.localagent.runtime.qemu
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
-import kotlinx.coroutines.CancellationException
+import dev.localagent.runtime.api.ExecEvent
+import dev.localagent.runtime.api.ExecRequest
+import dev.localagent.runtime.api.PtyRequest
+import dev.localagent.runtime.api.PtySession
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.net.SocketTimeoutException
-import java.util.concurrent.atomic.AtomicLong
 
-/** Serialized, bounded request/response client for the private guest virtio channel. */
-internal class AgentdClient(private val socketFile: File) {
-    private data class Connection(
-        val socket: LocalSocket,
-        val input: BufferedInputStream,
-        val output: BufferedOutputStream,
-    )
+/**
+ * Multiplexed, streaming client for the private guest virtio channel (`protocol/agentd-v2.md`).
+ *
+ * Owns protocol vocabulary and JSON; the framing and flow control below it are in
+ * [AgentdConnection]. One connection carries every concurrent call, command and PTY, so a file
+ * listing no longer waits behind a build.
+ */
+internal class AgentdClient private constructor(
+    private val openTransport: suspend () -> AgentdConnection,
+) {
+    constructor(socketFile: File) : this({ connectLocalSocket(socketFile) })
 
-    private val callMutex = Mutex()
-    private val connectionLock = Any()
-    private val sequence = AtomicLong()
-    private var connection: Connection? = null
+    private val connectionMutex = Mutex()
+    private var connection: AgentdConnection? = null
 
+    /** Round-trips `health`, which is also how a stale guest agent is detected at startup. */
+    suspend fun health(timeoutMillis: Long = HEALTH_TIMEOUT_MILLIS): JSONObject =
+        JSONObject(callJson("health", JSONObject(), timeoutMillis))
+
+    suspend fun callJson(
+        method: String,
+        params: JSONObject = JSONObject(),
+        timeoutMillis: Long = DEFAULT_CALL_TIMEOUT_MILLIS,
+        maxResultBytes: Int = DEFAULT_MAX_RESULT_BYTES,
+    ): String = call(method, params, timeoutMillis, maxResultBytes).toString(Charsets.UTF_8)
+
+    /** The result body: UTF-8 JSON for most methods, raw file bytes for `read_file`. */
     suspend fun call(
         method: String,
         params: JSONObject = JSONObject(),
         timeoutMillis: Long = DEFAULT_CALL_TIMEOUT_MILLIS,
-        maxResponseBytes: Int = DEFAULT_MAX_RESPONSE_BYTES,
-    ): JSONObject = callMutex.withLock {
+        maxResultBytes: Int = DEFAULT_MAX_RESULT_BYTES,
+        body: ByteArray? = null,
+    ): ByteArray {
         require(timeoutMillis in 1..MAX_CALL_TIMEOUT_MILLIS) { "Invalid agentd call timeout" }
-        require(maxResponseBytes in 1..MAX_FRAME_BYTES) { "Invalid agentd response limit" }
-        withContext(Dispatchers.IO) {
-            currentCoroutineContext().ensureActive()
-            val active = connectIfNeeded()
-            try {
-                val id = sequence.incrementAndGet().toString()
-                val request = JSONObject()
-                    .put("version", PROTOCOL_VERSION)
-                    .put("id", id)
-                    .put("method", method)
-                    .put("params", params)
-                    .toString()
-                    .toByteArray(Charsets.UTF_8)
-                check(request.size <= MAX_FRAME_BYTES) { "agentd request exceeds transport limit" }
+        val open = JSONObject()
+            .put("kind", "call")
+            .put("method", method)
+            .put("params", params)
+        val stream = connection().openStream(open.toString().toByteArray(Charsets.UTF_8))
+        return try {
+            withTimeout(timeoutMillis) {
+                if (body != null) {
+                    stream.send(AgentdProtocol.CHANNEL_STDIN, body)
+                    stream.endChannel(AgentdProtocol.CHANNEL_STDIN)
+                }
+                collectResult(stream, maxResultBytes)
+            }
+        } finally {
+            withContext(NonCancellable) { stream.cancel(EMPTY_JSON) }
+        }
+    }
 
-                active.output.write(request)
-                active.output.write('\n'.code)
-                active.output.flush()
+    fun exec(request: ExecRequest): Flow<ExecEvent> = flow {
+        val open = JSONObject()
+            .put("kind", "exec")
+            .put("command", JSONArray().apply { request.command.forEach(::put) })
+            .put("cwd", request.workingDirectory)
+            .put("timeoutSeconds", request.timeoutSeconds)
+            .put("env", jsonOf(request.environment))
+        val stream = connection().openStream(open.toString().toByteArray(Charsets.UTF_8))
+        try {
+            for (event in stream.incoming) {
+                if (event !is AgentdEvent.Data) continue
+                when (event.channel) {
+                    AgentdProtocol.CHANNEL_STDOUT -> emit(ExecEvent.Stdout(event.bytes))
+                    AgentdProtocol.CHANNEL_STDERR -> emit(ExecEvent.Stderr(event.bytes))
+                    else -> Unit
+                }
+                // Credit is returned only now, after the collector took the bytes: that is what
+                // makes a chatty command throttle itself instead of filling the app's heap.
+                stream.acknowledge(event.bytes.size)
+            }
+            val close = requireSuccess(stream.closePayload.await())
+            emit(ExecEvent.Exited(close.optInt("exitCode", -1)))
+        } finally {
+            withContext(NonCancellable) { stream.cancel(EMPTY_JSON) }
+        }
+    }
 
-                val response = JSONObject(
-                    readFrame(
-                        connection = active,
-                        timeoutMillis = timeoutMillis,
-                        maxBytes = maxResponseBytes,
-                        job = currentCoroutineContext()[Job],
-                    ),
+    suspend fun openPty(request: PtyRequest): PtySession {
+        val open = JSONObject()
+            .put("kind", "pty")
+            .put("command", JSONArray().apply { request.command.forEach(::put) })
+            .put("cwd", request.workingDirectory)
+            .put("columns", request.columns)
+            .put("rows", request.rows)
+            .put("env", jsonOf(request.environment))
+        return AgentdPtySession(connection().openStream(open.toString().toByteArray(Charsets.UTF_8)))
+    }
+
+    suspend fun close() = connectionMutex.withLock {
+        connection?.close()
+        connection = null
+    }
+
+    private suspend fun collectResult(stream: AgentdStream, maxResultBytes: Int): ByteArray {
+        val body = ByteArrayOutputStream()
+        for (event in stream.incoming) {
+            if (event !is AgentdEvent.Data || event.channel != AgentdProtocol.CHANNEL_STDOUT) continue
+            check(body.size() + event.bytes.size <= maxResultBytes) {
+                "agentd result exceeds the transport limit"
+            }
+            body.write(event.bytes)
+            stream.acknowledge(event.bytes.size)
+        }
+        requireSuccess(stream.closePayload.await())
+        return body.toByteArray()
+    }
+
+    /** A failed operation is data, never a silently successful result. */
+    private fun requireSuccess(payload: ByteArray): JSONObject {
+        val close = JSONObject(payload.toString(Charsets.UTF_8))
+        return when (close.optString("status")) {
+            "ok" -> close
+            "cancelled" -> error("agentd cancelled the operation")
+            else -> {
+                val failure = close.optJSONObject("error")
+                error(
+                    "agentd ${failure?.optString("code")?.ifBlank { null } ?: "error"}: " +
+                        (failure?.optString("message")?.ifBlank { null } ?: "request failed"),
                 )
-                check(response.optInt("version", -1) == PROTOCOL_VERSION) {
-                    "agentd response version mismatch"
-                }
-                check(response.optString("id") == id) { "agentd response id mismatch" }
-                response.optJSONObject("error")?.let { remoteError ->
-                    error("agentd ${remoteError.optString("code", "error")}: ${remoteError.optString("message", "request failed")}")
-                }
-                response.optJSONObject("result") ?: error("agentd response did not contain an object result")
-            } catch (cancelled: CancellationException) {
-                invalidate(active)
-                throw cancelled
-            } catch (error: Exception) {
-                invalidate(active)
-                throw error
             }
         }
     }
 
-    /** Does not wait for an in-flight call; closing the socket wakes its blocking read. */
-    suspend fun close() = withContext(Dispatchers.IO) { closeActiveConnection() }
+    private fun jsonOf(values: Map<String, String>): JSONObject =
+        JSONObject().apply { values.forEach { (key, value) -> put(key, value) } }
 
-    private fun connectIfNeeded(): Connection = synchronized(connectionLock) {
-        connection?.takeIf { it.socket.isConnected } ?: LocalSocket().let { socket ->
+    private suspend fun connection(): AgentdConnection = connectionMutex.withLock {
+        connection?.takeIf { it.isActive }?.let { return@withLock it }
+        connection = null
+        withContext(Dispatchers.IO) { openTransport() }.also { connection = it }
+    }
+
+    companion object {
+        /** Test seam: a client over an already-handshaken connection, with no LocalSocket. */
+        internal fun over(connection: AgentdConnection) = AgentdClient({ connection })
+
+        private suspend fun connectLocalSocket(socketFile: File): AgentdConnection {
+            val socket = LocalSocket()
+            var connected: AgentdConnection? = null
             try {
                 // LocalSocketImpl throws UnsupportedOperationException for the timeout overload of
                 // connect(); the caller's retry loop owns the deadline instead.
                 socket.connect(
-                    LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM),
+                    LocalSocketAddress(
+                        socketFile.absolutePath,
+                        LocalSocketAddress.Namespace.FILESYSTEM,
+                    ),
                 )
                 // Polling lets coroutine cancellation and the overall operation deadline win.
                 socket.setSoTimeout(READ_POLL_MILLIS)
-                Connection(
-                    socket,
+                val active = AgentdConnection(
                     BufferedInputStream(socket.inputStream),
                     BufferedOutputStream(socket.outputStream),
-                ).also { connection = it }
-            } catch (error: Exception) {
+                ) { runCatching { socket.close() } }
+                connected = active
+                active.start(clientHello())
+                val peer = JSONObject(
+                    active.awaitPeerHello(HANDSHAKE_TIMEOUT_MILLIS).toString(Charsets.UTF_8),
+                )
+                check(peer.optInt("version", -1) == PROTOCOL_VERSION) {
+                    "The guest agent speaks protocol ${peer.optInt("version", -1)}, " +
+                        "not $PROTOCOL_VERSION"
+                }
+                active.applyPeerLimits(
+                    peer.optInt("initialWindowBytes", AgentdProtocol.INITIAL_WINDOW_BYTES),
+                    peer.optInt("maxConcurrentStreams", AgentdProtocol.MAX_CONCURRENT_STREAMS),
+                    peer.optInt("maxFramePayloadBytes", AgentdProtocol.MAX_FRAME_PAYLOAD),
+                )
+                return active
+            } catch (error: Throwable) {
+                connected?.close()
                 runCatching { socket.close() }
-                throw error
+                throw if (error is IOException || error is IllegalStateException) {
+                    error
+                } else {
+                    IOException("Could not reach the guest agent", error)
+                }
             }
         }
-    }
 
-    private fun readFrame(
-        connection: Connection,
-        timeoutMillis: Long,
-        maxBytes: Int,
-        job: Job?,
-    ): String {
-        val deadlineNanos = System.nanoTime() + timeoutMillis * NANOS_PER_MILLI
-        val bytes = ByteArrayOutputStream(minOf(maxBytes, INITIAL_RESPONSE_CAPACITY))
-        while (true) {
-            job?.ensureActive()
-            if (System.nanoTime() >= deadlineNanos) throw SocketTimeoutException("agentd response timed out")
-            val value = try {
-                connection.input.read()
-            } catch (error: IOException) {
-                if (error.isSocketReadTimeout()) continue else throw error
-            }
-            if (value < 0) error("agentd closed its control channel")
-            if (value == '\n'.code) return bytes.toString(Charsets.UTF_8.name())
-            check(bytes.size() < maxBytes) { "agentd response exceeds transport limit" }
-            bytes.write(value)
-        }
-    }
+        internal fun clientHello(): ByteArray = JSONObject()
+            .put("version", PROTOCOL_VERSION)
+            .put("client", "box-android")
+            .put("maxFramePayloadBytes", AgentdProtocol.MAX_FRAME_PAYLOAD)
+            .put("initialWindowBytes", AgentdProtocol.INITIAL_WINDOW_BYTES)
+            .put("maxConcurrentStreams", AgentdProtocol.MAX_CONCURRENT_STREAMS)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
 
-    private fun invalidate(expected: Connection) {
-        synchronized(connectionLock) {
-            if (connection === expected) connection = null
-        }
-        runCatching { expected.socket.close() }
-    }
-
-    private fun closeActiveConnection() {
-        val active = synchronized(connectionLock) {
-            connection.also { connection = null }
-        }
-        active?.let { runCatching { it.socket.close() } }
-    }
-
-    companion object {
-        const val PROTOCOL_VERSION = 1
+        const val PROTOCOL_VERSION = AgentdProtocol.VERSION
         const val DEFAULT_CALL_TIMEOUT_MILLIS = 15_000L
-        const val FILE_CALL_TIMEOUT_MILLIS = 30_000L
-        const val DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024
-        const val FILE_MAX_RESPONSE_BYTES = 12 * 1024 * 1024
-        const val MAX_FRAME_BYTES = 12 * 1024 * 1024
+        const val FILE_CALL_TIMEOUT_MILLIS = 60_000L
+        const val HEALTH_TIMEOUT_MILLIS = 2_500L
+        const val DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
+        const val FILE_MAX_RESULT_BYTES = 32 * 1024 * 1024
         const val MAX_CALL_TIMEOUT_MILLIS = 905_000L
+        private const val HANDSHAKE_TIMEOUT_MILLIS = 2_000L
         private const val READ_POLL_MILLIS = 1_000
-        private const val INITIAL_RESPONSE_CAPACITY = 16 * 1024
-        private const val NANOS_PER_MILLI = 1_000_000L
+        internal val EMPTY_JSON = "{}".toByteArray(Charsets.UTF_8)
+    }
+}
+
+/** A PTY is just another stream: keystrokes on stdin, terminal output on stdout, resize on CTRL. */
+internal class AgentdPtySession(private val stream: AgentdStream) : PtySession {
+    override val output: Flow<ByteArray> = flow {
+        for (event in stream.incoming) {
+            if (event !is AgentdEvent.Data) continue
+            emit(event.bytes)
+            stream.acknowledge(event.bytes.size)
+        }
+    }
+
+    override suspend fun write(data: ByteArray) = stream.send(AgentdProtocol.CHANNEL_STDIN, data)
+
+    override suspend fun resize(columns: Int, rows: Int) = stream.sendControl(
+        JSONObject()
+            .put("op", "resize")
+            .put("columns", columns)
+            .put("rows", rows)
+            .toString()
+            .toByteArray(Charsets.UTF_8),
+    )
+
+    /** Terminal state lives on the stream, so this works whether or not [output] is collected. */
+    override suspend fun awaitExit(): Int =
+        JSONObject(stream.closePayload.await().toString(Charsets.UTF_8)).optInt("exitCode", -1)
+
+    override suspend fun close() {
+        withContext(NonCancellable) {
+            stream.cancel(JSONObject().put("signal", "TERM").toString().toByteArray(Charsets.UTF_8))
+            // The guest answers CLOSE even for a cancel; do not wait forever if it cannot.
+            withTimeoutOrNull(CLOSE_TIMEOUT_MILLIS) { runCatching { stream.closePayload.await() } }
+        }
+    }
+
+    private companion object {
+        const val CLOSE_TIMEOUT_MILLIS = 5_000L
     }
 }
