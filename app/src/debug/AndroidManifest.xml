@@ -4,6 +4,6 @@
         <activity
             android:name=".VmProbeActivity"
             android:exported="true"
-            android:theme="@style/Theme.LocalAgent" />
+            android:theme="@style/Theme.Box" />
     </application>
 </manifest>

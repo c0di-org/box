@@ -30,6 +30,8 @@ interface ComputerRuntime {
 data class ExecRequest(
     val command: List<String>,
     val workingDirectory: String = "/workspace",
+    /** Guest-enforced wall-clock limit. The runtime adds a small transport grace period. */
+    val timeoutSeconds: Int = 120,
 )
 
 data class ExecResult(
@@ -58,6 +60,7 @@ sealed interface RuntimeState {
     data object Starting : RuntimeState
     data object Connecting : RuntimeState
     data object Ready : RuntimeState
+    data object Stopping : RuntimeState
     data object Suspending : RuntimeState
     data object Suspended : RuntimeState
     data class Failed(val reason: RuntimeFailure) : RuntimeState

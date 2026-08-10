@@ -1,6 +1,10 @@
 .gradle/
 build/
 **/build/
+**/.cxx/
+**/__pycache__/
+*.py[cod]
 local.properties
 .idea/
 *.iml
+.DS_Store

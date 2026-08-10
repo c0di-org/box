@@ -2,29 +2,63 @@ package dev.localagent.runtime.qemu
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import org.json.JSONObject
 import java.io.File
 
-/** Tiny QMP client kept inside the isolated runtime process. QMP never crosses the LAN. */
+/** Minimal bounded QMP client. QMP stays on an app-private Unix socket. */
 internal class QmpClient(private val socketFile: File) {
-    fun queryStatus(): String {
+    data class Status(val running: Boolean, val status: String)
+
+    fun queryStatus(): Status {
         val socket = LocalSocket()
         try {
-            socket.connect(LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
-            val reader = socket.inputStream.bufferedReader()
-            val writer = socket.outputStream.bufferedWriter()
-            check(reader.readLine()?.contains("QMP") == true) { "QMP greeting was not received" }
-            writer.write("{\"execute\":\"qmp_capabilities\"}\n")
-            writer.flush()
-            check(reader.readLine()?.contains("return") == true) { "QMP capability negotiation failed" }
-            writer.write("{\"execute\":\"query-status\"}\n")
-            writer.flush()
-            repeat(8) {
-                val response = reader.readLine() ?: error("QMP closed before status response")
-                if (response.contains("\"return\"")) return response
-            }
-            error("QMP did not return a status response")
+            socket.connect(
+                LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM),
+                CONNECT_TIMEOUT_MILLIS,
+            )
+            socket.setSoTimeout(READ_TIMEOUT_MILLIS)
+            val reader = socket.inputStream.bufferedReader(Charsets.UTF_8)
+            val writer = socket.outputStream.bufferedWriter(Charsets.UTF_8)
+            val greeting = JSONObject(reader.readLine() ?: error("QMP greeting was not received"))
+            check(greeting.has("QMP")) { "Invalid QMP greeting" }
+
+            execute(writer, "qmp_capabilities", CAPABILITIES_ID)
+            awaitResponse(reader, CAPABILITIES_ID)
+            execute(writer, "query-status", STATUS_ID)
+            val result = awaitResponse(reader, STATUS_ID).getJSONObject("return")
+            return Status(
+                running = result.getBoolean("running"),
+                status = result.optString("status", "unknown"),
+            )
         } finally {
-            socket.close()
+            runCatching { socket.close() }
         }
+    }
+
+    private fun execute(writer: java.io.BufferedWriter, command: String, id: String) {
+        writer.write(JSONObject().put("execute", command).put("id", id).toString())
+        writer.newLine()
+        writer.flush()
+    }
+
+    private fun awaitResponse(reader: java.io.BufferedReader, id: String): JSONObject {
+        repeat(MAX_MESSAGES_PER_COMMAND) {
+            val response = JSONObject(reader.readLine() ?: error("QMP closed before response $id"))
+            if (response.optString("id") != id) return@repeat // asynchronous QMP event
+            response.optJSONObject("error")?.let { error ->
+                error("QMP ${error.optString("class", "error")}: ${error.optString("desc", "command failed")}")
+            }
+            check(response.has("return")) { "QMP response $id had no return value" }
+            return response
+        }
+        error("QMP did not return response $id")
+    }
+
+    private companion object {
+        const val CONNECT_TIMEOUT_MILLIS = 2_000
+        const val READ_TIMEOUT_MILLIS = 2_000
+        const val MAX_MESSAGES_PER_COMMAND = 32
+        const val CAPABILITIES_ID = "box-capabilities"
+        const val STATUS_ID = "box-status"
     }
 }
