@@ -1,0 +1,19 @@
+[Unit]
+Description=Local Agent private guest control service
+After=multi-user.target
+
+[Service]
+Type=simple
+User=agent
+Group=agent
+WorkingDirectory=/workspace
+ExecStart=/usr/bin/python3 /opt/local-agent/agentd.py
+Restart=always
+RestartSec=1
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/virtio-ports/dev.localagent.agentd
+TTYReset=yes
+
+[Install]
+WantedBy=multi-user.target

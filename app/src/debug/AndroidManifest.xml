@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug-only bridge for exercising the app-owned VM process from an attached device. -->
+        <activity
+            android:name=".VmProbeActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LocalAgent" />
+    </application>
+</manifest>
