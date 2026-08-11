@@ -77,18 +77,14 @@ import java.util.Locale
 @Composable
 fun TerminalTool(
     state: BoxUiState,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
-    onRetry: () -> Unit,
+    onOpenBox: () -> Unit,
     onRunCommand: (String) -> Unit,
 ) {
     if (state.runtimeState != RuntimeState.Ready) {
         RuntimeGate(
             destination = "the terminal",
             state = state.runtimeState,
-            onSetupAndStart = onSetupAndStart,
-            onStart = onStart,
-            onRetry = onRetry,
+            onOpenBox = onOpenBox,
         )
         return
     }
@@ -281,9 +277,7 @@ private fun CommandOutput(record: CommandRecord) {
 @Composable
 fun FilesTool(
     state: BoxUiState,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
-    onRetry: () -> Unit,
+    onOpenBox: () -> Unit,
     onOpenDirectory: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
@@ -294,9 +288,7 @@ fun FilesTool(
         RuntimeGate(
             destination = "files",
             state = state.runtimeState,
-            onSetupAndStart = onSetupAndStart,
-            onStart = onStart,
-            onRetry = onRetry,
+            onOpenBox = onOpenBox,
         )
         return
     }

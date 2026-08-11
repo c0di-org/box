@@ -1,9 +1,15 @@
 package dev.localagent.workstation.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,11 +26,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -42,119 +43,142 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.localagent.workstation.BoxProgress
+import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
-import dev.localagent.workstation.HarnessGroup
 import dev.localagent.workstation.agent.SessionStatus
 import dev.localagent.workstation.agent.SessionSummary
+import dev.localagent.workstation.computer.DesktopTransport
 
 /**
- * The harness wrangler. One list, grouped by harness, showing every session and whether it is
- * running, blocked on the user, or done — because the whole premise is that several agents are
- * working at once and the user needs to know which one wants something.
+ * Home: your box, and everything being done inside it.
+ *
+ * The box is the first thing on this surface at every size — filling it while closed, a row at the
+ * top once open. Below that is one flat list of tasks, newest first. There is no harness level any
+ * more: the user has one box and many tasks, and putting "Claude Code" in between said they had
+ * several agents and, apparently, no computer.
  */
 @Composable
 fun SessionsPane(
     state: BoxUiState,
+    progress: BoxProgress,
+    desktop: DesktopTransport?,
     onSelectSession: (String) -> Unit,
-    onToggleHarness: (String) -> Unit,
     onNewConversation: (String) -> Unit,
+    onOpenBox: () -> Unit,
+    onOpenDesktop: () -> Unit,
+    onShowDetails: () -> Unit,
     modifier: Modifier = Modifier,
     showSelection: Boolean = true,
 ) {
-    Column(modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-        ) {
-            if (state.harnesses.isEmpty()) {
-                item { HarnessesEmptyState() }
-            }
-            state.groups.forEach { group ->
-                val collapsed = group.harness.id in state.collapsedHarnesses
-                item(key = "h-${group.harness.id}") {
-                    HarnessHeader(
-                        group = group,
-                        collapsed = collapsed,
-                        onToggle = { onToggleHarness(group.harness.id) },
-                    )
-                }
-                if (!collapsed) {
-                    if (group.sessions.isEmpty()) {
-                        item(key = "empty-${group.harness.id}") {
-                            EmptyHarnessRow(group) { onNewConversation(group.harness.id) }
-                        }
-                    }
-                    items(group.sessions, key = { it.id }) { session ->
-                        SessionRow(
-                            session = session,
-                            selected = showSelection && session.id == state.selectedSessionId,
-                            onClick = { onSelectSession(session.id) },
-                        )
-                    }
-                }
-                item(key = "gap-${group.harness.id}") { Spacer(Modifier.height(14.dp)) }
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        // Three heights for one panel, and the tasks take whatever is left. Animating the height
+        // rather than swapping screens is what makes this read as the box moving rather than the
+        // app navigating.
+        //
+        // Working collapses to nothing: pressing the button hands the window straight back, and
+        // the opening carries on around the mark in the corner (see [OpeningMark]). Waiting three
+        // minutes in front of a screen you cannot use is the thing this whole surface is against.
+        val panelHeight by animateDpAsState(
+            targetValue = when (state.boxStage) {
+                BoxStage.Closed -> maxHeight
+                BoxStage.Working -> 0.dp
+                BoxStage.Open -> HERO_SETTLED_HEIGHT
+            },
+            animationSpec = tween(SETTLE_MILLIS),
+            label = "box panel",
+        )
+
+        Column(Modifier.fillMaxSize()) {
+            YourBox(
+                state = state,
+                progress = progress,
+                desktop = desktop,
+                onOpen = onOpenBox,
+                onOpenDesktop = onOpenDesktop,
+                onShowDetails = onShowDetails,
+                modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
+            )
+            // Zero-height until the panel has shrunk out of the way, so the tasks slide up into
+            // view rather than appearing on top of a screen they were never part of.
+            TaskList(
+                state = state,
+                onSelectSession = onSelectSession,
+                onNewConversation = onNewConversation,
+                showSelection = showSelection,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+            AnimatedVisibility(
+                visible = state.boxStage != BoxStage.Closed,
+                enter = fadeIn(tween(SETTLE_MILLIS)),
+                exit = fadeOut(tween(SETTLE_MILLIS / 2)),
+            ) {
+                NewConversationBar(state = state, onNewConversation = onNewConversation)
             }
         }
-        NewConversationBar(
-            state = state,
-            onNewConversation = onNewConversation,
-        )
     }
 }
 
 @Composable
-private fun HarnessHeader(
-    group: HarnessGroup,
-    collapsed: Boolean,
-    onToggle: () -> Unit,
+private fun TaskList(
+    state: BoxUiState,
+    onSelectSession: (String) -> Unit,
+    onNewConversation: (String) -> Unit,
+    showSelection: Boolean,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 6.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    val tasks = state.tasks
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
     ) {
-        HarnessMark(group.harness, 30.dp)
-        Spacer(Modifier.width(12.dp))
-        Text(
-            group.harness.name,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        if (collapsed && group.activeCount > 0) {
-            Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f), shape = CircleShape) {
-                Text(
-                    "${group.activeCount} active",
-                    Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
+        item(key = "tasks-heading") { SectionHeading("Tasks") }
+        if (tasks.isEmpty()) {
+            item(key = "tasks-empty") {
+                NoTasksYet(
+                    enabled = state.harnesses.isNotEmpty() && !state.startingSession,
+                    onNew = { state.harnesses.firstOrNull()?.let { onNewConversation(it.id) } },
                 )
             }
-            Spacer(Modifier.width(6.dp))
         }
-        Icon(
-            if (collapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-            contentDescription = if (collapsed) "Show ${group.harness.name} sessions" else "Hide ${group.harness.name} sessions",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        items(tasks, key = { it.id }) { task ->
+            TaskRow(
+                task = task,
+                harnessName = state.harnessOf(task)?.name,
+                selected = showSelection && task.id == state.selectedSessionId,
+                onClick = { onSelectSession(task.id) },
+            )
+        }
     }
 }
 
 @Composable
-private fun SessionRow(
-    session: SessionSummary,
+private fun SectionHeading(text: String) {
+    Text(
+        text.uppercase(),
+        modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 4.dp),
+        style = MaterialTheme.typography.labelLarge,
+        fontSize = 11.sp,
+        letterSpacing = 1.1.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun TaskRow(
+    task: SessionSummary,
+    harnessName: String?,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val status = session.status
     Surface(
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
         color = if (selected) {
@@ -177,17 +201,33 @@ private fun SessionRow(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    session.title,
+                    task.title,
                     style = MaterialTheme.typography.bodyLarge,
                     fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                session.preview?.let { preview ->
-                    Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Which agent is running this is a detail of the task, not a place to put it.
+                    harnessName?.let { name ->
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = harnessAccent(task.harnessId),
+                        )
+                        Text(
+                            " · ",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
-                        preview,
+                        task.preview ?: task.workingDirectory,
                         style = MaterialTheme.typography.bodyMedium,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -197,128 +237,66 @@ private fun SessionRow(
                 }
             }
             Spacer(Modifier.width(10.dp))
-            SessionStatusLabel(status)
+            SessionStatusLabel(task.status)
         }
     }
 }
 
+/**
+ * A task's state, as one dot.
+ *
+ * Colour carries all of it, because the words never earned their room: three rows of "Active",
+ * "Needs you", "Finished" is a column of labels the eye has to read to find the one row that wants
+ * something, when a colour is found without reading. Green is working, amber wants you, red broke.
+ * Finished and idle draw nothing at all — a task that needs nothing should be quiet.
+ *
+ * The words are still there for anyone listening rather than looking.
+ */
 @Composable
 private fun SessionStatusLabel(status: SessionStatus) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        when (status) {
-            SessionStatus.Active -> {
-                StatusDot(MaterialTheme.colorScheme.primary, 8.dp)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "Active",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
+    val (color, spoken) = when (status) {
+        SessionStatus.Active -> MaterialTheme.colorScheme.primary to "Active"
+        is SessionStatus.NeedsYou -> MaterialTheme.colorScheme.tertiary to "Needs you"
+        is SessionStatus.Failed -> MaterialTheme.colorScheme.error to "Failed"
+        SessionStatus.Finished -> null to "Finished"
+        SessionStatus.Idle -> null to "Idle"
+    }
+    Box(
+        Modifier.size(20.dp).semantics { contentDescription = spoken },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (color != null) StatusDot(color, 9.dp)
+    }
+}
 
-            is SessionStatus.NeedsYou -> {
-                StatusDot(MaterialTheme.colorScheme.tertiary, 8.dp)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "Needs you",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.tertiary,
-                )
-            }
-
-            SessionStatus.Finished -> {
-                Icon(
-                    Icons.Outlined.CheckCircle,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "Finished",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            is SessionStatus.Failed -> {
-                Icon(
-                    Icons.Outlined.ErrorOutline,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.error,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "Failed",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-
-            SessionStatus.Idle -> Text(
-                "Idle",
-                style = MaterialTheme.typography.bodyMedium,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+@Composable
+private fun NoTasksYet(enabled: Boolean, onNew: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 22.dp)) {
+        Text(
+            "Nothing running yet",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Ask for something and an agent gets to work inside your box — cloning a project, " +
+                "running the tests, starting a server.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        OutlinedButton(
+            onClick = onNew,
+            enabled = enabled,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Start a task")
         }
     }
 }
 
-@Composable
-private fun EmptyHarnessRow(group: HarnessGroup, onNew: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onNew)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Outlined.Add,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            "Start something with ${group.harness.name}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun HarnessesEmptyState() {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(
-            Icons.Outlined.Forum,
-            contentDescription = null,
-            modifier = Modifier.size(30.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(14.dp))
-        Text("No agents yet", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Box runs coding agents inside its own computer. Claude Code comes with it, so this " +
-                "screen usually means Box is still setting itself up.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** "New conversation" plus a harness picker, mirroring the mockup's footer. */
+/** "New task" plus a harness picker, for when the user does care which agent takes it. */
 @Composable
 private fun NewConversationBar(
     state: BoxUiState,
@@ -346,7 +324,7 @@ private fun NewConversationBar(
                     Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 }
                 Spacer(Modifier.width(8.dp))
-                Text("New conversation")
+                Text("New task")
             }
             Box {
                 OutlinedButton(

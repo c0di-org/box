@@ -33,7 +33,7 @@ class DesktopView(context: Context) : SurfaceView(context) {
     /** Set by the composable. Null while nothing is streaming. */
     var onInput: ((DesktopInput) -> Unit)? = null
     var onSurfaceReady: ((android.view.Surface, Int, Int) -> Unit)? = null
-    var onSurfaceGone: (() -> Unit)? = null
+    var onSurfaceGone: ((android.view.Surface) -> Unit)? = null
 
     /** The guest's own resolution, needed to turn a touch into a guest coordinate. */
     var guestSize: Pair<Int, Int>? = null
@@ -58,7 +58,7 @@ class DesktopView(context: Context) : SurfaceView(context) {
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                onSurfaceGone?.invoke()
+                onSurfaceGone?.invoke(holder.surface)
             }
         })
         // One cursor on screen, drawn by the guest.

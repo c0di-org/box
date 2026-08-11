@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -54,6 +55,7 @@ class BoxViewModel @JvmOverloads constructor(
 
     private val agents: AgentBackend = backend ?: FakeAgentBackend(viewModelScope)
     private val auth = BoxContainer.auth
+    private val openings = OpeningHistory(application)
     private var transcriptJob: Job? = null
     private var connectionJob: Job? = null
 
@@ -62,7 +64,13 @@ class BoxViewModel @JvmOverloads constructor(
         override fun onReceive(context: Context?, intent: Intent?) {
             val payload = intent?.getBundleExtra(RuntimeService.EXTRA_STATE) ?: return
             val state = RuntimeStateCodec.decode(payload) ?: return
-            mutableUiState.update { it.copy(runtimeState = state) }
+            if (state == RuntimeState.Ready) rememberHowLongThatTook()
+            mutableUiState.update {
+                it.copy(
+                    runtimeState = state,
+                    openingSince = openingAfter(it.openingSince, it.runtimeState, state),
+                )
+            }
             // Held across the whole time the computer is meant to be alive, not just when it is
             // usable: the connection is how Box finds out that `:computer` died, and the startup
             // path is exactly where it dies. See [ComputerLoss].
@@ -134,6 +142,9 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     init {
+        openings.expectedMillis()?.let { learned ->
+            mutableUiState.update { it.copy(expectedOpenMillis = learned) }
+        }
         ContextCompat.registerReceiver(
             getApplication(),
             stateReceiver,
@@ -195,15 +206,6 @@ class BoxViewModel @JvmOverloads constructor(
     fun selectComputerTool(tool: ComputerTool) {
         mutableUiState.update { it.copy(computerTool = tool, openedFile = null) }
         if (tool == ComputerTool.Files) refreshFiles()
-    }
-
-    fun toggleHarness(harnessId: String) {
-        mutableUiState.update { state ->
-            val collapsed = state.collapsedHarnesses
-            state.copy(
-                collapsedHarnesses = if (harnessId in collapsed) collapsed - harnessId else collapsed + harnessId,
-            )
-        }
     }
 
     fun selectSession(sessionId: String?) {
@@ -383,9 +385,16 @@ class BoxViewModel @JvmOverloads constructor(
         mutableUiState.update { it.copy(desktopVisible = true) }
     }
 
-    /** Control returns to the agent on the way out; see [BoxUiState.desktopControl]. */
+    /**
+     * Control returns to the agent on the way out; see [BoxUiState.desktopControl].
+     *
+     * Told to the transport as well as recorded here, and from a scope that outlives the screen: a
+     * key held down when the desktop closes would otherwise stay held in the guest forever. The
+     * composable cannot do this — its own scope is cancelled as it leaves, before the call runs.
+     */
     fun closeDesktop() {
         mutableUiState.update { it.copy(desktopVisible = false, desktopControl = ControlHolder.Agent) }
+        viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(ControlHolder.Agent) }
     }
 
     fun setDesktopControl(holder: ControlHolder) {
@@ -402,12 +411,26 @@ class BoxViewModel @JvmOverloads constructor(
     // Computer
     // -----------------------------------------------------------------------
 
-    fun setupAndStart() = start()
+    /**
+     * Open the box.
+     *
+     * One verb for what used to be three buttons — set up, start, try again. The distinction was
+     * the runtime's, not the user's: unpacking the image happens inside `ACTION_START` when it is
+     * needed, and "try again" is the same request after a failure.
+     */
+    fun openBox() = start()
 
     fun start() {
         // Optimistic only until the first broadcast lands; the service reports every later state,
         // including an immediate failure.
-        mutableUiState.update { it.copy(runtimeState = RuntimeState.Starting) }
+        mutableUiState.update {
+            it.copy(
+                runtimeState = RuntimeState.Starting,
+                // Starts the clock the progress indicator runs on. Kept across the whole opening,
+                // including the transient Stopped between unpacking and booting.
+                openingSince = it.openingSince ?: SystemClock.elapsedRealtime(),
+            )
+        }
         getApplication<Application>().startForegroundService(
             Intent(getApplication(), RuntimeService::class.java).setAction(RuntimeService.ACTION_START),
         )
@@ -418,11 +441,47 @@ class BoxViewModel @JvmOverloads constructor(
             Intent(getApplication(), RuntimeService::class.java).setAction(RuntimeService.ACTION_STOP),
         )
         mutableUiState.update {
-            it.copy(runtimeState = RuntimeState.Stopped, runningCommand = null, openedFile = null)
+            it.copy(
+                runtimeState = RuntimeState.Stopped,
+                // Nobody is waiting any more, so Stopped means the box is closed rather than
+                // halfway open. See [BoxUiState.boxStage].
+                openingSince = null,
+                runningCommand = null,
+                openedFile = null,
+            )
         }
     }
 
-    fun retry() = start()
+    /**
+     * Fold a completed opening into what the next one is expected to cost.
+     *
+     * The estimate is per device and survives restarts, because the number that matters is how
+     * long *this* phone takes — a Fold 7 measured 168 s cold and 252 s with the SoC already hot,
+     * and a figure baked into the app can never know which one it is looking at.
+     */
+    private fun rememberHowLongThatTook() {
+        val startedAt = mutableUiState.value.openingSince ?: return
+        val observed = SystemClock.elapsedRealtime() - startedAt
+        val learned = BoxProgress.learn(openings.expectedMillis(), observed)
+        openings.record(learned)
+        mutableUiState.update { it.copy(expectedOpenMillis = learned) }
+    }
+
+    /**
+     * Whether anyone is still waiting on the box after a state change.
+     *
+     * The awkward case is `Stopped`. Unpacking the image reports it on success, one broadcast
+     * before `Starting` — so mid-opening it means progress, and at any other time it means the
+     * opening is over. Getting this wrong strands the hero on a progress bar for a box that is
+     * not coming.
+     */
+    private fun openingAfter(since: Long?, previous: RuntimeState, next: RuntimeState): Long? = when {
+        since == null -> null
+        next == RuntimeState.Ready -> null
+        next is RuntimeState.Failed -> null
+        next == RuntimeState.Stopped && previous !is RuntimeState.Provisioning -> null
+        else -> since
+    }
 
     fun runCommand(command: String) {
         val trimmed = command.trim()

@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,9 +44,15 @@ import kotlinx.coroutines.launch
 /**
  * The agent's screen, live.
  *
- * Two ways in and they are the same surface: inline in the Computer pane, and full window. The
- * difference is only how much room it gets and whether the chrome is there, because a desktop that
- * behaves differently depending on where it is drawn is two things to get right instead of one.
+ * Three ways in and they are the same surface: the thumbnail in the box's row, inline in the
+ * Computer pane, and full window. The difference is only how much room it gets and whether the
+ * chrome is there, because a desktop that behaves differently depending on where it is drawn is
+ * three things to get right instead of one. They can all be on screen together — the transport
+ * paints every attached surface from one connection.
+ *
+ * Control is deliberately not handed back here. This composable leaves the tree constantly — the
+ * row scrolls off, the pane is folded away — and none of that means the user has finished driving.
+ * The handover belongs to the act of closing the desktop; see `BoxViewModel.closeDesktop`.
  */
 @Composable
 fun DesktopSurface(
@@ -65,7 +70,7 @@ fun DesktopSurface(
                     onSurfaceReady = { surface, width, height ->
                         scope.launch { transport.attach(surface, width, height) }
                     }
-                    onSurfaceGone = { scope.launch { transport.detach() } }
+                    onSurfaceGone = { surface -> scope.launch { transport.detach(surface) } }
                     onInput = { input -> scope.launch { transport.send(input) } }
                 }
             },
@@ -91,12 +96,6 @@ fun DesktopSurface(
 
             is DesktopState.Live -> Unit
         }
-    }
-
-    // Handing control back on the way out is not politeness, it is correctness: a key held down
-    // when the screen closes would otherwise stay held in the guest forever.
-    DisposableEffect(Unit) {
-        onDispose { scope.launch { transport.setControl(ControlHolder.Agent) } }
     }
 }
 

@@ -18,10 +18,18 @@ import kotlinx.coroutines.flow.StateFlow
 interface DesktopTransport {
     val state: StateFlow<DesktopState>
 
-    /** Renders guest output into [surface] until [detach]. Resizes trigger a guest mode change. */
+    /**
+     * Renders guest output into [surface] until [detach].
+     *
+     * More than one surface may be attached at once, and they all show the same screen. That is not
+     * a luxury: the box's row in the task list, the inline pane and the full window are three views
+     * of one machine, and on a Fold two of them are on screen together. A transport that held a
+     * single surface would have them stealing the picture from each other.
+     */
     suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int)
 
-    suspend fun detach()
+    /** Stops drawing into [surface]. The stream ends when the last surface has gone. */
+    suspend fun detach(surface: Surface)
 
     /** Only delivered while the user holds control. */
     suspend fun send(input: DesktopInput)

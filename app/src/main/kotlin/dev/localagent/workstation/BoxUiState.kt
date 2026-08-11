@@ -5,7 +5,6 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
-import dev.localagent.workstation.agent.SessionStatus
 import dev.localagent.workstation.agent.SessionSummary
 import dev.localagent.workstation.agent.Transcript
 import dev.localagent.workstation.computer.ControlHolder
@@ -45,23 +44,34 @@ data class UiNotice(val id: Long, val message: String)
  */
 data class QueuedPrompt(val sessionId: String?, val text: String)
 
-/** One harness and its sessions, in the order the session list draws them. */
-data class HarnessGroup(
-    val harness: HarnessDescriptor,
-    val sessions: List<SessionSummary>,
-) {
-    val activeCount: Int
-        get() = sessions.count { it.status is SessionStatus.Active || it.status is SessionStatus.NeedsYou }
-}
+/**
+ * Where the box is, in the user's terms rather than the runtime's.
+ *
+ * The runtime has ten states and the user has three questions: can I use it, is it coming, or do I
+ * have to ask for it. Everything the home surface does is driven by this.
+ */
+enum class BoxStage { Closed, Working, Open }
 
 data class BoxUiState(
     val runtimeState: RuntimeState = RuntimeState.NotProvisioned,
     val destination: BoxDestination = BoxDestination.Conversations,
 
+    // ---- opening the box ----
+    /**
+     * When the user asked for the box, or null when nobody is waiting on it.
+     *
+     * Held here rather than derived from [runtimeState] because the runtime passes back through
+     * `Stopped` between unpacking the image and booting it — one broadcast that would otherwise
+     * read as "the box is off" in the middle of opening it. It is also what makes the progress
+     * indicator possible at all: the runtime reports states, not elapsed time.
+     */
+    val openingSince: Long? = null,
+    /** What opening is expected to cost on this phone, learned from the last few. */
+    val expectedOpenMillis: Long = BoxProgress.ASSUMED_MILLIS,
+
     // ---- conversations ----
     val harnesses: List<HarnessDescriptor> = emptyList(),
     val sessions: List<SessionSummary> = emptyList(),
-    val collapsedHarnesses: Set<String> = emptySet(),
     val selectedSessionId: String? = null,
     val transcript: Transcript? = null,
     val transcriptLoading: Boolean = false,
@@ -107,15 +117,32 @@ data class BoxUiState(
             .filter { it.sessionId == null || it.sessionId == selectedSessionId }
             .map { it.text }
 
-    /** Harness-grouped session list, harnesses in declaration order, sessions newest first. */
-    val groups: List<HarnessGroup>
-        get() = harnesses.map { harness ->
-            HarnessGroup(
-                harness = harness,
-                sessions = sessions
-                    .filter { it.harnessId == harness.id }
-                    .sortedByDescending { it.updatedAt },
-            )
+    /**
+     * Every task, newest first, with no harness above it.
+     *
+     * The list used to be grouped by harness, which put "Claude Code" between the user and their
+     * own work and implied the harness was the thing they had several of. What they have several of
+     * is tasks; there is one box, and it belongs at the top. Which agent is running a task is a
+     * property of that task, drawn on its row.
+     */
+    val tasks: List<SessionSummary>
+        get() = sessions.sortedByDescending { it.updatedAt }
+
+    fun harnessOf(session: SessionSummary): HarnessDescriptor? =
+        harnesses.firstOrNull { it.id == session.harnessId }
+
+    /** See [BoxStage]. */
+    val boxStage: BoxStage
+        get() = when {
+            runtimeState == RuntimeState.Ready -> BoxStage.Open
+            runtimeState is RuntimeState.Provisioning ||
+                runtimeState == RuntimeState.Starting ||
+                runtimeState == RuntimeState.Connecting ||
+                runtimeState == RuntimeState.Stopping ||
+                runtimeState == RuntimeState.Suspending -> BoxStage.Working
+            // The gap between unpacking and booting. Someone is still waiting.
+            openingSince != null && runtimeState == RuntimeState.Stopped -> BoxStage.Working
+            else -> BoxStage.Closed
         }
 
     /**
