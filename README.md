@@ -1,189 +1,121 @@
-# Box
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+    <img alt="Box — a real Linux box, inside your phone." src="docs/assets/hero-light.svg" width="820">
+  </picture>
+</p>
 
-**Box is an AI chat app that has its own real computer inside your phone.**
+<p align="center">
+  <strong>Box is an AI chat app whose agents have a real computer.</strong><br>
+  Not a sandbox rented in the cloud — a Debian VM that boots on the phone in your hand.
+</p>
 
-Most of the time it feels like a normal chat app. You talk to ChatGPT, Claude, Cursor
-or another agent, keep several conversations going at once, and come back to them
-later.
-
-The difference is what happens when an agent needs to actually *do* something. Box
-gives it a private Linux computer to work on. So instead of only telling you how to
-clone a project, install a dependency, run the tests or start a server, the agent
-does those things.
-
-## What using it feels like
+## The whole idea
 
 You say:
 
 > Clone my project and get it running.
 
-The agent starts working in the background, and Box shows plain progress:
+Box goes quiet for a moment and then starts reporting, in plain language:
 
-- Cloned the project
-- Installed dependencies
-- Fixed an error
-- Starting the app
+```
+✓  Cloned the project
+✓  Installed dependencies
+✓  Fixed an error
+⟳  Starting the app
+```
 
-You never need to see a terminal or understand Linux. But if you're curious, tap
-**Open Computer** and you get the exact desktop the agent is using — watch it work,
-open its terminal, look at its files. Press **Take Over** and the machine is yours.
-When you're done you go straight back to the conversation.
+Every one of those lines is something that actually happened on a machine. The agent
+didn't tell you how to clone the repo — it cloned it. It ran the tests and read the
+failure. The files are still there tomorrow.
 
-**On your phone** Box is a chat app. Conversations with different agents, a clear
-view of which are still working, notifications when something finishes. The computer
-stays out of the way unless you want it.
+You never see a terminal, and you never need to know it's Linux.
 
-**On a tablet, Fold, or Samsung DeX** Box becomes a desktop workspace: conversation on
-one side, the agent's computer on the other. You can literally watch Claude work on
-the machine while still talking to it — and because the computer is running locally on
-your device, you can drive it with a keyboard and mouse like a small Linux PC.
+## Until you want to
 
-## Why this is different
+Tap **Open computer** and there it is: the desktop the agent is working on, live. Watch
+it type. Read its files. Tap **Take over** and the keyboard and mouse are yours — the
+agent's input is suspended until you hand it back. Then straight back to the conversation.
 
-Getting a real Linux environment on Android today means installing several apps,
-changing settings, learning command-line setup, and remembering how to start it all
-again next week. Box absorbs all of that. Install Box. Open it. Start chatting.
+## One box, many agents
 
-No Termux. No separate X11 app. No setup guide. No terminal knowledge required.
+The computer belongs to Box, not to any one agent. So one of them builds it, another
+reviews it, a third fixes the one thing that's broken — same machine, same files, same
+`/workspace` that survives every conversation.
 
-## Why give an AI a computer?
+## The screen you happen to have
 
-An agent that can work in a real environment is far more useful than one that can only
-describe the work. It can run code, install tools, use git, inspect files, run tests,
-start local sites and apps, automate longer jobs, and keep a workspace that persists
-between conversations.
+On a phone Box is a chat app, and the computer stays out of the way. On a Fold, a tablet
+or Samsung DeX it opens out: conversation on one side, the agent's live desktop on the
+other. Plug in a keyboard and you're using a small Linux PC that was in your pocket.
 
-And because the computer belongs to Box rather than to any one agent, they share it.
-Have ChatGPT build something, ask Claude to review it, then have Cursor fix one issue —
-same machine, same files.
+## Nothing to set up
+
+Real Linux on Android today means several apps, a tour of the developer settings, a
+command-line walkthrough, and looking all of it up again next week. Box absorbs that
+whole thing.
+
+Install Box. Open it. Start chatting. No Termux, no separate X11 app, no terminal.
 
 ---
 
-## Where the code actually is
+## Where this actually is
 
-The product above is the target. This is what the repository does today, stated plainly
-so nobody has to infer it from the source.
+Box is being built in the open, so this part is here for the same reason the rest of it
+is: nobody should have to guess which of the above already works. Checked against the
+code, not the roadmap.
 
-**The computer is real.** On an arm64 device the app boots an actual ARM64 Debian
-Bookworm VM under QEMU, in its own process, and talks to a guest service over a private
-virtio-serial port. Commands really execute, files really persist. The Workspace tools
-in the UI — the terminal and the file browser — are wired to that VM through
-`RuntimeService`, not to a mock.
-
-**The conversation is not real yet.** This is the gap that matters. Everything the
-product is *about* — sessions with ChatGPT, Claude and Cursor, streamed replies, tool
-calls, diffs, permission prompts — is currently served by
-[`FakeAgentBackend`](app/src/main/kotlin/dev/localagent/workstation/agent/FakeAgentBackend.kt),
-an in-process script. The semantic event model
-([`AgentEvent`](app/src/main/kotlin/dev/localagent/workstation/agent/AgentEvent.kt)) and
-the [`AgentBackend`](app/src/main/kotlin/dev/localagent/workstation/agent/AgentBackend.kt)
-boundary are designed and tested, so the UI is built against the shape the real thing
-will have — but no agent harness runs in the guest.
-
-Also still to come, each with a written-down interface and no implementation:
-
-| Product promise | Status |
+| Promise | Where it stands |
 | --- | --- |
-| Chat with real agent harnesses | `AgentBackend` defined; only `FakeAgentBackend` implements it |
-| **Open Computer** — the live desktop | `DesktopTransport` defined; no display transport exists |
-| **Take Over** — user takes the keyboard | Part of `DesktopTransport`; unimplemented |
-| Preview a server the agent started | `PreviewTransport` defined; port forwarding throws |
-| Background work + notifications | Foreground runtime service exists; no agent to notify about |
+| **The computer** | Real. An ARM64 Debian Bookworm VM boots under QEMU in its own process, with a private control channel to `agentd` inside it. Commands run, files persist. |
+| **A real agent in it** | Real. Claude Code runs in the guest and speaks Box's event vocabulary; you sign in through the phone's browser, no API key to paste. The full OAuth round trip is not yet proven on hardware. |
+| **Open computer / Take over** | Built, not confirmed. The guest runs X and openbox, and the screen comes to the app over RFB on a private socket. Every hop is verified except the last one — pixels landing on the phone's surface. |
+| **Other agents** | ChatGPT and Cursor exist as a scripted demo only. One harness is wired for real. |
+| **Preview a running server** | Not built. Port forwarding throws, and the button says so instead of opening nothing. |
 
-The project is still named `LocalAgentWorkstation` in Gradle and `dev.localagent.workstation`
-in code. Box is the product name; the rename hasn't happened.
+The honest cost: it's a fully emulated ARM64 VM, so first light takes a couple of minutes
+on a Galaxy Z Fold 7 and most of that is the guest waiting on emulated udev. See
+[docs/development.md](docs/development.md) for the measurements.
 
-## Layout
+## Build it
 
-| Module | What it holds |
-| --- | --- |
-| `app/` | Compose UI, the semantic event model, adaptive phone/tablet/DeX layouts |
-| `runtime-api/` | The `ComputerRuntime` boundary — exec, streaming exec, PTY, files |
-| `runtime-qemu/` | QEMU AArch64, the out-of-process runtime service, the agentd client |
-| `guest/` | Image builder and `agentd`, the guest's only host-facing service |
-| `protocol/` | The agentd wire protocol — [v2](protocol/agentd-v2.md) is current |
-| `docs/` | Runtime design, UI contract, the aarch64 toolchain spike |
-
-Two build flavors: `stock` (QEMU, ships everywhere) and `avf` (experimental, Android
-Virtualization Framework).
-
-## Build
-
-Onto a phone, in one command:
-
-```bash
-./tools/deploy.sh
-```
-
-Add `--image` when anything under `guest/` changed. That rebuilds the guest image *and*
-reinstalls from scratch, because an installed device keeps its existing
-`base-system.qcow2` on purpose — so a new image is otherwise ignored with no sign that
-anything was skipped.
+Onto a plugged-in arm64 phone, in one command. The first run needs `--image`, which builds
+the guest image in a container before building the app — a few minutes, and Docker has to
+be running:
 
 ```bash
 ./tools/deploy.sh --image
 ```
 
-The steps by hand, if you want them separately. The guest image is an input to the APK,
-so build it first — see [guest/README.md](guest/README.md) for detail:
+After that, build, install and launch:
 
 ```bash
-./guest/build-container.sh
+./tools/deploy.sh
 ```
+
+Reach for `--image` again whenever anything under `guest/` changed. It also reprovisions,
+which is the only way a new image reaches a device — an installed Box keeps its existing
+guest disk on purpose, so that an app update never wipes the user's Linux box.
+
+The tests, which need no device:
 
 ```bash
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ./gradlew :app:assembleStockDebug
+./gradlew :app:testStockDebugUnitTest :runtime-qemu:testDebugUnitTest && node --test guest/tests/*.mjs && python3 -m unittest discover -s guest/tests
 ```
 
-```bash
-adb install -r app/build/outputs/apk/stock/debug/app-stock-debug.apk
-```
+Everything else — building by hand, watching a boot from `adb logcat`, and why a rebuilt
+guest image can appear to do nothing — is in [docs/development.md](docs/development.md).
 
-Tests — 101 JVM tests:
+## Layout
 
-```bash
-./gradlew :app:testStockDebugUnitTest :runtime-qemu:testDebugUnitTest
-```
+| Module | What it holds |
+| --- | --- |
+| `app/` | Compose UI, the semantic event model, the adaptive phone/tablet/DeX layouts |
+| `runtime-api/` | The `ComputerRuntime` boundary — exec, streaming exec, PTY, files, sessions |
+| `runtime-qemu/` | QEMU AArch64, the out-of-process runtime service, the `agentd` client |
+| `guest/` | Image builder, `agentd`, and the agent harness that runs inside the VM |
+| `protocol/` | The `agentd` wire protocol — [v2](protocol/agentd-v2.md) is current |
+| `docs/` | [Runtime design](docs/runtime.md), [UI contract](docs/ui-contract.md), [development](docs/development.md) |
 
-The harness is a Node program with its own suite, covering the event protocol and the
-sign-in handshake:
-
-```bash
-node --test guest/tests/*.mjs
-```
-
-And `agentd`, which is Python:
-
-```bash
-python3 -m unittest discover -s guest/tests
-```
-
-## Verifying the VM on a device
-
-```bash
-adb logcat -s LocalAgentRuntime:I LocalAgentQemu:I BoxGuestSerial:D
-```
-
-A healthy boot logs `QMP confirmed running guest`, then `Guest agent confirmed ready`,
-then `QEMU runtime launch accepted`.
-
-Start it from the app — tap **Set up** on a fresh install, then **Start**. There is no
-adb route in: `RuntimeService` is not exported, so `am start-foreground-service` against
-it fails with "Requires permission not exported from uid". The `VmProbeActivity` that
-used to drive this from the shell no longer exists.
-
-Tap-to-Ready on a Galaxy Z Fold 7 measured ~170 seconds against the protocol-v2 image
-(171 s cooled, 168 s on a first cold provision, 252 s with the SoC already hot from
-back-to-back runs), versus a ~90 second figure quoted for earlier builds. Nearly all of
-it is the guest waiting on emulated udev; see [guest/README.md](guest/README.md).
-
-Reinstalling the APK does **not** replace an already-provisioned guest disk —
-`base-system.qcow2` is installed only when absent, since it is mutable once booted. That
-is deliberate, so an app update never wipes the user's Linux box, and it is also why a
-rebuilt image appears to have no effect: nothing reports that it was skipped.
-`./tools/deploy.sh --image` handles this. To drop the guest by hand instead, keeping the
-workspace:
-
-```bash
-adb shell run-as dev.localagent.workstation.stock rm -f files/computer/disks/system.qcow2
-```
+Two build flavors: `stock` (QEMU, runs everywhere) and `avf` (experimental, Android
+Virtualization Framework).
