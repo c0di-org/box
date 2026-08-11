@@ -19,9 +19,11 @@ import dev.localagent.runtime.api.RuntimeState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Process boundary for QEMU. The manifest pins this service to `:computer`, so a native VM
@@ -30,6 +32,9 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class RuntimeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** A process retires once; a second settled state must not queue another kill. */
+    private val retiring = AtomicBoolean(false)
     private val runtime by lazy { QemuTcgRuntime(applicationContext) }
 
     /**
@@ -258,6 +263,33 @@ class RuntimeService : Service() {
                 .setPackage(packageName)
                 .putExtra(EXTRA_STATE, RuntimeStateCodec.encode(state)),
         )
+        if (runtime.isSpent(state) && retiring.compareAndSet(false, true)) retire()
+    }
+
+    /**
+     * Ends `:computer` once its single QEMU run is over.
+     *
+     * QEMU cannot be initialised twice in a process, so a process that has hosted a VM is of no
+     * further use — keeping it alive only guarantees that the user's next "start" lands on a
+     * process that must refuse it. `START_NOT_STICKY` is what makes this safe: Android will not
+     * resurrect the service on its own, and the next start arrives as a fresh `startService`.
+     *
+     * The pause before the kill is the whole trick. The UI holds a binding while the computer is
+     * meant to be alive, so it is told about this process dying — and it has to be able to tell an
+     * ordinary retirement from a VM abort. The only thing separating them is that a retirement
+     * announces a settled state first, so the broadcast is given time to be delivered before the
+     * process that sent it disappears. Losing that race costs a false "the computer stopped
+     * unexpectedly"; it never costs correctness, because the computer really has stopped.
+     */
+    private fun retire() {
+        Log.i(TAG, "The VM has exited; retiring this computer process")
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        scope.launch {
+            delay(RETIRE_GRACE_MILLIS)
+            Log.i(TAG, "Computer process retired")
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
     }
 
     private fun promoteToForeground() {
@@ -355,6 +387,13 @@ class RuntimeService : Service() {
         const val EXTRA_STATE = "state"
 
         private const val TAG = "LocalAgentRuntime"
+
+        /**
+         * How long the final state broadcast is given to reach the UI before this process ends.
+         * Long enough for an ordinary Binder round trip, short enough that a user pressing start
+         * again immediately still lands on a fresh process.
+         */
+        private const val RETIRE_GRACE_MILLIS = 750L
         private const val CHANNEL_ID = "local_agent_runtime"
         private const val NOTIFICATION_ID = 1001
 

@@ -9,7 +9,21 @@
 
 namespace {
 constexpr const char* kTag = "LocalAgentQemu";
+
+/**
+ * QEMU can only be initialised once in the lifetime of a process.
+ *
+ * `qemu_init` writes process-wide globals that `qemu_cleanup` does not undo — the first of them,
+ * `qemu_init_exec_dir`, asserts `!exec_dir[0]` and aborts the whole process on a second call. So a
+ * stop followed by a start inside one process is not a restart, it is a SIGABRT. Refusing here
+ * turns that crash into an error the caller can report, and `RuntimeService` retires this process
+ * once QEMU has exited so the next start gets a fresh one.
+ */
+constexpr const char* kAlreadyUsed =
+    "This process has already run QEMU once and cannot run it again";
+
 std::atomic<bool> running{false};
+std::atomic<bool> ever_started{false};
 void* qemu_handle = nullptr;
 void* compat_handle = nullptr;
 std::string private_storage_dir;
@@ -61,6 +75,13 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_localagent_runtime_qemu_NativeQemu_start(JNIEnv* env, jobject caller, jobjectArray arguments,
                                                    jstring private_storage) {
     if (running.exchange(true)) return message(env, "QEMU is already running");
+    // Only a launch that actually reached `qemu_init` consumes this process. Failing to load the
+    // library or spawn the thread leaves QEMU untouched, and must stay retryable.
+    if (ever_started.load()) {
+        running.store(false);
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "%s", kAlreadyUsed);
+        return message(env, kAlreadyUsed);
+    }
 
     qemu_handle = dlopen("libqemu-system-aarch64.so", RTLD_NOW | RTLD_GLOBAL);
     if (!qemu_handle) {
@@ -106,6 +127,7 @@ Java_dev_localagent_runtime_qemu_NativeQemu_start(JNIEnv* env, jobject caller, j
         return message(env, "Could not create QEMU thread");
     }
     pthread_detach(thread);
+    ever_started.store(true);
     return nullptr;
 }
 
@@ -121,4 +143,10 @@ Java_dev_localagent_runtime_qemu_NativeQemu_stop(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_localagent_runtime_qemu_NativeQemu_isRunning(JNIEnv*, jobject) {
     return running.load();
+}
+
+/** Whether QEMU has been initialised in this process, running or since exited. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_localagent_runtime_qemu_NativeQemu_hasRun(JNIEnv*, jobject) {
+    return ever_started.load();
 }

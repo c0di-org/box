@@ -62,8 +62,33 @@ class BoxViewModel @JvmOverloads constructor(
             val payload = intent?.getBundleExtra(RuntimeService.EXTRA_STATE) ?: return
             val state = RuntimeStateCodec.decode(payload) ?: return
             mutableUiState.update { it.copy(runtimeState = state) }
-            if (state == RuntimeState.Ready) bindRuntime() else releaseRuntime()
+            // Held across the whole time the computer is meant to be alive, not just when it is
+            // usable: the connection is how Box finds out that `:computer` died, and the startup
+            // path is exactly where it dies. See [ComputerLoss].
+            if (ComputerLoss.shouldWatch(state)) bindRuntime() else releaseRuntime()
+            if (state != RuntimeState.Ready) readyAnnounced = false
+            greetReadyComputer()
         }
+    }
+
+    /**
+     * The questions worth asking a guest that has just become usable, asked exactly once.
+     *
+     * Now that the connection is held from startup onwards, `onServiceConnected` usually arrives
+     * *before* the computer is ready — so readiness has two possible triggers, whichever lands
+     * second, and this has to be safe to call from both.
+     */
+    private var readyAnnounced = false
+
+    private fun greetReadyComputer() {
+        if (readyAnnounced || mutableUiState.value.runtimeState != RuntimeState.Ready) return
+        val bound = control ?: return
+        readyAnnounced = true
+        // Files opens on /workspace, so fill it as soon as the guest can answer.
+        refreshFiles()
+        // Whether the guest already holds a credential is only answerable once there is a guest to
+        // ask. Until then the sign-in state is honestly Unknown.
+        auth.check(bound)
     }
 
     @Volatile private var control: IRuntimeControl? = null
@@ -71,21 +96,26 @@ class BoxViewModel @JvmOverloads constructor(
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            val bound = IRuntimeControl.Stub.asInterface(binder)
-            control = bound
-            // Files opens on /workspace, so fill it as soon as the guest can answer.
-            refreshFiles()
-            // Whether the guest already holds a credential is only answerable once there is a
-            // guest to ask. Until then the sign-in state is honestly Unknown.
-            auth.check(bound)
+            control = IRuntimeControl.Stub.asInterface(binder)
+            greetReadyComputer()
         }
 
+        /**
+         * `:computer` has gone. Android calls this when the hosting process dies, which for a
+         * native VM abort is the only notice Box ever gets — no final state is broadcast.
+         */
         override fun onServiceDisconnected(name: ComponentName?) {
             control = null
+            val lost = ComputerLoss.after(mutableUiState.value.runtimeState) ?: return
+            mutableUiState.update { it.copy(runtimeState = lost) }
+            if (lost is RuntimeState.Failed) showNotice(lost.reason.message)
         }
     }
 
-    /** Only ever called once the VM reports Ready, so this never starts `:computer` on its own. */
+    /**
+     * Only called for states the computer itself just reported, so `:computer` is already up and
+     * `BIND_AUTO_CREATE` never starts it on Box's behalf.
+     */
     private fun bindRuntime() {
         if (bound) return
         bound = getApplication<Application>().bindService(

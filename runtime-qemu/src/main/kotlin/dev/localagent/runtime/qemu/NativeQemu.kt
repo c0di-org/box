@@ -16,6 +16,14 @@ internal object NativeQemu {
     external fun stop(): String?
     external fun isRunning(): Boolean
 
+    /**
+     * Whether QEMU has already been initialised in this process.
+     *
+     * `qemu_init` is once-per-process — see the note in `qemu_launcher.cpp`. Once this is true the
+     * VM can never run here again, however cleanly it exited.
+     */
+    external fun hasRun(): Boolean
+
     /** Compatibility callbacks required by the Android QEMU filesystem layer. They are only
      * used for Android content-provider paths; normal VM images remain private absolute paths. */
     @Suppress("unused")

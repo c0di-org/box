@@ -34,6 +34,17 @@ function emit(event) {
   process.stdout.write(JSON.stringify({ v: PROTOCOL, at: Date.now(), ...event }) + '\n');
 }
 
+/**
+ * Waits for everything already emitted to reach the pipe.
+ *
+ * Only needed where the process exits on purpose: writes to a pipe are asynchronous, so exiting
+ * straight after an `emit` can drop the very event that says how things ended. The empty write is
+ * queued behind the real ones, so its callback runs once they have been handed to the OS.
+ */
+function flushed() {
+  return new Promise((resolve) => process.stdout.write('', resolve));
+}
+
 /** stderr is for humans reading logcat. It is never part of the event stream. */
 function diagnostic(message) {
   process.stderr.write(`[box-harness] ${message}\n`);
@@ -69,6 +80,26 @@ function nextPrompt() {
   return new Promise((resolve) => { promptWaiter = resolve; });
 }
 
+/** The code the user brings back from their browser, waiting for the sign-in to ask for it. */
+const authCodeQueue = [];
+let authCodeWaiter = null;
+
+function pushAuthCode(code) {
+  if (authCodeWaiter) {
+    const resolve = authCodeWaiter;
+    authCodeWaiter = null;
+    resolve(code);
+  } else {
+    authCodeQueue.push(code);
+  }
+}
+
+function nextAuthCode() {
+  if (authCodeQueue.length > 0) return Promise.resolve(authCodeQueue.shift());
+  if (inputClosed) return Promise.resolve(null);
+  return new Promise((resolve) => { authCodeWaiter = resolve; });
+}
+
 let activeQuery = null;
 
 function handleCommand(line) {
@@ -99,6 +130,12 @@ function handleCommand(line) {
       }
       pendingPermissions.delete(command.requestId);
       resolve(command);
+      break;
+    }
+    case 'auth_code': {
+      // Never echoed. This is the one command whose payload is credential material, so unlike
+      // `prompt` it does not get mirrored into the event log.
+      pushAuthCode(String(command.code ?? ''));
       break;
     }
     case 'interrupt':
@@ -428,12 +465,117 @@ function hasSomeCredential() {
 /** Loose match on what an auth failure tends to say, across SDK and CLI versions. */
 const AUTH_FAILURE = /unauthor|authentication|not logged in|invalid api key|api key|oauth|credential/i;
 
+// ---------------------------------------------------------------- sign-in
+
+/**
+ * Signing in, brokered through the phone.
+ *
+ * The obvious approach — spawn `claude auth login` and type the code into its stdin — cannot work,
+ * and it is worth writing down why so nobody re-derives it. That command prints the manual URL but
+ * then waits *only* on a loopback HTTP listener it opened for the browser to hit. The pasted code
+ * is delivered by a different entry point, which the standalone command never wires to stdin. A
+ * code typed at it is read by nobody and the process hangs until it is killed.
+ *
+ * The SDK's control protocol is the supported way in, and it is the same handshake Claude Code's
+ * own login screen uses: ask for the URLs, hand back the code, get told who signed in. Box uses the
+ * *manual* URL because the automatic one redirects to loopback inside the guest, which is not a
+ * place the phone's browser can reach.
+ *
+ * These three methods exist on the query object at runtime but are not in the SDK's published
+ * types, so their absence is treated as a real, reportable condition rather than a crash.
+ */
+async function runAuth(query, cwd) {
+  const session = query({
+    prompt: (async function* () { await new Promise(() => {}); })(),
+    options: { cwd, permissionMode: 'default', includePartialMessages: false },
+  });
+  activeQuery = session;
+
+  // The message stream is what pumps the transport, so a control response only arrives if somebody
+  // is iterating. Nothing here cares about the messages themselves.
+  (async () => {
+    try {
+      for await (const _ of session) { /* drained so control responses are read */ }
+    } catch (error) {
+      diagnostic(`auth stream ended: ${error?.message ?? error}`);
+    }
+  })();
+
+  if (typeof session.claudeAuthenticate !== 'function') {
+    emit({
+      type: 'auth_failed',
+      message: 'This version of Claude Code cannot sign in from Box.',
+      detail: 'The installed agent does not offer the sign-in handshake Box needs.',
+    });
+    return;
+  }
+
+  let manualUrl;
+  try {
+    ({ manualUrl } = await session.claudeAuthenticate(true));
+  } catch (error) {
+    emit({ type: 'auth_failed', message: 'Could not start the sign-in.', detail: clip(String(error?.message ?? error), 1024) });
+    return;
+  }
+  if (!manualUrl) {
+    emit({ type: 'auth_failed', message: 'Claude Code did not offer a sign-in link.' });
+    return;
+  }
+  emit({ type: 'auth_url', url: manualUrl });
+
+  const pasted = await nextAuthCode();
+  if (pasted == null) {
+    emit({ type: 'auth_failed', message: 'The sign-in was cancelled.' });
+    return;
+  }
+
+  // What the browser hands back is `code#state`, and the callback takes the two separately. A code
+  // pasted without its state is the common half-copy, and it is worth naming rather than sending
+  // a request that will fail obscurely.
+  const separator = pasted.trim().indexOf('#');
+  if (separator <= 0) {
+    emit({
+      type: 'auth_failed',
+      message: 'That code looks incomplete.',
+      detail: 'Copy the whole code from the browser, including the part after the # sign.',
+    });
+    return;
+  }
+  const code = pasted.trim().slice(0, separator);
+  const state = pasted.trim().slice(separator + 1);
+
+  try {
+    const result = await session.claudeOAuthCallback(code, state);
+    const account = result?.account ?? {};
+    emit({
+      type: 'auth_completed',
+      account: {
+        email: account.email ?? null,
+        organization: account.organization ?? null,
+        subscription: account.subscriptionType ?? null,
+      },
+    });
+  } catch (error) {
+    // The message here describes a rejected authorisation code, not a credential, so it is safe to
+    // pass along — and it is the only thing that can tell an expired code from a mistyped one.
+    emit({
+      type: 'auth_failed',
+      message: 'Claude did not accept that code.',
+      detail: clip(String(error?.message ?? error), 1024),
+    });
+  }
+}
+
 async function main() {
   const cwd = process.env.BOX_SESSION_CWD || '/workspace';
 
   // The credential is read here and handed straight to the SDK. It is never emitted, never logged,
   // and never placed in an argv the process list could show.
-  const credentialPath = process.env.BOX_CREDENTIAL_FILE;
+  // Signing in is the one job that runs with no credential by definition, so it skips the whole
+  // credential-resolution preamble below rather than reporting a missing key as a problem.
+  const authMode = process.argv.includes('--auth');
+
+  const credentialPath = authMode ? null : process.env.BOX_CREDENTIAL_FILE;
   if (credentialPath) {
     try {
       const stored = JSON.parse(readFileSync(credentialPath, 'utf8'));
@@ -453,7 +595,9 @@ async function main() {
   // about profiles this file does not, so the honest thing is to let it try and report what it
   // actually says. Box's sign-in screen is the real gate; this is a backstop, and a permissive
   // backstop that occasionally attempts a doomed query beats one that refuses a valid credential.
-  if (!hasSomeCredential()) diagnostic('no credential found up front; letting the SDK resolve');
+  if (!authMode && !hasSomeCredential()) {
+    diagnostic('no credential found up front; letting the SDK resolve');
+  }
 
   const query = await loadSdk();
   if (!query) return;
@@ -463,7 +607,16 @@ async function main() {
   reader.on('close', () => {
     inputClosed = true;
     if (promptWaiter) { const resolve = promptWaiter; promptWaiter = null; resolve(null); }
+    if (authCodeWaiter) { const resolve = authCodeWaiter; authCodeWaiter = null; resolve(null); }
   });
+
+  if (authMode) {
+    await runAuth(query, cwd);
+    // Nothing follows a sign-in. The query was opened only to carry the handshake and would
+    // otherwise sit on its never-ending prompt stream forever.
+    await flushed();
+    process.exit(0);
+  }
 
   emit({ type: 'session_started', cwd, harness: 'claude-code' });
 

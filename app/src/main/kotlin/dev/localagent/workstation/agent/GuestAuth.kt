@@ -12,18 +12,24 @@ import org.json.JSONObject
 /**
  * Signing in to Claude, from a phone, to a Linux box with no browser.
  *
- * The guest cannot open a browser and the phone cannot run the CLI, so the sign-in is brokered:
- * Claude Code's own login runs in the VM, Box lifts the URL out of its output and opens it in the
- * phone's browser, and the code the user gets back is typed into the still-running process.
+ * The guest cannot open a browser and the phone cannot run the CLI, so the sign-in is brokered: the
+ * harness runs Claude Code's own OAuth handshake in the VM and reports the URL, Box opens it in the
+ * phone's browser, and the code the user gets back is handed to the still-running handshake.
+ *
+ * **This does not drive `claude auth login`, and must not be changed back to.** That command prints
+ * the URL but then waits only on a loopback HTTP listener meant for a browser on the same machine;
+ * the pasted code goes to a different entry point it never wires to stdin. A code written to its
+ * stdin is read by nobody and the process hangs until it is killed — the flow cannot complete. The
+ * harness uses the SDK's control protocol instead, which is the same handshake Claude Code's own
+ * login screen uses. See `runAuth` in `box-claude-harness.mjs`.
  *
  * Three things this deliberately does *not* do:
  *
  *  - **Nothing is persisted.** It runs as an ephemeral session, so the exchange is never written
  *    to a log. The resulting credential is written by Claude Code itself, inside the guest
  *    filesystem, on this device. It never touches the app's storage or the event stream.
- *  - **Nothing is parsed too precisely.** The URL is found by looking for a URL, not by matching
- *    an expected sentence. Output wording changes between versions; a regex over `https://` does
- *    not care, and the raw text is shown to the user regardless.
+ *  - **Nothing is parsed too precisely.** The URL arrives as a field in a structured event rather
+ *    than being scraped out of prose, so a change in CLI wording cannot break it.
  *  - **Box never handles the credential.** The user authorises in their own browser and pastes a
  *    code. Box carries that code to a process and forgets it.
  */
@@ -48,6 +54,9 @@ class GuestAuth {
 
     /** Whether the guest already holds a usable credential. */
     fun check(control: IRuntimeControl) {
+        // `:computer` can reconnect at any time, including while the user is in their browser
+        // holding a code. A sign-in already under way is the better answer than asking again.
+        if (live != null) return
         stateFlow.value = State.Checking
         val output = StringBuilder()
         runCatching {
@@ -62,6 +71,10 @@ class GuestAuth {
                     }
 
                     override fun onClosed(exitCode: Int, error: String?) {
+                        // A sign-in may have started while this was still asking — on a cold
+                        // computer the check can take longer than the user's patience. Answering
+                        // now would replace a live URL with "signed out" and strand them.
+                        if (stateFlow.value != State.Checking) return
                         stateFlow.value = readStatus(output.toString(), exitCode)
                     }
                 },
@@ -70,19 +83,20 @@ class GuestAuth {
     }
 
     /**
-     * Starts Claude Code's own login and waits for it to produce a URL.
+     * Starts the harness's sign-in handshake and waits for it to produce a URL.
      *
-     * The session stays open across the whole exchange — the process is sitting on a blocking read
-     * of stdin while the user is in their browser, which is exactly the shape the guest session
-     * was built for.
+     * The session stays open across the whole exchange — the handshake is holding an OAuth flow
+     * open while the user is in their browser, which is exactly the shape the guest session was
+     * built for.
      */
     fun beginSignIn(control: IRuntimeControl) {
         stateFlow.value = State.Starting
-        val transcript = StringBuilder()
+        val diagnostics = StringBuilder()
+        val events = LineBuffer()
         runCatching {
             control.openEphemeralSession(
                 LOGIN_SESSION,
-                arrayOf(CLAUDE, "auth", "login", "--claudeai"),
+                AUTH_COMMAND,
                 WORKSPACE,
                 guestEnvironment(),
                 object : Callback() {
@@ -91,21 +105,36 @@ class GuestAuth {
                     }
 
                     override fun onData(offset: Long, chunk: ByteArray) {
-                        absorb(transcript, chunk.toString(Charsets.UTF_8))
+                        events.absorb(chunk.toString(Charsets.UTF_8)) { line ->
+                            handleEvent(line, diagnostics)
+                        }
                     }
 
                     override fun onDiagnostic(text: String) {
-                        // Interactive prompts often arrive on stderr, and the URL may be the only
-                        // thing on it. Never logged — this stream can carry credential material.
-                        absorb(transcript, text)
+                        // The harness's own stderr. Shown as "what the computer said" so a version
+                        // this screen has no template for still leaves the user something to act
+                        // on. Never logged — this stream can carry credential material.
+                        diagnostics.append(text)
+                        val current = stateFlow.value
+                        if (current is State.AwaitingCode) {
+                            stateFlow.value = current.copy(transcript = transcriptOf(diagnostics))
+                        }
                     }
 
                     override fun onClosed(exitCode: Int, error: String?) {
                         live = null
-                        stateFlow.value = when {
-                            error != null -> State.Failed(error)
-                            exitCode == 0 -> State.SignedIn(null)
-                            else -> State.Failed("Sign-in did not complete.")
+                        // The harness reports its own outcome as an event, and that is the one to
+                        // trust. Exit status only matters when it stopped without saying anything.
+                        when (val current = stateFlow.value) {
+                            is State.SignedIn, is State.Failed -> Unit
+                            else -> stateFlow.value = State.Failed(
+                                error
+                                    ?: if (current is State.AwaitingCode) {
+                                        "The sign-in stopped before it finished."
+                                    } else {
+                                        "The sign-in did not start."
+                                    },
+                            )
                         }
                     }
                 },
@@ -119,24 +148,53 @@ class GuestAuth {
             stateFlow.value = State.Failed("The sign-in stopped before the code arrived.")
             return
         }
-        runCatching { session.write((code.trim() + "\n").toByteArray()) }
+        val command = JSONObject()
+            .put("type", "auth_code")
+            .put("code", code.trim())
+            .toString()
+        runCatching { session.write((command + "\n").toByteArray()) }
             .onFailure { stateFlow.value = State.Failed("Could not send the code.") }
     }
 
     fun cancel() {
         runCatching { live?.cancel() }
         live = null
-        stateFlow.value = State.SignedOut
+        // Cancelling says nothing about whether a credential already exists, so this reverts to the
+        // last thing actually known rather than asserting a signed-out guest.
+        stateFlow.value = when (val current = stateFlow.value) {
+            is State.SignedIn -> current
+            else -> State.SignedOut
+        }
     }
 
-    private fun absorb(transcript: StringBuilder, text: String) {
-        transcript.append(text)
-        val whole = transcript.toString()
-        val url = URL_PATTERN.find(whole)?.value ?: return
-        val current = stateFlow.value
-        if (current is State.AwaitingCode && current.url == url) return
-        stateFlow.value = State.AwaitingCode(url, whole.takeLast(MAX_TRANSCRIPT))
+    private fun handleEvent(line: String, diagnostics: StringBuilder) {
+        val event = runCatching { JSONObject(line) }.getOrElse {
+            Log.w(TAG, "sign-in emitted a line that was not an event")
+            return
+        }
+        when (event.optString("type")) {
+            "auth_url" -> {
+                val url = event.optString("url").ifBlank { return }
+                stateFlow.value = State.AwaitingCode(url, transcriptOf(diagnostics))
+            }
+
+            "auth_completed" -> {
+                val account = event.optJSONObject("account")
+                stateFlow.value = State.SignedIn(account?.optString("email")?.ifBlank { null })
+            }
+
+            "auth_failed" -> {
+                val message = event.optString("message").ifBlank { "Sign-in did not complete." }
+                val detail = event.optString("detail").ifBlank { null }
+                stateFlow.value = State.Failed(listOfNotNull(message, detail).joinToString("\n\n"))
+            }
+
+            else -> Unit
+        }
     }
+
+    private fun transcriptOf(diagnostics: StringBuilder) =
+        diagnostics.toString().takeLast(MAX_TRANSCRIPT)
 
     private fun readStatus(output: String, exitCode: Int): State {
         if (exitCode != 0 && output.isBlank()) return State.SignedOut
@@ -146,21 +204,43 @@ class GuestAuth {
         }
         // Field names have moved between versions, so accept any of the shapes that mean "yes"
         // and treat everything else as a signed-out state the user can act on.
-        val signedIn = json.optBoolean("authenticated", false) ||
-            json.optBoolean("loggedIn", false) ||
-            json.optString("status").equals("authenticated", ignoreCase = true) ||
-            json.has("account")
-        return if (signedIn) {
-            State.SignedIn(json.optJSONObject("account")?.optString("email")?.ifBlank { null })
-        } else {
-            State.SignedOut
-        }
+        val signedIn = json.optBoolean("loggedIn", false) ||
+            json.optBoolean("authenticated", false) ||
+            json.optString("status").equals("authenticated", ignoreCase = true)
+        return if (signedIn) State.SignedIn(accountOf(json)) else State.SignedOut
     }
+
+    /** The email sits at the top level, but has been nested before; look in both. */
+    private fun accountOf(json: JSONObject): String? =
+        json.optString("email").ifBlank { null }
+            ?: json.optJSONObject("account")?.optString("email")?.ifBlank { null }
 
     private fun guestEnvironment() = android.os.Bundle().apply {
         // Claude Code writes its credential under HOME. Pinning it keeps that inside the guest's
         // own home directory rather than wherever the session happened to start.
         putString("HOME", GUEST_HOME)
+        putString("BOX_SESSION_CWD", WORKSPACE)
+    }
+
+    /**
+     * Reassembles whole event lines out of arbitrary chunks.
+     *
+     * The harness writes one event per line, but a pipe splits wherever it likes. Parsing what
+     * arrives would drop an event whose newline landed in the next chunk.
+     */
+    private class LineBuffer {
+        private val pending = StringBuilder()
+
+        fun absorb(text: String, onLine: (String) -> Unit) {
+            pending.append(text)
+            while (true) {
+                val newline = pending.indexOf("\n")
+                if (newline < 0) break
+                val line = pending.substring(0, newline).trim()
+                pending.delete(0, newline + 1)
+                if (line.isNotEmpty()) onLine(line)
+            }
+        }
     }
 
     /** Defaults so each use only overrides what it cares about. */
@@ -182,6 +262,11 @@ class GuestAuth {
         const val CLAUDE =
             "/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude"
 
-        val URL_PATTERN = Regex("""https://[^\s"'<>]+""")
+        /** The same harness the agent runs, asked only to carry a sign-in. */
+        val AUTH_COMMAND = arrayOf(
+            "/usr/bin/node",
+            "/opt/local-agent/harness/box-claude-harness.mjs",
+            "--auth",
+        )
     }
 }

@@ -113,9 +113,12 @@ data class BoxUiState(
     /**
      * The guest answered, and said no credential. Deliberately not true for `Unknown` — before the
      * computer has booted Box has not asked yet, and guessing would nag every cold start.
+     *
+     * A failed sign-in counts too. This banner is the only way into the sign-in sheet, so leaving
+     * it hidden after a failure strands the user with no route back to the thing that failed.
      */
     val needsSignIn: Boolean
-        get() = signIn is GuestAuth.State.SignedOut
+        get() = signIn is GuestAuth.State.SignedOut || signIn is GuestAuth.State.Failed
 
     /** The computer can be reached but is not usable yet. Chat never blocks on this. */
     val computerReady: Boolean
