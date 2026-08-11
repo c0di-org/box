@@ -74,6 +74,19 @@ class GuestAgentBackend(
         val logPath = CompletableDeferred<String>()
         @Volatile var handle: IAgentSession? = null
 
+        /** Last status published, so a live line only republishes when it changes something. */
+        @Volatile var status: SessionStatus = SessionStatus.Idle
+
+        /**
+         * A second reader of the same bytes, kept apart from the transcript's.
+         *
+         * The list has to say "needs you" whether or not anyone is looking at the conversation, and
+         * `events()` only runs while a collector is attached. This cursor is fed from the binder
+         * callback instead, so a session that stopped to ask something is visible in the list even
+         * when its transcript was never opened.
+         */
+        val statusCursor = SessionLogCursor()
+
         /** Claimed atomically: `events()` and `send()` both attach, and they race on a cold start. */
         val attached = AtomicBoolean(false)
 
@@ -95,7 +108,7 @@ class GuestAgentBackend(
         restored.forEach { summary ->
             records[summary.id] = Record(
                 summary.id, summary.harnessId, summary.title, summary.workingDirectory,
-            )
+            ).apply { status = summary.status }
         }
         sessionsState.value = restored
     }
@@ -360,6 +373,7 @@ class GuestAgentBackend(
             if (!record.chunks.tryEmit(offset to chunk)) {
                 Log.w(TAG, "dropped a live chunk; the log replay will still carry it")
             }
+            readStatus(record, offset, chunk)
         }
 
         override fun onDiagnostic(text: String) {
@@ -373,6 +387,30 @@ class GuestAgentBackend(
             scope.launch {
                 publish(record, if (error == null) SessionStatus.Finished else SessionStatus.Failed(error))
             }
+        }
+    }
+
+    /**
+     * Feeds the live stream through [sessionStatusFor], republishing only on a real change.
+     *
+     * Locked because the cursor carries a partial line between calls. Binder delivers one `oneway`
+     * transaction to a node at a time, so these do not overlap — but they arrive on whichever pool
+     * thread is free, and a half-line written by one thread has to be visible to the next.
+     */
+    private fun readStatus(record: Record, offset: Long, chunk: ByteArray) {
+        val lines = synchronized(record.statusCursor) {
+            runCatching { record.statusCursor.accept(offset, chunk) }.getOrElse { return }
+        }
+        val context = HarnessWire.Context(
+            sessionId = record.id,
+            harnessId = record.harnessId,
+            title = record.title,
+            workingDirectory = record.workingDirectory,
+        )
+        for (line in lines) {
+            val next = sessionStatusFor(line, context) ?: continue
+            if (record.status == next) continue
+            scope.launch { publish(record, next) }
         }
     }
 
@@ -422,6 +460,7 @@ class GuestAgentBackend(
     // ---- session list ------------------------------------------------------
 
     private fun publish(record: Record, status: SessionStatus, preview: String? = null) {
+        record.status = status
         val summary = SessionSummary(
             id = record.id,
             harnessId = record.harnessId,
@@ -459,6 +498,51 @@ class GuestAgentBackend(
             mark = HarnessMarkKind.Burst,
         )
     }
+}
+
+/**
+ * The session list's reading of one harness line, or null when the line says nothing about it.
+ *
+ * This is the one fact a summary cannot get from the session's own lifecycle. Everything else in
+ * the list comes from what Box did — a session opened, a prompt went in, the process exited.
+ * "Needs you" comes from the agent, mid-run, and it is the state the list exists to show: when
+ * several agents are working, the one that stopped to ask is the only one that wants anything.
+ *
+ * Kept separate from the transcript's fold because the two answer different questions and run at
+ * different times: `events()` only runs while someone is watching a conversation, and this has to
+ * be true for the sessions nobody opened.
+ *
+ * The substring test is a gate, not a parse. This runs on a binder thread and most lines are prose
+ * the list has no opinion about, so only a line that might be a permission event is handed to
+ * [HarnessWire] — which stays the one place that knows the vocabulary. A false positive costs one
+ * parse and is discarded; nothing here decides anything a wrong guess could damage.
+ */
+internal fun sessionStatusFor(line: String, context: HarnessWire.Context): SessionStatus? {
+    if (!line.contains(PERMISSION_HINT)) return null
+    return when (val event = HarnessWire.parse(line, context, ordinal = 0)) {
+        is AgentEvent.PermissionRequested -> SessionStatus.NeedsYou(reasonFor(event.ask))
+        // Answered — by this user, or by a standing "always allow" that never raised a sheet.
+        // Either way it is running again, and a list still saying "needs you" would send someone
+        // looking for a question that is no longer being asked.
+        is AgentEvent.PermissionResolved -> SessionStatus.Active
+        else -> null
+    }
+}
+
+/** Matches both `permission_requested` and `permission_resolved` without parsing either. */
+private const val PERMISSION_HINT = "permission_"
+
+/**
+ * Why the agent stopped, in words that carry no payload.
+ *
+ * The ask itself — the diff, the command line — is in the transcript, one tap away. This string is
+ * persisted to disk by [SessionStore], so it says the shape of the question and never its contents.
+ */
+private fun reasonFor(ask: PermissionAsk): String = when (ask) {
+    is PermissionAsk.EditFile -> "It wants to change a file"
+    is PermissionAsk.RunCommand -> "It wants to run a command"
+    is PermissionAsk.NetworkAccess -> "It wants to reach the network"
+    is PermissionAsk.Generic -> "It needs your decision"
 }
 
 /** Minimal JSON string escaping — the harness protocol is the only consumer. */

@@ -25,13 +25,9 @@ import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Memory
-import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -285,25 +281,6 @@ private fun ComputerOverview(
             )
         }
         item {
-            Row(
-                Modifier.fillMaxWidth().widthIn(max = 920.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                FactCard(
-                    icon = Icons.Outlined.Lock,
-                    title = "Private by design",
-                    body = "The control channel stays on-device. No management port is exposed.",
-                    modifier = Modifier.weight(1f),
-                )
-                FactCard(
-                    icon = Icons.Outlined.Storage,
-                    title = "Work that persists",
-                    body = "Projects live in /workspace on a dedicated virtual disk.",
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        item {
             Surface(
                 modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
@@ -467,34 +444,6 @@ private fun RuntimeStatusCard(
                     trackColor = Color.Transparent,
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun FactCard(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    body: String,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Icon(icon, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(10.dp))
-            Text(title, style = MaterialTheme.typography.titleMedium, fontSize = 15.sp)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                body,
-                style = MaterialTheme.typography.bodyMedium,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
