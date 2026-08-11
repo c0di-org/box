@@ -49,6 +49,8 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.ComputerTool
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
+import dev.localagent.workstation.computer.ControlHolder
+import dev.localagent.workstation.computer.DesktopTransport
 
 /**
  * Box's shell.
@@ -87,6 +89,9 @@ fun BoxApp(
     onOpenSignInUrl: (String) -> Unit = {},
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
+    desktop: DesktopTransport? = null,
+    onCloseDesktop: () -> Unit = {},
+    onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
@@ -161,6 +166,7 @@ fun BoxApp(
                     onTakeControl = { onOpenArtifact(Artifact.Computer) },
                     modifier = modifier,
                     compact = compact,
+                    desktop = desktop,
                 )
             }
 
@@ -220,6 +226,17 @@ fun BoxApp(
                 onPermissionDecision(pending.requestId, decision)
             },
             onDismiss = { dismissedRequestId = pending.requestId },
+        )
+    }
+
+    // Above every pane and both sheets: this is a window mode, not a pane. Drawn last so a
+    // permission sheet raised while the desktop is open cannot appear behind the picture.
+    if (state.desktopVisible && desktop != null) {
+        DesktopFullWindow(
+            transport = desktop,
+            control = state.desktopControl,
+            onSetControl = onSetDesktopControl,
+            onClose = onCloseDesktop,
         )
     }
 

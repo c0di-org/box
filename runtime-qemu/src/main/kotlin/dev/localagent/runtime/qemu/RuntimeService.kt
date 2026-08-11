@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.pm.ApplicationInfo
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -244,12 +245,21 @@ class RuntimeService : Service() {
                 .onSuccess { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
         if (intent?.action == ACTION_EXEC_PROBE) scope.launch {
+            // A caller-supplied command, but only in a debuggable build. Verifying what the guest
+            // actually did — whether a unit came up, whether a device node exists — otherwise means
+            // reading a serial console that arrives in fragments and drops most of itself. The
+            // service is not exported, so only this UID can reach it either way; the build check is
+            // what keeps a released app from carrying a general-purpose guest shell on an Intent.
+            val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+            val requested = if (debuggable) intent.getStringExtra(EXTRA_PROBE_COMMAND) else null
+            val command = requested ?: "printf device-agentd-ok"
             runtime.start()
                 .onSuccess {
                     runCatching {
-                        runtime.exec(ExecRequest(listOf("/bin/sh", "-lc", "printf device-agentd-ok")))
+                        runtime.exec(ExecRequest(listOf("/bin/sh", "-lc", command)))
                     }.onSuccess { result ->
                         Log.i(TAG, "Guest command probe: exit=${result.exitCode} stdout=${result.stdout}")
+                        if (result.stderr.isNotBlank()) Log.i(TAG, "Guest probe stderr: ${result.stderr}")
                     }.onFailure { Log.e(TAG, "Guest command probe failed", it) }
                 }
                 .onFailure { Log.e(TAG, "QEMU failed to start for command probe", it) }
@@ -378,6 +388,9 @@ class RuntimeService : Service() {
         const val ACTION_START = "dev.localagent.runtime.qemu.START"
         const val ACTION_STOP = "dev.localagent.runtime.qemu.STOP"
         const val ACTION_EXEC_PROBE = "dev.localagent.runtime.qemu.EXEC_PROBE"
+
+        /** Debuggable builds only. See the probe branch in [onStartCommand]. */
+        const val EXTRA_PROBE_COMMAND = "probe_command"
 
         /** App-private state broadcast. Always sent with an explicit package, never exported. */
         const val ACTION_STATE = "dev.localagent.runtime.qemu.STATE"

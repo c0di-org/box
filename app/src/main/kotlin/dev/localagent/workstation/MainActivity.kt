@@ -102,12 +102,11 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onInterrupt = boxViewModel::interruptSession,
             onPermissionDecision = boxViewModel::resolvePermission,
             onOpenArtifact = { artifact ->
-                boxViewModel.openArtifact(
-                    when (artifact) {
-                        dev.localagent.workstation.agent.Artifact.Computer -> "The live desktop"
-                        is dev.localagent.workstation.agent.Artifact.Preview -> "The preview"
-                    },
-                )
+                when (artifact) {
+                    dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openDesktop()
+                    is dev.localagent.workstation.agent.Artifact.Preview ->
+                        boxViewModel.openPreview("The preview")
+                }
             },
             onCloseSession = boxViewModel::closeSession,
             onSelectComputerTool = boxViewModel::selectComputerTool,
@@ -122,6 +121,9 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onOpenFile = boxViewModel::openFile,
             onCloseFile = boxViewModel::closeFile,
             onNoticeShown = boxViewModel::noticeShown,
+            desktop = BoxContainer.desktop(LocalContext.current.applicationContext as android.app.Application),
+            onCloseDesktop = boxViewModel::closeDesktop,
+            onSetDesktopControl = boxViewModel::setDesktopControl,
             onShowSignIn = boxViewModel::showSignIn,
             onDismissSignIn = boxViewModel::dismissSignIn,
             onBeginSignIn = boxViewModel::beginSignIn,

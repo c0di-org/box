@@ -7,6 +7,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.GuestAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
+import dev.localagent.workstation.computer.DesktopTransport
+import dev.localagent.workstation.computer.VncDesktop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +39,22 @@ object BoxContainer {
 
     /** One sign-in at a time, for the whole app. */
     val auth: GuestAuth by lazy { GuestAuth() }
+
+    @Volatile private var desktopInstance: VncDesktop? = null
+
+    /**
+     * The guest's screen.
+     *
+     * Process-scoped like the rest of this object, so rotating the phone or folding it does not
+     * drop the RFB connection and make the guest resend a whole framebuffer over an emulated link.
+     */
+    fun desktop(application: Application): DesktopTransport =
+        desktopInstance ?: synchronized(this) {
+            desktopInstance ?: VncDesktop(
+                socketPath = VncDesktop.socketPath(application.filesDir),
+                scope = scope,
+            ).also { desktopInstance = it }
+        }
 
     /**
      * Supplies the real backend.

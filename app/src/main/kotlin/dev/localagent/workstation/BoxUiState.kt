@@ -8,6 +8,7 @@ import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.SessionStatus
 import dev.localagent.workstation.agent.SessionSummary
 import dev.localagent.workstation.agent.Transcript
+import dev.localagent.workstation.computer.ControlHolder
 
 /**
  * Box's two top-level surfaces. The VM is substrate, so it gets one destination; the conversation
@@ -79,6 +80,13 @@ data class BoxUiState(
     val signInVisible: Boolean = false,
 
     // ---- computer ----
+    /** Whether the guest's screen is filling the window. */
+    val desktopVisible: Boolean = false,
+    /**
+     * Who the guest's input belongs to. Defaults to the agent, and going back to the conversation
+     * returns it, so a session cannot be left with the keyboard pointed somewhere the user forgot.
+     */
+    val desktopControl: ControlHolder = ControlHolder.Agent,
     val computerTool: ComputerTool = ComputerTool.Overview,
     val commandHistory: List<CommandRecord> = emptyList(),
     val runningCommand: String? = null,
