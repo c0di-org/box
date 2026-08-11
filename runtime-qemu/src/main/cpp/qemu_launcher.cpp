@@ -2,6 +2,9 @@
 #include <android/log.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <cstdio>
 
 #include <atomic>
 #include <string>
@@ -38,6 +41,40 @@ struct LaunchRequest {
     std::vector<std::string> args;
 };
 
+/**
+ * Put QEMU's own stderr into logcat.
+ *
+ * Without this, a rejected option is invisible: `qemu_init` prints the reason to stderr and calls
+ * `exit(1)`, Android discards stderr, and the whole `:computer` process vanishes between one log
+ * line and the next with nothing to say why. The symptom is a VM that never boots and a log that
+ * ends mid-sentence — which is indistinguishable from a hang, and is the wrong thing to be
+ * debugging when the actual message was one line long.
+ *
+ * stdout goes the same way. QEMU is not run with a serial console on stdio here, so anything
+ * arriving on either stream is diagnostics meant for a person.
+ */
+constexpr const char* kOutputLogName = "/qemu-output.log";
+
+void capture_qemu_output() {
+    // A file, not a pipe into logcat. `qemu_init` prints the reason and calls `exit(1)`, which
+    // takes the whole process down — including any thread that was going to forward the message.
+    // The one line worth having is therefore exactly the line a pipe loses. The kernel keeps a
+    // file whether or not anything is left alive to read it.
+    const std::string path = private_storage_dir + kOutputLogName;
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        __android_log_print(ANDROID_LOG_WARN, kTag, "could not capture QEMU output to %s", path.c_str());
+        return;
+    }
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    close(fd);
+    // Unbuffered, for the same reason: anything still sitting in a stdio buffer at exit is gone.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    __android_log_print(ANDROID_LOG_INFO, kTag, "QEMU output captured to %s", path.c_str());
+}
+
 void* run_qemu(void* opaque) {
     auto* request = static_cast<LaunchRequest*>(opaque);
     std::vector<char*> argv;
@@ -56,6 +93,11 @@ void* run_qemu(void* opaque) {
     }
 
     __android_log_print(ANDROID_LOG_INFO, kTag, "Starting QEMU with %zu arguments", request->args.size());
+    for (const auto& argument : request->args) {
+        __android_log_print(ANDROID_LOG_DEBUG, kTag, "  arg: %s", argument.c_str());
+    }
+    // Before qemu_init, because qemu_init is what exits on a bad option.
+    capture_qemu_output();
     init(static_cast<int>(request->args.size()), argv.data(), nullptr);
     __android_log_print(ANDROID_LOG_INFO, kTag, "Entering QEMU main loop");
     main_loop();

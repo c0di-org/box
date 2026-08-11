@@ -37,6 +37,27 @@ class RuntimeStorage(context: Context) {
     val agentSocket = File(sockets, "agentd.sock")
     val serialSocket = File(sockets, "serial.sock")
 
+    /**
+     * The guest's screen, as an RFB server QEMU opens here.
+     *
+     * App-private like the others, and for the same reason: being a filesystem path rather than a
+     * port is what keeps the guest's display off the network entirely. It carries no password
+     * because it cannot be opened by anything that is not this UID.
+     */
+    val vncSocket = File(sockets, "vnc.sock")
+
+    /**
+     * QEMU's own data directory, passed to it with `-L`.
+     *
+     * QEMU expects to find files next to itself on a normal system; inside an APK there is no such
+     * place, and the build compiled into this one looks under paths that do not exist on Android.
+     * The concrete casualty is the VNC server, which loads a keymap to turn the keysyms a client
+     * sends into scancodes the guest understands, and **exits** when it cannot — with the message
+     * going to logcat rather than stderr, so it presents as a VM that silently never starts.
+     */
+    val qemuData = File(root, "qemu")
+    private val keymaps = File(qemuData, "keymaps")
+
     fun hasHeadlessBootSet(): Boolean =
         kernel.isFile && initrd.isFile && systemDisk.isFile && workspace.isFile
 
@@ -44,7 +65,7 @@ class RuntimeStorage(context: Context) {
         systemDisk.isFile && uefiCode.isFile && uefiVars.isFile
 
     fun ensureDirectories() {
-        listOf(root, images, disks, sockets).forEach { directory ->
+        listOf(root, images, disks, sockets, qemuData, keymaps).forEach { directory ->
             check((directory.exists() || directory.mkdirs()) && directory.isDirectory) {
                 "Could not create private runtime directory ${directory.absolutePath}"
             }
@@ -53,7 +74,7 @@ class RuntimeStorage(context: Context) {
 
     /** Remove only stale socket nodes. Call this before QEMU starts, never while it is running. */
     fun removeStaleSockets() {
-        listOf(qmpSocket, agentSocket, serialSocket).forEach { socket ->
+        listOf(qmpSocket, agentSocket, serialSocket, vncSocket).forEach { socket ->
             check(!socket.exists() || socket.delete()) { "Could not remove stale socket ${socket.name}" }
         }
     }
@@ -79,6 +100,32 @@ class RuntimeStorage(context: Context) {
         onProgress(1.0f)
 
         check(hasHeadlessBootSet()) { "Provisioning did not produce a complete guest boot set" }
+    }
+
+    /**
+     * Unpack QEMU's data files where QEMU can reach them.
+     *
+     * Called on every start, not from provisioning. Provisioning runs once, when there is no guest
+     * disk yet; these files belong to the *APK*, so an app update that changes them has to reach a
+     * device whose disks are already in place — and that device never provisions again. Rewriting
+     * them each start is a few kilobytes and keeps them matched to the installed build.
+     *
+     * That is deliberately the opposite of the rule for the disks, which are the user's work and
+     * are never replaced once present.
+     *
+     * Not checksum-verified like the boot set. Those are large payloads assembled by a separate
+     * build step where a truncated copy is a real possibility; these are small files read straight
+     * out of the APK, and a corrupt one means the APK itself is corrupt.
+     */
+    fun installQemuData() {
+        val assets = appContext.assets
+        val names = assets.list(KEYMAP_ASSET_DIR).orEmpty()
+        check(names.isNotEmpty()) { "The APK is missing QEMU's keymaps; the display cannot start" }
+        names.forEach { name ->
+            assets.open("$KEYMAP_ASSET_DIR/$name").use { source ->
+                FileOutputStream(File(keymaps, name)).use { destination -> source.copyTo(destination) }
+            }
+        }
     }
 
     private fun migrateLegacySystemDiskIfNeeded() {
@@ -155,6 +202,7 @@ class RuntimeStorage(context: Context) {
 
     private companion object {
         const val ASSET_DIRECTORY = "guest"
+        const val KEYMAP_ASSET_DIR = "qemu/keymaps"
         val SHA256_REGEX = Regex("[0-9a-fA-F]{64}")
     }
 }

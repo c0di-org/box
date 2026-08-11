@@ -26,6 +26,7 @@ import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.TranscriptBuilder
+import dev.localagent.workstation.computer.ControlHolder
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -371,9 +372,29 @@ class BoxViewModel @JvmOverloads constructor(
 
     fun cancelSignIn() = auth.cancel()
 
-    /** Wired but inert: the display transport and port forwarding do not exist yet. */
-    fun openArtifact(label: String) {
-        mutableUiState.update { it.copy(destination = BoxDestination.Computer) }
+    /**
+     * Show the guest's screen full window.
+     *
+     * Starts the computer if it is off, for the same reason sending a message does: the answer to
+     * "show me the machine" is never "no", it is "in a moment".
+     */
+    fun openDesktop() {
+        wakeComputerIfNeeded()
+        mutableUiState.update { it.copy(desktopVisible = true) }
+    }
+
+    /** Control returns to the agent on the way out; see [BoxUiState.desktopControl]. */
+    fun closeDesktop() {
+        mutableUiState.update { it.copy(desktopVisible = false, desktopControl = ControlHolder.Agent) }
+    }
+
+    fun setDesktopControl(holder: ControlHolder) {
+        mutableUiState.update { it.copy(desktopControl = holder) }
+        viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(holder) }
+    }
+
+    /** Port forwarding still does not exist, so a preview says so rather than opening nothing. */
+    fun openPreview(label: String) {
         showNotice("$label isn’t connected yet — the runtime transport for it is still being built.")
     }
 

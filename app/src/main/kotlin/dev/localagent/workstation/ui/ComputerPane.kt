@@ -49,6 +49,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.ComputerTool
 import dev.localagent.workstation.computer.ControlHolder
+import dev.localagent.workstation.computer.DesktopTransport
 
 /**
  * The agent's computer. Demoted from the app's home screen to one of two destinations, because
@@ -73,6 +74,7 @@ fun ComputerPane(
     onTakeControl: () -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    desktop: DesktopTransport? = null,
 ) {
     Column(modifier.fillMaxSize()) {
         ComputerHeader(
@@ -88,6 +90,8 @@ fun ComputerPane(
             when (state.computerTool) {
                 ComputerTool.Overview -> ComputerOverview(
                     state = state,
+                    desktop = desktop,
+                    onOpenDesktop = onTakeControl,
                     onSetupAndStart = onSetupAndStart,
                     onStart = onStart,
                     onStop = onStop,
@@ -251,6 +255,8 @@ private fun ToolSwitcher(selected: ComputerTool, onSelect: (ComputerTool) -> Uni
 @Composable
 private fun ComputerOverview(
     state: BoxUiState,
+    desktop: DesktopTransport?,
+    onOpenDesktop: () -> Unit,
     onSetupAndStart: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -264,10 +270,26 @@ private fun ComputerOverview(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         item {
+            // The real picture once there is one. Not interactive here: this is a glance at what
+            // the agent is doing, and taking the keyboard is a decision made in the full window.
             DesktopSlot(
                 state = state.runtimeState,
                 modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp),
+                content = if (desktop != null && state.computerReady) {
+                    { DesktopSurface(desktop, interactive = false, modifier = Modifier.fillMaxSize()) }
+                } else {
+                    null
+                },
             )
+        }
+        if (state.computerReady && desktop != null) {
+            item {
+                Button(
+                    onClick = onOpenDesktop,
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) { Text("Open full window") }
+            }
         }
         item {
             RuntimeStatusCard(
@@ -346,7 +368,7 @@ fun DesktopSlot(
                     Spacer(Modifier.height(14.dp))
                     Text(
                         when (state) {
-                            RuntimeState.Ready -> "The desktop isn't streaming yet"
+                            RuntimeState.Ready -> "Waiting for the picture"
                             else -> "The computer isn't running"
                         },
                         style = MaterialTheme.typography.titleMedium,
@@ -356,8 +378,8 @@ fun DesktopSlot(
                     Text(
                         when (state) {
                             RuntimeState.Ready ->
-                                "Box can run commands and read files here today. The live screen " +
-                                    "needs a display transport that's still being built."
+                                "The computer is up. Its screen appears here once the desktop " +
+                                    "inside it has finished starting."
                             else -> "Start the computer to give agents somewhere to work."
                         },
                         style = MaterialTheme.typography.bodyMedium,
