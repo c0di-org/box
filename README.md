@@ -139,11 +139,20 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ANDROID
 adb install -r app/build/outputs/apk/stock/debug/app-stock-debug.apk
 ```
 
-Tests — 43 JVM tests plus the guest protocol suite:
+Tests — 101 JVM tests:
 
 ```bash
 ./gradlew :app:testStockDebugUnitTest :runtime-qemu:testDebugUnitTest
 ```
+
+The harness is a Node program with its own suite, covering the event protocol and the
+sign-in handshake:
+
+```bash
+node --test guest/tests/*.mjs
+```
+
+And `agentd`, which is Python:
 
 ```bash
 python3 -m unittest discover -s guest/tests
@@ -152,25 +161,16 @@ python3 -m unittest discover -s guest/tests
 ## Verifying the VM on a device
 
 ```bash
-adb logcat "BoxRuntime:*" "LocalAgentRuntime:*" "LocalAgentQemu:*" "BoxGuestSerial:*" "*:S"
+adb logcat -s LocalAgentRuntime:I LocalAgentQemu:I BoxGuestSerial:D
 ```
 
 A healthy boot logs `QMP confirmed running guest`, then `Guest agent confirmed ready`,
-then `QEMU runtime launch accepted`. Start the runtime with:
+then `QEMU runtime launch accepted`.
 
-```bash
-adb shell am start -n dev.localagent.workstation.stock/dev.localagent.workstation.VmProbeActivity --es runtime_action dev.localagent.runtime.qemu.START
-```
-
-Then exercise the guest control channel end to end:
-
-```bash
-adb shell am start -n dev.localagent.workstation.stock/dev.localagent.workstation.VmProbeActivity --es runtime_action dev.localagent.runtime.qemu.EXEC_PROBE
-```
-
-Expect `Guest command probe: exit=0 stdout=device-agentd-ok` in logcat. Run `START`
-first on a fresh install: only `START` provisions the guest image, so `EXEC_PROBE` on
-an unprovisioned device fails with `No complete verified guest image is installed yet`.
+Start it from the app — tap **Set up** on a fresh install, then **Start**. There is no
+adb route in: `RuntimeService` is not exported, so `am start-foreground-service` against
+it fails with "Requires permission not exported from uid". The `VmProbeActivity` that
+used to drive this from the shell no longer exists.
 
 Tap-to-Ready on a Galaxy Z Fold 7 measured ~170 seconds against the protocol-v2 image
 (171 s cooled, 168 s on a first cold provision, 252 s with the SoC already hot from
@@ -178,8 +178,11 @@ back-to-back runs), versus a ~90 second figure quoted for earlier builds. Nearly
 it is the guest waiting on emulated udev; see [guest/README.md](guest/README.md).
 
 Reinstalling the APK does **not** replace an already-provisioned guest disk —
-`base-system.qcow2` is installed only when absent, since it is mutable once booted. To
-pick up a rebuilt image, drop the provisioned copy first (this keeps the workspace):
+`base-system.qcow2` is installed only when absent, since it is mutable once booted. That
+is deliberate, so an app update never wipes the user's Linux box, and it is also why a
+rebuilt image appears to have no effect: nothing reports that it was skipped.
+`./tools/deploy.sh --image` handles this. To drop the guest by hand instead, keeping the
+workspace:
 
 ```bash
 adb shell run-as dev.localagent.workstation.stock rm -f files/computer/disks/system.qcow2
