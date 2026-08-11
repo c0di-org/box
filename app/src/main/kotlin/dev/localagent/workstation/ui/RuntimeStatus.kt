@@ -197,9 +197,7 @@ fun RuntimeGlyph(state: RuntimeState, modifier: Modifier = Modifier) {
 fun RuntimeGate(
     destination: String,
     state: RuntimeState,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
-    onRetry: () -> Unit,
+    onOpenBox: () -> Unit,
 ) {
     val presentation = statePresentation(state)
     Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -233,9 +231,9 @@ fun RuntimeGate(
             )
             Spacer(Modifier.height(22.dp))
             when (state) {
-                RuntimeState.NotProvisioned -> Button(onClick = onSetupAndStart) { Text("Set up the computer") }
-                RuntimeState.Stopped, RuntimeState.Suspended -> Button(onClick = onStart) { Text("Start the computer") }
-                is RuntimeState.Failed -> Button(onClick = onRetry) { Text("Try again") }
+                RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended ->
+                    Button(onClick = onOpenBox) { Text("Open your box") }
+                is RuntimeState.Failed -> Button(onClick = onOpenBox) { Text("Try again") }
                 else -> Unit
             }
         }
@@ -247,10 +245,8 @@ fun RuntimeGate(
 fun DiagnosticsSheet(
     state: RuntimeState,
     onDismiss: () -> Unit,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
+    onOpenBox: () -> Unit,
     onStop: () -> Unit,
-    onRetry: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -265,7 +261,7 @@ fun DiagnosticsSheet(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(Modifier.fillMaxWidth().widthIn(max = 620.dp)) {
-                Text("Computer details", style = MaterialTheme.typography.headlineSmall)
+                Text("Your box", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     StatusDot(presentation.color, 8.dp)
@@ -294,12 +290,12 @@ fun DiagnosticsSheet(
                 DiagnosticRow("Guest network", "Private NAT")
                 Spacer(Modifier.height(20.dp))
                 when (state) {
-                    RuntimeState.NotProvisioned -> Button(onClick = onSetupAndStart, Modifier.fillMaxWidth()) { Text("Set up the computer") }
-                    RuntimeState.Stopped, RuntimeState.Suspended -> Button(onClick = onStart, Modifier.fillMaxWidth()) { Text("Start the computer") }
+                    RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended ->
+                        Button(onClick = onOpenBox, Modifier.fillMaxWidth()) { Text("Open your box") }
                     RuntimeState.Starting, RuntimeState.Connecting, RuntimeState.Ready, RuntimeState.Suspending ->
-                        OutlinedButton(onClick = onStop, Modifier.fillMaxWidth()) { Text("Stop the computer") }
+                        OutlinedButton(onClick = onStop, Modifier.fillMaxWidth()) { Text("Close your box") }
                     RuntimeState.Stopping -> Unit
-                    is RuntimeState.Failed -> Button(onClick = onRetry, Modifier.fillMaxWidth()) { Text("Try again") }
+                    is RuntimeState.Failed -> Button(onClick = onOpenBox, Modifier.fillMaxWidth()) { Text("Try again") }
                     is RuntimeState.Provisioning -> Unit
                 }
                 Spacer(Modifier.height(18.dp))

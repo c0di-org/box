@@ -62,32 +62,31 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
     val preferences = remember(context) {
         context.getSharedPreferences("box_product", Context.MODE_PRIVATE)
     }
-    var pendingPermissionAction by rememberSaveable { mutableStateOf<String?>(null) }
+    var openWhenPermissionAnswered by rememberSaveable { mutableStateOf(false) }
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) {
         // A denied notification permission does not block the user-owned foreground runtime.
-        when (pendingPermissionAction) {
-            "setup" -> boxViewModel.setupAndStart()
-            "start" -> boxViewModel.start()
-        }
-        pendingPermissionAction = null
+        if (openWhenPermissionAnswered) boxViewModel.openBox()
+        openWhenPermissionAnswered = false
     }
 
-    val withNotificationPermission: (String) -> Unit = { action ->
+    /**
+     * Asked once, on the way into the only three-minute wait Box has. Notifications are how the
+     * user finds out the box finished while they were in another app, which is exactly the offer
+     * worth making at the moment they press the button.
+     */
+    val openBox: () -> Unit = {
         val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             !preferences.getBoolean("notification_permission_requested", false) &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         if (needsPermission) {
             preferences.edit().putBoolean("notification_permission_requested", true).apply()
-            pendingPermissionAction = action
+            openWhenPermissionAnswered = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            when (action) {
-                "setup" -> boxViewModel.setupAndStart()
-                "start" -> boxViewModel.start()
-            }
+            boxViewModel.openBox()
         }
     }
 
@@ -96,7 +95,6 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             state = state,
             onDestinationSelected = boxViewModel::selectDestination,
             onSelectSession = boxViewModel::selectSession,
-            onToggleHarness = boxViewModel::toggleHarness,
             onNewConversation = { harnessId -> boxViewModel.startSession(harnessId) },
             onSend = boxViewModel::sendMessage,
             onInterrupt = boxViewModel::interruptSession,
@@ -110,10 +108,8 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             },
             onCloseSession = boxViewModel::closeSession,
             onSelectComputerTool = boxViewModel::selectComputerTool,
-            onSetupAndStart = { withNotificationPermission("setup") },
-            onStart = { withNotificationPermission("start") },
+            onOpenBox = openBox,
             onStop = boxViewModel::stop,
-            onRetry = boxViewModel::retry,
             onRunCommand = boxViewModel::runCommand,
             onOpenDirectory = boxViewModel::openDirectory,
             onNavigateUp = boxViewModel::navigateUp,
@@ -122,6 +118,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onCloseFile = boxViewModel::closeFile,
             onNoticeShown = boxViewModel::noticeShown,
             desktop = BoxContainer.desktop(LocalContext.current.applicationContext as android.app.Application),
+            onOpenDesktop = boxViewModel::openDesktop,
             onCloseDesktop = boxViewModel::closeDesktop,
             onSetDesktopControl = boxViewModel::setDesktopControl,
             onShowSignIn = boxViewModel::showSignIn,

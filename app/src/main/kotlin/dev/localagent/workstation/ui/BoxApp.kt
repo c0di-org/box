@@ -1,6 +1,14 @@
 package dev.localagent.workstation.ui
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -41,10 +49,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxDestination
+import dev.localagent.workstation.BoxProgress
+import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.ComputerTool
 import dev.localagent.workstation.agent.Artifact
@@ -58,13 +69,16 @@ import dev.localagent.workstation.computer.DesktopTransport
  * Two destinations — the conversation and the computer — and three layouts derived from window
  * size. The layout decision is made once, here, and every pane below is written to be dropped
  * into any of the three without knowing which it landed in.
+ *
+ * One thing overrides all of that: until the box is open there is nothing worth showing beside it,
+ * so the home surface takes the whole window at every size and gives the rest of the shell back as
+ * it settles. That is not a separate screen or a gate to dismiss — see [YourBox].
  */
 @Composable
 fun BoxApp(
     state: BoxUiState,
     onDestinationSelected: (BoxDestination) -> Unit,
     onSelectSession: (String?) -> Unit,
-    onToggleHarness: (String) -> Unit,
     onNewConversation: (String) -> Unit,
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
@@ -72,10 +86,8 @@ fun BoxApp(
     onOpenArtifact: (Artifact) -> Unit,
     onCloseSession: (String) -> Unit,
     onSelectComputerTool: (ComputerTool) -> Unit,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
+    onOpenBox: () -> Unit,
     onStop: () -> Unit,
-    onRetry: () -> Unit,
     onRunCommand: (String) -> Unit,
     onOpenDirectory: (String) -> Unit,
     onNavigateUp: () -> Unit,
@@ -90,12 +102,16 @@ fun BoxApp(
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
     desktop: DesktopTransport? = null,
+    onOpenDesktop: () -> Unit = {},
     onCloseDesktop: () -> Unit = {},
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     var dismissedRequestId by rememberSaveable { mutableStateOf<String?>(null) }
+    val progress = rememberBoxProgress(state)
+    // The app is handed back on press. Only the closed box is allowed to hold the window.
+    val revealed = state.boxStage != BoxStage.Closed
 
     LaunchedEffect(state.notice?.id) {
         val notice = state.notice ?: return@LaunchedEffect
@@ -119,6 +135,21 @@ fun BoxApp(
         ) {
             val layout = rememberBoxLayout(maxWidth, maxHeight)
 
+            val home: @Composable (Modifier, Boolean) -> Unit = { modifier, showSelection ->
+                SessionsPane(
+                    state = state,
+                    progress = progress,
+                    desktop = desktop,
+                    onSelectSession = { onSelectSession(it) },
+                    onNewConversation = onNewConversation,
+                    onOpenBox = onOpenBox,
+                    onOpenDesktop = onOpenDesktop,
+                    onShowDetails = { showDiagnostics = true },
+                    modifier = modifier,
+                    showSelection = showSelection,
+                )
+            }
+
             val conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit =
                 { modifier, onBack, showComputerAction ->
                     ConversationPane(
@@ -127,13 +158,7 @@ fun BoxApp(
                         onSend = onSend,
                         onInterrupt = onInterrupt,
                         onOpenArtifact = onOpenArtifact,
-                        onStartComputer = {
-                            if (state.runtimeState == RuntimeState.NotProvisioned) {
-                                onSetupAndStart()
-                            } else {
-                                onStart()
-                            }
-                        },
+                        onStartComputer = onOpenBox,
                         onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                         onCloseSession = onCloseSession,
                         onReviewPermission = if (pending != null && !sheetVisible) {
@@ -152,10 +177,8 @@ fun BoxApp(
                     state = state,
                     onBack = onBack,
                     onSelectTool = onSelectComputerTool,
-                    onSetupAndStart = onSetupAndStart,
-                    onStart = onStart,
+                    onOpenBox = onOpenBox,
                     onStop = onStop,
-                    onRetry = onRetry,
                     onShowDiagnostics = { showDiagnostics = true },
                     onRunCommand = onRunCommand,
                     onOpenDirectory = onOpenDirectory,
@@ -163,7 +186,7 @@ fun BoxApp(
                     onRefreshFiles = onRefreshFiles,
                     onOpenFile = onOpenFile,
                     onCloseFile = onCloseFile,
-                    onTakeControl = { onOpenArtifact(Artifact.Computer) },
+                    onTakeControl = onOpenDesktop,
                     modifier = modifier,
                     compact = compact,
                     desktop = desktop,
@@ -173,41 +196,46 @@ fun BoxApp(
             when (layout) {
                 BoxLayout.Single -> SinglePaneLayout(
                     state = state,
+                    revealed = revealed,
+                    progress = progress,
                     onDestinationSelected = onDestinationSelected,
                     onSelectSession = onSelectSession,
-                    onToggleHarness = onToggleHarness,
-                    onNewConversation = onNewConversation,
                     onShowDiagnostics = { showDiagnostics = true },
+                    home = home,
                     conversation = conversation,
                     computer = computer,
                 )
 
                 BoxLayout.Dual -> DualPaneLayout(
                     state = state,
+                    revealed = revealed,
+                    progress = progress,
+                    windowWidth = maxWidth,
                     onDestinationSelected = onDestinationSelected,
-                    onSelectSession = onSelectSession,
-                    onToggleHarness = onToggleHarness,
-                    onNewConversation = onNewConversation,
                     onShowDiagnostics = { showDiagnostics = true },
+                    home = home,
                     conversation = conversation,
                     computer = computer,
                 )
 
                 BoxLayout.Triple -> TriplePaneLayout(
                     state = state,
-                    onSelectSession = onSelectSession,
-                    onToggleHarness = onToggleHarness,
-                    onNewConversation = onNewConversation,
+                    revealed = revealed,
+                    progress = progress,
+                    windowWidth = maxWidth,
                     onShowDiagnostics = { showDiagnostics = true },
+                    home = home,
                     conversation = conversation,
                     computer = computer,
                 )
             }
 
             // In every multi-pane layout the conversation is always on screen, so it needs a
-            // session even before the user picks one.
-            LaunchedEffect(layout, state.sessions.firstOrNull()?.id, state.selectedSessionId) {
-                if (layout != BoxLayout.Single && state.selectedSessionId == null) {
+            // session even before the user picks one. Not while the box is still opening: there is
+            // no room for a conversation then, and selecting one behind the hero would mean the
+            // list arrives with a choice already made for the user.
+            LaunchedEffect(layout, revealed, state.sessions.firstOrNull()?.id, state.selectedSessionId) {
+                if (layout != BoxLayout.Single && revealed && state.selectedSessionId == null) {
                     state.sessions.firstOrNull()?.let { onSelectSession(it.id) }
                 }
             }
@@ -256,21 +284,13 @@ fun BoxApp(
         DiagnosticsSheet(
             state = state.runtimeState,
             onDismiss = { showDiagnostics = false },
-            onSetupAndStart = {
+            onOpenBox = {
                 showDiagnostics = false
-                onSetupAndStart()
-            },
-            onStart = {
-                showDiagnostics = false
-                onStart()
+                onOpenBox()
             },
             onStop = {
                 showDiagnostics = false
                 onStop()
-            },
-            onRetry = {
-                showDiagnostics = false
-                onRetry()
             },
         )
     }
@@ -284,11 +304,12 @@ fun BoxApp(
 @Composable
 private fun SinglePaneLayout(
     state: BoxUiState,
+    revealed: Boolean,
+    progress: BoxProgress,
     onDestinationSelected: (BoxDestination) -> Unit,
     onSelectSession: (String?) -> Unit,
-    onToggleHarness: (String) -> Unit,
-    onNewConversation: (String) -> Unit,
     onShowDiagnostics: () -> Unit,
+    home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
     computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
@@ -307,44 +328,37 @@ private fun SinglePaneLayout(
                 state.destination == BoxDestination.Computer ->
                     computer(Modifier.fillMaxSize(), null, true)
                 else -> Column(Modifier.fillMaxSize()) {
-                    BoxTopBar(state, onShowDiagnostics)
-                    SessionsPane(
-                        state = state,
-                        onSelectSession = { onSelectSession(it) },
-                        onToggleHarness = onToggleHarness,
-                        onNewConversation = onNewConversation,
-                        showSelection = false,
-                    )
+                    // The hero is the window while the box is closed, so the chrome above it
+                    // arrives the moment the box is asked for — carrying the opening on its mark.
+                    BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
+                    home(Modifier.fillMaxSize(), false)
                 }
             }
         }
-        if (!inConversation) {
+        // Same reason: a Computer tab is a second door to a box nobody has asked for yet.
+        BoxChrome(visible = revealed && !inConversation) {
             BoxNavigationBar(state.destination, onDestinationSelected)
         }
     }
 }
 
-/** Unfolded or tablet. The session list earns a permanent home beside the conversation. */
+/** Unfolded or tablet. The task list earns a permanent home beside the conversation. */
 @Composable
 private fun DualPaneLayout(
     state: BoxUiState,
+    revealed: Boolean,
+    progress: BoxProgress,
+    windowWidth: Dp,
     onDestinationSelected: (BoxDestination) -> Unit,
-    onSelectSession: (String?) -> Unit,
-    onToggleHarness: (String) -> Unit,
-    onNewConversation: (String) -> Unit,
     onShowDiagnostics: () -> Unit,
+    home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
     computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize()) {
-        Column(Modifier.width(SESSION_PANE_WIDTH)) {
-            BoxTopBar(state, onShowDiagnostics)
-            SessionsPane(
-                state = state,
-                onSelectSession = { onSelectSession(it) },
-                onToggleHarness = onToggleHarness,
-                onNewConversation = onNewConversation,
-            )
+        Column(Modifier.width(homeWidth(revealed, windowWidth))) {
+            BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
+            home(Modifier.fillMaxSize(), true)
         }
         PaneDivider()
         Box(Modifier.weight(1f)) {
@@ -360,26 +374,22 @@ private fun DualPaneLayout(
     }
 }
 
-/** DeX with a keyboard and mouse. Everything at once: sessions, conversation, the computer. */
+/** DeX with a keyboard and mouse. Everything at once: tasks, conversation, the computer. */
 @Composable
 private fun TriplePaneLayout(
     state: BoxUiState,
-    onSelectSession: (String?) -> Unit,
-    onToggleHarness: (String) -> Unit,
-    onNewConversation: (String) -> Unit,
+    revealed: Boolean,
+    progress: BoxProgress,
+    windowWidth: Dp,
     onShowDiagnostics: () -> Unit,
+    home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
     computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize()) {
-        Column(Modifier.width(SESSION_PANE_WIDTH)) {
-            BoxTopBar(state, onShowDiagnostics)
-            SessionsPane(
-                state = state,
-                onSelectSession = { onSelectSession(it) },
-                onToggleHarness = onToggleHarness,
-                onNewConversation = onNewConversation,
-            )
+        Column(Modifier.width(homeWidth(revealed, windowWidth))) {
+            BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
+            home(Modifier.fillMaxSize(), true)
         }
         PaneDivider()
         Box(Modifier.weight(1f)) { conversation(Modifier.fillMaxSize(), null, false) }
@@ -387,6 +397,34 @@ private fun TriplePaneLayout(
         Box(Modifier.weight(0.9f).widthIn(min = COMPUTER_PANE_MIN_WIDTH)) {
             computer(Modifier.fillMaxSize(), null, false)
         }
+    }
+}
+
+/**
+ * How wide the home column is: the whole window until the box has settled, then its rail width.
+ *
+ * A big screen deserves the same treatment as the phone. Showing a 320dp column with an "Open your
+ * box" button in it, next to two panes that have nothing to show until the box is open, would be
+ * three quarters of a desktop's worth of empty and one small button — exactly the thing this
+ * change is getting rid of.
+ */
+@Composable
+private fun homeWidth(revealed: Boolean, windowWidth: Dp) =
+    animateDpAsState(
+        targetValue = if (revealed) SESSION_PANE_WIDTH else windowWidth,
+        animationSpec = tween(SETTLE_MILLIS),
+        label = "home width",
+    ).value
+
+/** Chrome that belongs to the opened box, and arrives with it. */
+@Composable
+private fun BoxChrome(visible: Boolean, content: @Composable () -> Unit) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(SETTLE_MILLIS)) + expandVertically(tween(SETTLE_MILLIS)),
+        exit = fadeOut(tween(SETTLE_MILLIS / 2)) + shrinkVertically(tween(SETTLE_MILLIS / 2)),
+    ) {
+        content()
     }
 }
 
@@ -403,12 +441,13 @@ private fun PaneDivider() {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun BoxTopBar(state: BoxUiState, onShowDiagnostics: () -> Unit) {
+private fun BoxTopBar(state: BoxUiState, progress: BoxProgress, onShowDiagnostics: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 12.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BoxMark(32.dp)
+        // The whole of the opening lives here now.
+        OpeningMark(progress, opening = state.boxStage == BoxStage.Working)
         Spacer(Modifier.width(10.dp))
         Text(
             "Box",
@@ -416,7 +455,6 @@ private fun BoxTopBar(state: BoxUiState, onShowDiagnostics: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
         )
-        StatusPill(state.runtimeState)
         IconButton(onClick = onShowDiagnostics) {
             Icon(Icons.Outlined.MoreVert, contentDescription = "Computer details")
         }
@@ -438,7 +476,7 @@ private fun BoxNavigationBar(
                 selected = selected == BoxDestination.Conversations,
                 onClick = { onSelected(BoxDestination.Conversations) },
                 icon = { Icon(Icons.Outlined.Forum, contentDescription = null) },
-                label = { Text("Conversations") },
+                label = { Text("Tasks") },
             )
             NavigationBarItem(
                 selected = selected == BoxDestination.Computer,
@@ -461,7 +499,6 @@ private fun PreviewBox(state: BoxUiState) {
             state = state,
             onDestinationSelected = {},
             onSelectSession = {},
-            onToggleHarness = {},
             onNewConversation = {},
             onSend = {},
             onInterrupt = {},
@@ -469,10 +506,8 @@ private fun PreviewBox(state: BoxUiState) {
             onOpenArtifact = {},
             onCloseSession = {},
             onSelectComputerTool = {},
-            onSetupAndStart = {},
-            onStart = {},
+            onOpenBox = {},
             onStop = {},
-            onRetry = {},
             onRunCommand = {},
             onOpenDirectory = {},
             onNavigateUp = {},
@@ -484,13 +519,22 @@ private fun PreviewBox(state: BoxUiState) {
     }
 }
 
-@Preview(name = "Phone — sessions", widthDp = 411, heightDp = 891)
+@Preview(name = "Phone — closed box", widthDp = 411, heightDp = 891)
 @Composable
-private fun PhonePreview() = PreviewBox(BoxUiState(runtimeState = RuntimeState.Ready))
+private fun PhoneClosedPreview() = PreviewBox(BoxUiState())
 
-@Preview(name = "Phone — booting", widthDp = 411, heightDp = 891)
+@Preview(name = "Phone — opening", widthDp = 411, heightDp = 891)
 @Composable
-private fun PhoneBootingPreview() = PreviewBox(BoxUiState(runtimeState = RuntimeState.Starting))
+private fun PhoneOpeningPreview() = PreviewBox(
+    BoxUiState(
+        runtimeState = RuntimeState.Connecting,
+        openingSince = SystemClock.elapsedRealtime() - 40_000L,
+    ),
+)
+
+@Preview(name = "Phone — open", widthDp = 411, heightDp = 891)
+@Composable
+private fun PhoneOpenPreview() = PreviewBox(BoxUiState(runtimeState = RuntimeState.Ready))
 
 @Preview(name = "Unfolded — two pane", widthDp = 720, heightDp = 840)
 @Composable

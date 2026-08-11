@@ -60,10 +60,8 @@ fun ComputerPane(
     state: BoxUiState,
     onBack: (() -> Unit)?,
     onSelectTool: (ComputerTool) -> Unit,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
+    onOpenBox: () -> Unit,
     onStop: () -> Unit,
-    onRetry: () -> Unit,
     onShowDiagnostics: () -> Unit,
     onRunCommand: (String) -> Unit,
     onOpenDirectory: (String) -> Unit,
@@ -92,26 +90,20 @@ fun ComputerPane(
                     state = state,
                     desktop = desktop,
                     onOpenDesktop = onTakeControl,
-                    onSetupAndStart = onSetupAndStart,
-                    onStart = onStart,
+                    onOpenBox = onOpenBox,
                     onStop = onStop,
-                    onRetry = onRetry,
                     onOpenTerminal = { onSelectTool(ComputerTool.Terminal) },
                 )
 
                 ComputerTool.Terminal -> TerminalTool(
                     state = state,
-                    onSetupAndStart = onSetupAndStart,
-                    onStart = onStart,
-                    onRetry = onRetry,
+                    onOpenBox = onOpenBox,
                     onRunCommand = onRunCommand,
                 )
 
                 ComputerTool.Files -> FilesTool(
                     state = state,
-                    onSetupAndStart = onSetupAndStart,
-                    onStart = onStart,
-                    onRetry = onRetry,
+                    onOpenBox = onOpenBox,
                     onOpenDirectory = onOpenDirectory,
                     onNavigateUp = onNavigateUp,
                     onRefresh = onRefreshFiles,
@@ -257,10 +249,8 @@ private fun ComputerOverview(
     state: BoxUiState,
     desktop: DesktopTransport?,
     onOpenDesktop: () -> Unit,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
+    onOpenBox: () -> Unit,
     onStop: () -> Unit,
-    onRetry: () -> Unit,
     onOpenTerminal: () -> Unit,
 ) {
     LazyColumn(
@@ -295,10 +285,8 @@ private fun ComputerOverview(
             RuntimeStatusCard(
                 state = state.runtimeState,
                 modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp),
-                onSetupAndStart = onSetupAndStart,
-                onStart = onStart,
+                onOpenBox = onOpenBox,
                 onStop = onStop,
-                onRetry = onRetry,
                 onOpenTerminal = onOpenTerminal,
             )
         }
@@ -397,10 +385,8 @@ fun DesktopSlot(
 private fun RuntimeStatusCard(
     state: RuntimeState,
     modifier: Modifier,
-    onSetupAndStart: () -> Unit,
-    onStart: () -> Unit,
+    onOpenBox: () -> Unit,
     onStop: () -> Unit,
-    onRetry: () -> Unit,
     onOpenTerminal: () -> Unit,
 ) {
     val presentation = statePresentation(state)
@@ -443,17 +429,17 @@ private fun RuntimeStatusCard(
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         when (state) {
-                            RuntimeState.NotProvisioned -> Button(onClick = onSetupAndStart) { Text("Set up") }
-                            RuntimeState.Stopped -> Button(onClick = onStart) { Text("Start") }
-                            RuntimeState.Suspended -> Button(onClick = onStart) { Text("Resume") }
+                            RuntimeState.NotProvisioned, RuntimeState.Stopped ->
+                                Button(onClick = onOpenBox) { Text("Open your box") }
+                            RuntimeState.Suspended -> Button(onClick = onOpenBox) { Text("Resume") }
                             RuntimeState.Starting, RuntimeState.Connecting, RuntimeState.Suspending ->
-                                TextButton(onClick = onStop) { Text("Stop startup") }
+                                TextButton(onClick = onStop) { Text("Cancel") }
                             RuntimeState.Stopping -> Unit
                             RuntimeState.Ready -> {
                                 Button(onClick = onOpenTerminal) { Text("Open terminal") }
-                                OutlinedButton(onClick = onStop) { Text("Stop") }
+                                OutlinedButton(onClick = onStop) { Text("Close") }
                             }
-                            is RuntimeState.Failed -> Button(onClick = onRetry) { Text("Try again") }
+                            is RuntimeState.Failed -> Button(onClick = onOpenBox) { Text("Try again") }
                             is RuntimeState.Provisioning -> Unit
                         }
                     }

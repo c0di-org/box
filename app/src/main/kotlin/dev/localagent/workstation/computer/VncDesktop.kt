@@ -39,7 +39,16 @@ class VncDesktop(
     override val state: StateFlow<DesktopState> = desktopState.asStateFlow()
 
     private val lock = Any()
-    private var surface: Surface? = null
+
+    /**
+     * Every view currently showing the guest, in attach order.
+     *
+     * A set rather than one surface because the same screen legitimately appears in several places
+     * at once — the box's row in the task list while the full window is open over it, or the inline
+     * pane beside a conversation on a Fold. One RFB connection feeds all of them; the cost of an
+     * extra view is one scaled blit per frame, not another framebuffer crossing the emulated link.
+     */
+    private val surfaces = LinkedHashSet<Surface>()
     private var connection: RfbConnection? = null
     private var pump: Job? = null
     private var bitmap: Bitmap? = null
@@ -50,10 +59,10 @@ class VncDesktop(
 
     override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int) {
         synchronized(lock) {
-            this.surface = surface
+            surfaces += surface
             if (pump != null) {
-                // Already streaming; the pane was just resized or recreated. Repaint into the new
-                // Surface rather than reconnecting, which would cost a full framebuffer resend.
+                // Already streaming; a view was resized, recreated, or newly opened. Repaint into
+                // it rather than reconnecting, which would cost a full framebuffer resend.
                 connection?.let { redraw(it) }
                 return
             }
@@ -62,9 +71,17 @@ class VncDesktop(
         pump = scope.launch(Dispatchers.IO) { stream() }
     }
 
-    override suspend fun detach() {
+    /**
+     * The stream outlives any one view, and only ends when the last one has gone.
+     *
+     * Closing the full window while the box's row is still on screen must not drop the connection:
+     * reconnecting costs a whole framebuffer over an emulated link, and the row would go black for
+     * as long as that takes.
+     */
+    override suspend fun detach(surface: Surface) {
         val running = synchronized(lock) {
-            surface = null
+            surfaces -= surface
+            if (surfaces.isNotEmpty()) return
             val job = pump
             pump = null
             job
@@ -190,14 +207,18 @@ class VncDesktop(
      */
     private fun redraw(rfb: RfbConnection) {
         val target = bitmap ?: return
-        val output = surface?.takeIf { it.isValid } ?: return
-        val canvas: Canvas = runCatching { output.lockCanvas(null) }.getOrNull() ?: return
-        try {
-            val destination = fit(rfb.width, rfb.height, canvas.width, canvas.height)
-            canvas.drawColor(android.graphics.Color.BLACK)
-            canvas.drawBitmap(target, null, destination, paint)
-        } finally {
-            runCatching { output.unlockCanvasAndPost(canvas) }
+        // Each view letterboxes the same bitmap into its own size, so a thumbnail and a full window
+        // are the same picture at two scales rather than two streams.
+        for (output in surfaces.toList()) {
+            if (!output.isValid) continue
+            val canvas: Canvas = runCatching { output.lockCanvas(null) }.getOrNull() ?: continue
+            try {
+                val destination = fit(rfb.width, rfb.height, canvas.width, canvas.height)
+                canvas.drawColor(android.graphics.Color.BLACK)
+                canvas.drawBitmap(target, null, destination, paint)
+            } finally {
+                runCatching { output.unlockCanvasAndPost(canvas) }
+            }
         }
     }
 
