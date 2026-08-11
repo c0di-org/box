@@ -1,0 +1,22 @@
+# The guest's one network interface.
+#
+# QEMU gives the guest a virtio-net card on slirp's user-mode network, but nothing in the image
+# ever brought it up: Debian does not enable systemd-networkd by default, and there is no DHCP
+# client in the package list. The interface sat DOWN, so every outbound request failed — which
+# stayed invisible for as long as nothing tried to reach the network.
+#
+# Matched by prefix rather than by name. The kernel calls it enp0s3 today, but that depends on the
+# PCI slot QEMU happens to put it in, and pinning the name here would fail silently the next time
+# the machine definition changes.
+
+[Match]
+Name=en*
+
+[Network]
+DHCP=ipv4
+
+[DHCPv4]
+# Slirp hands out a resolver of its own, which on Android it cannot actually forward for — see the
+# note beside /etc/resolv.conf in build-image.sh. Addressing and the default route come from DHCP;
+# name resolution deliberately does not.
+UseDNS=false

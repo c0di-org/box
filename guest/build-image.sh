@@ -55,6 +55,46 @@ install -m 0644 "$ROOT_DIR/guest/systemd/local-agentd.service" "$ROOTFS/etc/syst
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-workspace-prepare.service" "$ROOTFS/etc/systemd/system/local-agent-workspace-prepare.service"
 install -d -m 0755 "$ROOTFS/etc/modules-load.d"
 printf 'virtio_console\n' > "$ROOTFS/etc/modules-load.d/local-agent.conf"
+
+# Networking. The guest had none: the interface was never brought up, and the only resolver it had
+# was the build container's, baked in by accident.
+#
+# systemd-networkd ships inside Debian's systemd package and speaks DHCP itself, so this costs no
+# new package -- it only has to be turned on, which Debian does not do by default.
+install -d -m 0755 "$ROOTFS/etc/systemd/network"
+install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-network.network" \
+  "$ROOTFS/etc/systemd/network/10-local-agent.network"
+# Enabled by symlink rather than `systemctl enable` in a chroot, matching how local-agentd is
+# turned on above: it is the same two links the [Install] section would make, and it cannot fail
+# for want of a running systemd to talk to.
+install -d -m 0755 "$ROOTFS/etc/systemd/system/multi-user.target.wants" \
+  "$ROOTFS/etc/systemd/system/sockets.target.wants"
+ln -sf /lib/systemd/system/systemd-networkd.service \
+  "$ROOTFS/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+ln -sf /lib/systemd/system/systemd-networkd.socket \
+  "$ROOTFS/etc/systemd/system/sockets.target.wants/systemd-networkd.socket"
+test -f "$ROOTFS/lib/systemd/system/systemd-networkd.service" \
+  || { echo 'systemd-networkd is missing from the image' >&2; exit 1; }
+
+# mmdebstrap copies the build container's /etc/resolv.conf in so apt can resolve, and leaves it
+# behind. On the phone that file pointed at a Docker Engine nameserver on the build machine, so
+# every lookup in the guest went to an address that does not exist there. Overwriting it is the
+# fix, but *what* to write is a real choice:
+#
+# Slirp offers a nameserver at 10.0.2.3 and forwards it to whatever the host resolves with. It
+# finds those by reading the host's /etc/resolv.conf -- which Android does not have, so that relay
+# cannot work here. Reaching a resolver by address instead makes DNS an ordinary UDP flow that
+# slirp NATs like any other, which does work. The cost is that lookups leave the device to a third
+# party rather than following the phone's own DNS settings; 10.0.2.3 is kept last so that a
+# platform where the relay does work is still preferred over nothing.
+cat > "$ROOTFS/etc/resolv.conf" <<'EOF'
+# Written by Box's image build. See build-image.sh for why this is not slirp's own resolver.
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 10.0.2.3
+options timeout:2 attempts:1
+EOF
+chmod 0644 "$ROOTFS/etc/resolv.conf"
 ln -sf /etc/systemd/system/local-agentd.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agentd.service"
 cat > "$ROOTFS/etc/fstab" <<'EOF'
 /dev/vda / ext4 defaults 0 1
