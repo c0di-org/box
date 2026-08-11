@@ -23,6 +23,26 @@ throttles itself against the app instead of filling its heap. `AgentdClient` own
 the protocol vocabulary; `AgentdConnection` owns framing and flow control and has no
 Android dependency, so both are covered by JVM unit tests.
 
+## One VM run per process
+
+QEMU is linked into `:computer` and entered through `qemu_init`, which is
+**once-per-process**. It writes globals that `qemu_cleanup` does not undo, and the
+first of them asserts `!exec_dir[0]` — so a second run in the same process is not a
+restart, it is a `SIGABRT` that takes `:computer` with it. Stopping the computer and
+starting it again is an ordinary thing to do, and it crashed until this was handled.
+
+So the process is the unit that gets consumed. `NativeQemu.hasRun()` reports whether
+this process has spent its run, `QemuProcessLifetime` holds the rule, and
+`RuntimeService` retires the process once the VM has exited — `START_NOT_STICKY`
+means the next start simply arrives in a fresh one. The native layer also refuses a
+second `qemu_init` outright, so a mistake here surfaces as an error rather than a
+crash.
+
+The UI keeps a binding to `:computer` for the whole time the computer is meant to be
+alive, not only once it is `Ready`. That binding is the only notice Box gets when the
+VM process dies mid-startup, which is when it is most likely to; `ComputerLoss`
+decides whether a disconnect is an expected retirement or a failure worth showing.
+
 ## Current implementation state
 
 The storage/verification, agent protocol, guest-image source and isolated service

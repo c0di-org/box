@@ -53,6 +53,7 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     private val storage = RuntimeStorage(appContext)
     private val agentd = AgentdClient(storage.agentSocket)
     private val lifecycleMutex = Mutex()
+    private val processLifetime = QemuProcessLifetime()
     private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val generation = AtomicLong()
 
@@ -64,6 +65,12 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
 
     /** True when a complete verified boot set is already installed in app-private storage. */
     fun isProvisioned(): Boolean = storage.hasHeadlessBootSet() || storage.hasUefiBootSet()
+
+    /**
+     * True once this process has run its one VM and settled, so it can no longer start another.
+     * See [QemuProcessLifetime]; the caller is expected to end the process.
+     */
+    fun isSpent(state: RuntimeState): Boolean = processLifetime.isSpent(state)
 
     override suspend fun provision(): Result<Unit> = lifecycleMutex.withLock {
         if (NativeQemu.isRunning()) return@withLock Result.failure(
@@ -98,6 +105,12 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             storage.ensureDirectories()
             check(storage.hasHeadlessBootSet() || storage.hasUefiBootSet()) {
                 "No complete verified guest image is installed yet"
+            }
+            // A process that has already hosted a VM run cannot host another; see
+            // [QemuProcessLifetime]. `:computer` retires itself after a run, so reaching this is a
+            // bug rather than a user's problem — but saying so beats aborting the process.
+            check(processLifetime.canStart()) {
+                "This computer process has already been used once and must be replaced"
             }
             runtimeState.value = RuntimeState.Starting
 
