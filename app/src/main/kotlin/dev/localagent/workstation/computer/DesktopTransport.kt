@@ -38,12 +38,37 @@ sealed interface DesktopState {
 
 enum class ControlHolder { Agent, User }
 
+/**
+ * One input the guest can be told about, in guest pixels.
+ *
+ * This started as `Tap`, `Drag`, `Scroll`, `Text`, `Key` — gestures, written when the desktop was
+ * assumed to be something you poke at through a phone screen. A real mouse cannot be described that
+ * way. Most of what a mouse does is *move with no button held*: hover states, menus opening on
+ * pointer-enter, drags that begin only once a threshold is crossed. A `Tap` is already two pointer
+ * events by the time it exists, and a gesture vocabulary has no way to say "the cursor is here and
+ * nothing is pressed", which is the majority of what X11 wants to hear about.
+ *
+ * So position and button state are reported as they are, and anything higher-level is the guest's
+ * to infer — which is what it does anyway.
+ */
 sealed interface DesktopInput {
-    data class Tap(val x: Float, val y: Float) : DesktopInput
-    data class Drag(val fromX: Float, val fromY: Float, val toX: Float, val toY: Float) : DesktopInput
-    data class Scroll(val x: Float, val y: Float, val deltaY: Float) : DesktopInput
+    /** Where the pointer is, and what is held: bit 0 left, bit 1 middle, bit 2 right. */
+    data class Pointer(val x: Int, val y: Int, val buttons: Int) : DesktopInput
+
+    /** Wheel notches, positive away from the user. Sent as button presses, which is how RFB says it. */
+    data class Scroll(val x: Int, val y: Int, val notches: Int) : DesktopInput
+
+    /**
+     * One key transition, as an X11 keysym rather than an Android key code.
+     *
+     * The translation happens where the `KeyEvent` still exists, because that is the only place
+     * that knows which character the key produced under the modifiers actually held — a keyboard
+     * layout is not recoverable from a key code further down.
+     */
+    data class Key(val keysym: Int, val down: Boolean) : DesktopInput
+
+    /** A run of text, for paste and for soft keyboards that commit whole strings. */
     data class Text(val value: String) : DesktopInput
-    data class Key(val keyCode: Int, val down: Boolean) : DesktopInput
 }
 
 /**

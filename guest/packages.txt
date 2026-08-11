@@ -15,3 +15,12 @@ sudo
 systemd
 systemd-sysv
 build-essential
+xserver-xorg-core
+xserver-xorg-legacy
+xserver-xorg-input-libinput
+xinit
+x11-xserver-utils
+xfonts-base
+openbox
+xterm
+dbus-x11

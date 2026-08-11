@@ -1,0 +1,29 @@
+[Unit]
+Description=Box desktop session
+Documentation=https://github.com/garfbargle/box
+# The desktop is for the person, not for the agent — agentd does its work whether or not this ever
+# starts. So this must never be something local-agentd waits behind: it is ordered after the
+# workspace so a session opens in a directory that exists, and nothing is ordered after it.
+After=local-agent-workspace-prepare.service systemd-user-sessions.service
+Wants=local-agent-workspace-prepare.service
+
+[Service]
+# PAMName plus a TTY is what gives this a real logind session. Without one, X running as an
+# unprivileged user cannot take the DRM master on /dev/dri/card0 and dies on startup.
+User=agent
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Environment=HOME=/home/agent
+WorkingDirectory=/workspace
+# -keeptty keeps X on the VT systemd just handed us instead of hunting for a free one. -nolisten
+# tcp is belt and braces: the guest has a NAT'd user-mode network, and X should not be on it.
+ExecStart=/usr/bin/xinit /usr/bin/openbox-session -- /usr/bin/X :0 vt1 -keeptty -nolisten tcp
+# Under TCG the first start can lose a race with udev settling the GPU. Retrying is cheaper than
+# diagnosing, and a desktop that comes up thirty seconds late is not a failure worth reporting.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

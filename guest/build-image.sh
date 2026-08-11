@@ -53,9 +53,31 @@ test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent
   || { echo 'the harness installed without its linux-arm64 runtime' >&2; exit 1; }
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agentd.service" "$ROOTFS/etc/systemd/system/local-agentd.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-workspace-prepare.service" "$ROOTFS/etc/systemd/system/local-agent-workspace-prepare.service"
+install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-desktop.service" "$ROOTFS/etc/systemd/system/local-agent-desktop.service"
 install -d -m 0755 "$ROOTFS/etc/modules-load.d"
-printf 'virtio_console\n' > "$ROOTFS/etc/modules-load.d/local-agent.conf"
+printf 'virtio_console\nvirtio_gpu\n' > "$ROOTFS/etc/modules-load.d/local-agent.conf"
 ln -sf /etc/systemd/system/local-agentd.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agentd.service"
+ln -sf /etc/systemd/system/local-agent-desktop.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agent-desktop.service"
+
+# The desktop runs as `agent`, not as root, so that anything started from it writes files the agent
+# also owns — a session that produced root-owned files in /workspace would break the next agent run.
+# Debian ships X as a setuid wrapper for exactly this case; without allowed_users the wrapper
+# refuses a non-console user, and without the two device groups X cannot open the GPU or any input.
+chroot "$ROOTFS" usermod --append --groups video,input,render agent
+install -d -m 0755 "$ROOTFS/etc/X11"
+cat > "$ROOTFS/etc/X11/Xwrapper.config" <<'EOF'
+allowed_users=anybody
+needs_root_rights=yes
+EOF
+
+# openbox on its own is a grey screen and a right-click menu, which reads as a broken desktop. One
+# terminal at startup makes it obviously a working computer, and it opens on /workspace so the
+# files the agent has been working on are already there.
+install -d -m 0755 "$ROOTFS/etc/xdg/openbox"
+cat > "$ROOTFS/etc/xdg/openbox/autostart" <<'EOF'
+xsetroot -solid "#101418" &
+(cd /workspace && xterm -geometry 100x30+40+40 -fa Monospace -fs 11) &
+EOF
 cat > "$ROOTFS/etc/fstab" <<'EOF'
 /dev/vda / ext4 defaults 0 1
 /dev/vdb /workspace ext4 defaults,nofail,x-systemd.device-timeout=300s 0 2

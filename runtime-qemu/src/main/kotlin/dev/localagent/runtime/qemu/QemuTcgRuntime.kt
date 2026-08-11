@@ -103,6 +103,10 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         var nativeStarted = false
         try {
             storage.ensureDirectories()
+            // QEMU's own data files, refreshed from the APK every start. Not part of provisioning:
+            // a device that already has its disks never provisions again, and would keep whatever
+            // the build it was first installed from happened to ship.
+            storage.installQemuData()
             check(storage.hasHeadlessBootSet() || storage.hasUefiBootSet()) {
                 "No complete verified guest image is installed yet"
             }
