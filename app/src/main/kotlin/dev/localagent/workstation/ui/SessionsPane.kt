@@ -307,11 +307,11 @@ private fun HarnessesEmptyState() {
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(14.dp))
-        Text("No agents installed yet", style = MaterialTheme.typography.titleMedium)
+        Text("No agents yet", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Box runs whichever coding CLI you install in the workspace — Claude Code, Codex, " +
-                "Cursor. Install one from the terminal and it shows up here.",
+            "Box runs coding agents inside its own computer. Claude Code comes with it, so this " +
+                "screen usually means Box is still setting itself up.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
