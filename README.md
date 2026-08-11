@@ -109,14 +109,27 @@ Virtualization Framework).
 
 ## Build
 
-The guest image is an input to the APK, so build it first — see
-[guest/README.md](guest/README.md) for detail:
+Onto a phone, in one command:
+
+```bash
+./tools/deploy.sh
+```
+
+Add `--image` when anything under `guest/` changed. That rebuilds the guest image *and*
+reinstalls from scratch, because an installed device keeps its existing
+`base-system.qcow2` on purpose — so a new image is otherwise ignored with no sign that
+anything was skipped.
+
+```bash
+./tools/deploy.sh --image
+```
+
+The steps by hand, if you want them separately. The guest image is an input to the APK,
+so build it first — see [guest/README.md](guest/README.md) for detail:
 
 ```bash
 ./guest/build-container.sh
 ```
-
-Then:
 
 ```bash
 JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ./gradlew :app:assembleStockDebug
