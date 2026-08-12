@@ -143,11 +143,23 @@ agent gets the text without the picture. That is the difference from the `interr
 `stop_subagent` case, where an ignored field would have been actively wrong, and it is why a field
 is acceptable here where a new type was required there.
 
-One honest tension: belt and braces argues for also naming the guest path in the message text, so
-a harness that has never heard of attachments still receives something actionable. That is
-stringly, and the contract dislikes it. The recommendation is to do it anyway — the structured
-field stays the source of truth for rendering, the text line is purely a fallback for a harness the
-UI does not control.
+One tension, resolved rather than left open: belt and braces argues for also naming the guest path
+in the message text, so a harness that has never heard of attachments still receives something
+actionable. That is stringly, and the contract dislikes it.
+
+The reason it is worth doing anyway is narrower than "harnesses we do not control" — Box's harness
+is `guest/harness/box-claude-harness.mjs`, in this repo. What it is not is *deployed on the same
+cadence*: the harness rides in the guest image, and the image is a build input that only reaches a
+device on an update, so an app that has learned about attachments can spend a good while talking to
+a harness that has not. During that window the structured field is dropped in silence, and the
+failure it causes is the exact one this whole proposal exists to remove — the user shows the agent
+a picture and the agent is never told. One line of prose, which the agent can act on directly, is a
+cheap price for closing that.
+
+The rule to hold is that the text line is never *read back*. The structured field is the only thing
+the UI parses, renders a thumbnail from, or counts; the sentence is write-only, for an agent's eyes.
+That keeps the contract's actual concern — a UI guessing at prose — untouched. When the field has
+been in the shipped image long enough, the line can go.
 
 ---
 
