@@ -62,6 +62,7 @@ import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopTransport
@@ -90,11 +91,13 @@ fun ComputerPane(
     onStop: () -> Unit,
     onShowDiagnostics: () -> Unit,
     onRunCommand: (String) -> Unit,
+    onSelectFilesPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefreshFiles: () -> Unit,
     onOpenFile: (FileEntry) -> Unit,
     onCloseFile: () -> Unit,
+    onOpenInPhoneFiles: () -> Unit,
     chat: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
@@ -148,11 +151,13 @@ fun ComputerPane(
                     ComputerPanel.Files -> FilesTool(
                         state = state,
                         onOpenBox = onOpenBox,
+                        onSelectPlace = onSelectFilesPlace,
                         onOpenDirectory = onOpenDirectory,
                         onNavigateUp = onNavigateUp,
                         onRefresh = onRefreshFiles,
                         onOpenFile = onOpenFile,
                         onCloseFile = onCloseFile,
+                        onOpenInPhoneFiles = onOpenInPhoneFiles,
                     )
                     ComputerPanel.None -> Unit
                 }

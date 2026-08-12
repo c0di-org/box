@@ -28,6 +28,34 @@ enum class BoxDestination { Tasks, Computer }
  */
 enum class ComputerPanel { None, Chat, Terminal, Files }
 
+/**
+ * The two places files live, and the Files panel opens on the first of them.
+ *
+ * **Shared** is a real directory on the phone, published to Android, and the source of truth for
+ * everything in it. **InTheBox** is the guest's `/workspace`, reachable only while the VM is up.
+ *
+ * Shared is first because it is the one that always works. The panel used to be a single browser
+ * over the guest, which meant tapping Files on a closed box showed a progress screen and a
+ * three-minute wait — for files that were, in the shared case, sitting on the phone all along.
+ */
+enum class FilesPlace { Shared, InTheBox }
+
+/**
+ * What the last sync did, for the Shared place to say out loud.
+ *
+ * Copying files between two machines behind the user's back is the kind of feature that is either
+ * observable or spooky. [kept] is the one that has to be shown rather than counted: a `.from-box`
+ * file appearing beside the user's own is the visible half of the conflict rule, and it needs a
+ * sentence explaining why it is there.
+ */
+data class SharedSyncNote(
+    val atMillis: Long,
+    val pushedIn: Int,
+    val broughtOut: Int,
+    val kept: List<String>,
+    val trouble: List<String>,
+)
+
 data class CommandRecord(
     val id: Long,
     val command: String,
@@ -123,6 +151,13 @@ data class BoxUiState(
     val filesLoading: Boolean = false,
     val openingFilePath: String? = null,
     val openedFile: OpenedFile? = null,
+
+    // ---- the shared folder ----
+    val filesPlace: FilesPlace = FilesPlace.Shared,
+    /** Relative to the shared folder; empty at its root. Never an absolute phone path. */
+    val sharedPath: String = "",
+    val sharedFiles: List<FileEntry> = emptyList(),
+    val sharedSync: SharedSyncNote? = null,
 
     val notice: UiNotice? = null,
 ) {

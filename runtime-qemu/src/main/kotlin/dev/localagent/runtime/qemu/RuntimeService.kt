@@ -17,6 +17,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.localagent.runtime.api.ExecRequest
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.runtime.qemu.shared.SharedFolderBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +38,15 @@ class RuntimeService : Service() {
     /** A process retires once; a second settled state must not queue another kill. */
     private val retiring = AtomicBoolean(false)
     private val runtime by lazy { QemuTcgRuntime(applicationContext) }
+
+    /**
+     * The shared folder, kept level with the guest's copy of it.
+     *
+     * Driven from here because this is the process that is alive whenever the VM is — the UI is
+     * routinely killed while an agent keeps working, and that is precisely when a file the agent
+     * produced needs to reach the phone.
+     */
+    private val sharedFolder by lazy { SharedFolderBridge(applicationContext, runtime, scope) }
 
     /**
      * The UI process holds only this interface. A local Binder cannot cross `:computer`, so guest
@@ -216,6 +226,7 @@ class RuntimeService : Service() {
     }
 
     override fun onDestroy() {
+        sharedFolder.stop()
         unregisterReceiver(queryReceiver)
         super.onDestroy()
     }
@@ -268,6 +279,7 @@ class RuntimeService : Service() {
     }
 
     private fun publishState(state: RuntimeState) {
+        sharedFolder.onRuntimeState(state)
         sendBroadcast(
             Intent(ACTION_STATE)
                 .setPackage(packageName)
@@ -330,6 +342,11 @@ class RuntimeService : Service() {
      * would die with it.
      */
     private fun notifySession(sessionId: String, signal: SessionSignals.Signal) {
+        // An agent that has stopped is an agent whose files are finished being written. This is
+        // the trigger that carries anything it left in `/workspace/shared` out to the phone; see
+        // [SharedFolderBridge] for why this moment and not a poll.
+        if (signal is SessionSignals.Signal.Finished) sharedFolder.onSessionFinished()
+
         val manager = getSystemService(NotificationManager::class.java) ?: return
         manager.createNotificationChannel(
             NotificationChannel(

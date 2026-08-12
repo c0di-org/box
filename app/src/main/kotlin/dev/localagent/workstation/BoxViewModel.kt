@@ -7,8 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
+import android.database.ContentObserver
+import android.net.Uri
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -21,6 +26,7 @@ import dev.localagent.runtime.qemu.IRuntimeControl
 import dev.localagent.runtime.qemu.RuntimeService
 import dev.localagent.runtime.qemu.RuntimeStateCodec
 import dev.localagent.runtime.qemu.RuntimeStorage
+import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.FakeAgentBackend
@@ -28,12 +34,15 @@ import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.computer.ControlHolder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -96,7 +105,7 @@ class BoxViewModel @JvmOverloads constructor(
         if (readyAnnounced || mutableUiState.value.runtimeState != RuntimeState.Ready) return
         val bound = control ?: return
         readyAnnounced = true
-        // Files opens on /workspace, so fill it as soon as the guest can answer.
+        // Fill whichever place the Files panel is on as soon as the guest can answer.
         refreshFiles()
         // Whether the guest already holds a credential is only answerable once there is a guest to
         // ask. Until then the sign-in state is honestly Unknown.
@@ -156,8 +165,37 @@ class BoxViewModel @JvmOverloads constructor(
         )
         resyncRuntimeState()
         observeAgents()
+        watchSharedFolder()
         viewModelScope.launch {
             auth.state.collect { signIn -> mutableUiState.update { it.copy(signIn = signIn) } }
+        }
+    }
+
+    /**
+     * The Shared place, kept live without inventing a channel for it.
+     *
+     * The sync runs in `:computer` and tells Android's document machinery what it changed, because
+     * the phone's Files app has to be told. Listening to the same notification is free, and it is
+     * what turns "a file arrived from the box" from something the user has to go and check into
+     * something they watch happen. `true` for descendants: a file landing in a subfolder is still
+     * this folder changing.
+     */
+    private fun watchSharedFolder() {
+        runCatching {
+            getApplication<Application>().contentResolver.registerContentObserver(
+                DocumentsContract.buildChildDocumentsUri(
+                    SharedFolder.authority(getApplication()),
+                    SharedFolder.ROOT_DOCUMENT_ID,
+                ),
+                true,
+                sharedObserver,
+            )
+        }
+    }
+
+    private val sharedObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            if (mutableUiState.value.filesPlace == FilesPlace.Shared) refreshSharedFiles()
         }
     }
 
@@ -195,6 +233,7 @@ class BoxViewModel @JvmOverloads constructor(
     override fun onCleared() {
         releaseRuntime()
         getApplication<Application>().unregisterReceiver(stateReceiver)
+        runCatching { getApplication<Application>().contentResolver.unregisterContentObserver(sharedObserver) }
         super.onCleared()
     }
 
@@ -579,11 +618,17 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     fun openDirectory(path: String) {
+        if (mutableUiState.value.filesPlace == FilesPlace.Shared) return openSharedDirectory(path)
         mutableUiState.update { it.copy(currentPath = path, openedFile = null) }
         refreshFiles()
     }
 
     fun navigateUp() {
+        if (mutableUiState.value.filesPlace == FilesPlace.Shared) {
+            val here = mutableUiState.value.sharedPath
+            if (here.isEmpty()) return
+            return openSharedDirectory(here.substringBeforeLast('/', ""))
+        }
         val current = mutableUiState.value.currentPath
         if (current == "/workspace") return
         val parent = current.substringBeforeLast('/').ifBlank { "/workspace" }
@@ -591,6 +636,7 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     fun refreshFiles() {
+        if (mutableUiState.value.filesPlace == FilesPlace.Shared) return refreshSharedFiles()
         val runtime = control ?: return
         val path = mutableUiState.value.currentPath
         mutableUiState.update { it.copy(filesLoading = true) }
@@ -624,6 +670,7 @@ class BoxViewModel @JvmOverloads constructor(
 
     fun openFile(entry: FileEntry) {
         if (entry.isDirectory) return openDirectory(entry.path)
+        if (mutableUiState.value.filesPlace == FilesPlace.Shared) return openSharedFile(entry)
         val runtime = control ?: return showNotice("Box is not connected yet.")
         mutableUiState.update { it.copy(openingFilePath = entry.path) }
         runCatching {
@@ -655,6 +702,105 @@ class BoxViewModel @JvmOverloads constructor(
         mutableUiState.update { it.copy(openedFile = null) }
     }
 
+    // -----------------------------------------------------------------------
+    // The shared folder
+    // -----------------------------------------------------------------------
+
+    /**
+     * Browsing the phone's own copy, which is why none of this goes near the runtime.
+     *
+     * Reading it here rather than through `:computer` is the point of the design: these are local
+     * files, so the panel works with the box closed, mid-boot, or broken. The guest's copy is
+     * kept level by [dev.localagent.runtime.qemu.shared.SharedFolderBridge], which runs in the
+     * process that owns the VM and needs nothing from this one.
+     */
+    fun selectFilesPlace(place: FilesPlace) {
+        if (mutableUiState.value.filesPlace == place) return
+        mutableUiState.update { it.copy(filesPlace = place, openedFile = null) }
+        if (place == FilesPlace.Shared) refreshSharedFiles() else refreshFiles()
+    }
+
+    fun openSharedDirectory(relativePath: String) {
+        mutableUiState.update { it.copy(sharedPath = relativePath.trim('/'), openedFile = null) }
+        refreshSharedFiles()
+    }
+
+    fun refreshSharedFiles() {
+        val relative = mutableUiState.value.sharedPath
+        viewModelScope.launch {
+            val (entries, note) = withContext(Dispatchers.IO) {
+                val root = SharedFolder.on(getApplication())
+                val here = if (relative.isEmpty()) root else File(root, relative)
+                val listed = here.listFiles().orEmpty().map { file ->
+                    FileEntry(
+                        path = listOf(relative, file.name).filter(String::isNotEmpty).joinToString("/"),
+                        name = file.name,
+                        isDirectory = file.isDirectory,
+                        size = file.length(),
+                    )
+                }
+                listed to SharedFolder.records(getApplication()).lastOutcome()?.let { outcome ->
+                    SharedSyncNote(
+                        atMillis = outcome.atMillis,
+                        pushedIn = outcome.pushedIn.size,
+                        broughtOut = outcome.broughtOut.size,
+                        kept = outcome.kept,
+                        trouble = outcome.trouble.map { it.path },
+                    )
+                }
+            }
+            mutableUiState.update { it.copy(sharedFiles = entries, sharedSync = note) }
+        }
+    }
+
+    private fun openSharedFile(entry: FileEntry) {
+        mutableUiState.update { it.copy(openingFilePath = entry.path) }
+        viewModelScope.launch {
+            val opened = withContext(Dispatchers.IO) {
+                runCatching {
+                    val file = File(SharedFolder.on(getApplication()), entry.path)
+                    val bytes = file.readBytes()
+                    val text = bytes.toString(Charsets.UTF_8)
+                    check(!text.contains('\u0000')) { "This looks like a binary file" }
+                    val preview = text.take(MAX_PREVIEW_CHARS)
+                    OpenedFile(
+                        path = "Shared/${entry.path}",
+                        name = entry.name,
+                        content = preview,
+                        truncated = preview.length < text.length,
+                    )
+                }
+            }
+            mutableUiState.update { it.copy(openingFilePath = null) }
+            opened
+                .onSuccess { file -> mutableUiState.update { it.copy(openedFile = file) } }
+                .onFailure { error -> showNotice(error.message ?: "Box could not open that file.") }
+        }
+    }
+
+    /**
+     * Hand the folder to the phone's own Files app.
+     *
+     * Browsing here is read-only on purpose — creating, renaming and deleting already work in
+     * Files and in every Open/Save dialog, and reimplementing them inside Box would be three more
+     * surfaces to keep correct for no new ability. This button is the bridge to where those live.
+     */
+    fun openSharedInPhoneFiles() {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(
+                DocumentsContract.buildDocumentUri(
+                    SharedFolder.authority(getApplication()),
+                    SharedFolder.ROOT_DOCUMENT_ID,
+                ),
+                DocumentsContract.Document.MIME_TYPE_DIR,
+            )
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { getApplication<Application>().startActivity(intent) }
+            .onFailure {
+                showNotice("This phone has no Files app that can open the folder.")
+            }
+    }
+
     fun noticeShown() {
         mutableUiState.update { it.copy(notice = null) }
     }
@@ -665,5 +811,8 @@ class BoxViewModel @JvmOverloads constructor(
 
     private companion object {
         const val COMMAND_TIMEOUT_SECONDS = 120
+
+        /** Matches what `:computer` allows a guest preview, so the two places read the same. */
+        const val MAX_PREVIEW_CHARS = 128 * 1024
     }
 }

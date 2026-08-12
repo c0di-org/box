@@ -34,6 +34,28 @@ it corrects itself on every device.
 Credentials live under `/workspace/.config`, on the disk that survives updates, and are
 readable only by you.
 
+## `/workspace/shared` is the user's phone
+
+That folder is a real directory on the Android side, published to the phone's Files
+app and to every app's Open/Save dialog. Its contents are copied in when the box
+boots, and what you leave there is copied back out.
+
+This is the only way to hand someone a file they can actually use — open in another
+app, mail, edit, keep. Everything else you write is on a disk inside a VM that nothing
+on the phone can see, so "I've written it to /workspace/out.csv" is, to them, the same
+as not having written it. If they ask for something to take away, put it in
+`/workspace/shared` and say so.
+
+Three things about the copy, because it is deliberately not continuous:
+
+- **Their side wins.** If you and the user both changed the same file, theirs is kept
+  and yours is saved beside it as `name.from-box`. Nothing is ever deleted to settle it.
+- **Deleting here does not delete there.** The phone holds the original, so a file you
+  remove comes back on the next copy. If something should go, say so and let them
+  delete it.
+- **Timing.** What you leave there goes out when your session ends, so finish writing a
+  file before you report it as done rather than leaving it half-written and carrying on.
+
 ## You have Box's source
 
 `/usr/src/box` is the source of the app the user is running, at the exact commit it was

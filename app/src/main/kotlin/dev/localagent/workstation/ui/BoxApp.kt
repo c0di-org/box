@@ -53,6 +53,7 @@ import dev.localagent.workstation.BoxDestination
 import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
@@ -89,11 +90,13 @@ fun BoxApp(
     onOpenBox: () -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String) -> Unit,
+    onSelectFilesPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefreshFiles: () -> Unit,
     onOpenFile: (FileEntry) -> Unit,
     onCloseFile: () -> Unit,
+    onOpenInPhoneFiles: () -> Unit,
     onNoticeShown: () -> Unit,
     onDismissGreeting: () -> Unit = {},
     onShowSignIn: () -> Unit = {},
@@ -199,11 +202,13 @@ fun BoxApp(
                         onStop = onStop,
                         onShowDiagnostics = { showDiagnostics = true },
                         onRunCommand = onRunCommand,
+                        onSelectFilesPlace = onSelectFilesPlace,
                         onOpenDirectory = onOpenDirectory,
                         onNavigateUp = onNavigateUp,
                         onRefreshFiles = onRefreshFiles,
                         onOpenFile = onOpenFile,
                         onCloseFile = onCloseFile,
+                        onOpenInPhoneFiles = onOpenInPhoneFiles,
                         // No "open the computer" button on a panel that is already on it.
                         chat = { modifier -> conversation(modifier, null, false) },
                         modifier = Modifier.fillMaxSize(),
@@ -441,11 +446,13 @@ private fun PreviewBox(state: BoxUiState) {
             onOpenBox = {},
             onStop = {},
             onRunCommand = {},
+            onSelectFilesPlace = {},
             onOpenDirectory = {},
             onNavigateUp = {},
             onRefreshFiles = {},
             onOpenFile = {},
             onCloseFile = {},
+            onOpenInPhoneFiles = {},
             onNoticeShown = {},
         )
     }

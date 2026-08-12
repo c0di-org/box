@@ -18,5 +18,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            The shared folder, published to Android so it appears in the system Files app and in
+            every app's Open/Save dialog. `MANAGE_DOCUMENTS` here is a restriction, not a request:
+            it limits direct calls to the system's document machinery, which is the only caller
+            that should have them. Box neither holds that permission nor needs it — other apps
+            reach a file through the per-URI grant the user makes by picking it.
+        -->
+        <provider
+            android:name=".files.SharedFolderProvider"
+            android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 </manifest>
