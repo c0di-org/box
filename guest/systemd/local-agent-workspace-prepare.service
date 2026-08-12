@@ -7,5 +7,17 @@ Before=local-agentd.service
 [Service]
 Type=oneshot
 ExecStart=/bin/chown agent:agent /workspace /dev/virtio-ports/dev.localagent.agentd
+# The workspace disk is made empty by the image build and then kept forever, so anything
+# that must exist on it has to be created here rather than baked. 0700 because these hold
+# credentials.
+ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config
+ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config/claude
+ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config/box
+# Box's conventions live beside the credential because Claude Code reads user-level memory
+# from its config directory, which now points here. Copied from the image on every boot and
+# overwritten deliberately: the image is the source of truth, so a Box update corrects them
+# everywhere, and they cannot go stale on a device that has been installed for months.
+# Notes belonging to this particular box go in /workspace/CLAUDE.md, which is never touched.
+ExecStart=/usr/bin/install -o agent -g agent -m 0644 /usr/share/box/agent-conventions.md /workspace/.config/claude/CLAUDE.md
 RemainAfterExit=yes
 

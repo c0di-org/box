@@ -42,6 +42,14 @@ AGENT_NAME = "agentd/2"
 WORKSPACE = Path("/workspace")
 HOME = Path("/home/agent")
 
+# Claude Code keeps its credential under its config directory, which defaults to
+# ~/.claude -- and the agent's home is on the system disk, which a guest image update
+# replaces wholesale. Left there, every Box update silently signs the user out and makes
+# them redo the browser handshake, which is exactly what keeping the workspace disk across
+# updates was meant to avoid. Pointing the config directory at the workspace puts the
+# credential on the disk that survives.
+CLAUDE_CONFIG_DIR = WORKSPACE / ".config" / "claude"
+
 MAX_FRAME_PAYLOAD = 64 * 1024
 INITIAL_WINDOW_BYTES = 128 * 1024
 MAX_CONCURRENT_STREAMS = 32
@@ -151,7 +159,15 @@ def resolve_working_directory(value: str) -> Path:
 
 
 def child_environment(extra: Any) -> dict[str, str]:
-    environment = {**os.environ, "HOME": str(HOME)}
+    # Set here rather than at either call site in the app: every guest process is built
+    # from this one place, so the sign-in session and the agent session that later reads
+    # the credential cannot drift apart. A caller that genuinely needs its own config
+    # directory can still override it through `extra`.
+    environment = {
+        **os.environ,
+        "HOME": str(HOME),
+        "CLAUDE_CONFIG_DIR": str(CLAUDE_CONFIG_DIR),
+    }
     if extra is None:
         return environment
     if not isinstance(extra, dict) or not all(

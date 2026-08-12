@@ -487,7 +487,10 @@ class GuestAgentBackend(
         const val TAG = "BoxAgentBackend"
         const val WORKSPACE = "/workspace"
         const val GUEST_HOME = "/home/agent"
-        const val CREDENTIAL_PATH = "/home/agent/.box/credentials.json"
+        // On the workspace disk, not the agent's home: home is on the system disk and a
+        // guest image update replaces it, which would quietly discard the credential and
+        // make the user sign in again after every Box update.
+        const val CREDENTIAL_PATH = "/workspace/.config/box/credentials.json"
         const val BIND_TIMEOUT_MILLIS = 4_000L
 
         val HARNESS_COMMAND = arrayOf(
