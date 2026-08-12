@@ -241,9 +241,14 @@ class GuestAgentBackend(
         // Subscribe before touching the log, so nothing falls into the gap between them.
         subscribed.await()
         attach(record)
-        val log = withTimeoutOrNull(LOG_PATH_TIMEOUT_MILLIS) { record.logPath.await() }
+        // Waited for however long it takes, which on a cold phone is the three minutes the box
+        // needs to open. This used to give up after ten seconds and never come back: opening a
+        // conversation while the computer was still booting read the log zero times, and when the
+        // session finally attached the only thing left to show was whatever it said next. The
+        // history was on disk the whole time, and the transcript said "Nothing yet".
+        val log = record.logPath.await()
         gate.withLock {
-            if (log != null) emitLines(cursor.readFile(File(log)))
+            emitLines(cursor.readFile(File(log)))
             held.forEach { emitLines(cursor.accept(it.first, it.second)) }
             held.clear()
             replayed = true
@@ -484,7 +489,6 @@ class GuestAgentBackend(
         const val GUEST_HOME = "/home/agent"
         const val CREDENTIAL_PATH = "/home/agent/.box/credentials.json"
         const val BIND_TIMEOUT_MILLIS = 4_000L
-        const val LOG_PATH_TIMEOUT_MILLIS = 10_000L
 
         val HARNESS_COMMAND = arrayOf(
             "/usr/bin/node",

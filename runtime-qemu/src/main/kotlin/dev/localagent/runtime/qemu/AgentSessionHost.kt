@@ -38,8 +38,15 @@ internal class AgentSessionHost(
     private var listener: IAgentSessionCallback? = null
     private var pump: Job? = null
 
-    /** Bytes appended to the log so far. Doubles as the offset of the next chunk. */
-    private var written: Long = 0
+    /**
+     * Bytes appended to the log so far. Doubles as the offset of the next chunk.
+     *
+     * Starts at whatever the log already holds, not at zero. A session re-opened after the UI
+     * process died appends to the same file, and a fresh counter would stamp new chunks with
+     * offsets a reader has already passed — which is exactly the signal the reader uses to drop
+     * things it has seen. Every line of the resumed conversation would be discarded on arrival.
+     */
+    private var written: Long = logFile?.takeIf { it.isFile }?.length() ?: 0L
     private var ending: Ending? = null
 
     val isRunning: Boolean get() = synchronized(lock) { ending == null && session != null }
