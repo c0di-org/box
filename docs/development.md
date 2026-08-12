@@ -18,19 +18,37 @@ a device, and watching it when it doesn't come up.
 ./tools/deploy.sh
 ```
 
-Builds the APK, installs it, launches it. `--no-launch` installs only, `--wipe` drops the
-installed guest first, and `--image` rebuilds the guest image and implies `--wipe`.
+Builds the APK, installs it, launches it. `--no-launch` installs only, `--image` rebuilds
+the guest image first, and `--wipe` drops the installed guest — workspace included —
+before installing.
 
 **Use `--image` whenever anything under `guest/` changed.** The image carries a copy of
-`agentd.py` and the harness, and `RuntimeStorage` installs `base-system.qcow2` with
-`preserveExisting=true` on purpose — an app update must never wipe the user's Linux box.
-The consequence is that a rebuilt image is silently ignored on a device that already has
-one, with nothing reporting that it was skipped.
+`agentd.py` and the harness, so a stale one boots an old service against a new client.
 
-To drop the guest system disk by hand, keeping the workspace:
+`--image` no longer implies `--wipe`. Each image build writes `guest/image/out/image.json`
+describing the image, including a version derived from the payload digests, so a rebuild
+is a *different image* and the app installs it on the next start: kernel, initrd and system
+disk are replaced, and `/workspace` is kept. Only the user's disk is preserved by mere
+existence now; the rest is preserved by identity.
+
+That is the fix for a real trap. `RuntimeStorage` preserved the disks by filename, on
+purpose — an app update must never wipe the user's Linux box — which also meant a rebuilt
+image was silently skipped on any device that had one, with nothing reporting it. The
+symptom was a protocol error at the agentd handshake, minutes into a boot, and the only
+cure was uninstalling the app and losing the workspace with it.
+
+To reinstall the same image version over itself, still keeping the workspace (debug builds
+only — `RuntimeService` refuses it otherwise):
 
 ```bash
-adb shell run-as dev.localagent.workstation.stock rm -f files/computer/disks/system.qcow2
+adb shell am start -n dev.localagent.workstation.stock/dev.localagent.workstation.VmProbeActivity --es runtime_action dev.localagent.runtime.qemu.REPROVISION_IMAGE
+```
+
+Or by hand, which does the same thing the long way — the next start reinstalls whatever is
+missing:
+
+```bash
+adb shell run-as dev.localagent.workstation.stock rm -rf files/computer/images/box-minimal-claude
 ```
 
 ## By hand

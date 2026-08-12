@@ -4,17 +4,34 @@ The stock flavor uses an APK-installed, ARM64 `qemu-system-aarch64` build inside
 `RuntimeService`'s `:computer` process. It starts only after the user asks for a
 local-computer task.
 
-At provision time the app verifies the signed manifest hash for `base-system.qcow2`,
-then creates two app-private mutable qcow2 files:
+The guest image describes itself. `guest/image/out/image.json` gives it an id, a version
+derived from its payload digests, and a payload list keyed by role; the app build stages
+that manifest into the APK alongside the payloads, and provisioning installs each payload
+by role rather than by filename. Two things follow: a device can tell whether the image in
+the APK is the one it is already running, and more than one image can exist on it.
 
-| Disk | Purpose |
-| --- | --- |
-| `system-overlay.qcow2` | Guest operating-system changes and installed packages |
-| `workspace.qcow2` | Projects, repositories, and generated work |
+At provision time the app verifies each payload against the digest the manifest gives it,
+and installs it under a key taken from the image's id:
 
-The verified asset set includes the Debian kernel and initrd for direct boot. QEMU's `virt` board uses TCG. QMP and the `agentd` virtio-serial channel bind Unix
+| Path | Role | Replaced by an update? |
+| --- | --- | --- |
+| `images/<id>/kernel`, `images/<id>/initrd.img` | Direct-boot files QEMU only reads | Yes |
+| `images/<id>/installed.json` | The manifest of the last completed install | Yes |
+| `disks/<id>/system.qcow2` | Guest OS changes and installed packages | Yes, when the version differs |
+| `disks/<id>/workspace.qcow2` | Projects, repositories, and generated work | **Never** |
+
+That last row is the invariant the rest is built around: the workspace is the user's Linux
+machine, and nothing — an app update, a new image, or an explicit reinstall — replaces it
+once it exists. The version is what lets the other three be replaced without it. Versions
+of one id share a directory, so an update is an update; different ids do not, so a second
+image gets its own workspace rather than inheriting somebody else's. The rules live in
+`GuestImageInstall` and `GuestImageLayout`, which carry no Android dependency and are
+covered by JVM unit tests.
+
+QEMU's `virt` board uses TCG. QMP and the `agentd` virtio-serial channel bind Unix
 sockets below `filesDir/computer/sockets`; no control endpoint is exposed on the
-network. `QemuCommand` is the single source of truth for that launch contract.
+network. `QemuCommand` is the single source of truth for that launch contract, and takes
+the image's resolved paths rather than knowing any filenames itself.
 
 The `agentd` channel speaks [protocol v2](../protocol/agentd-v2.md): length-prefixed
 binary frames multiplexing many logical streams over that one port, so a command's

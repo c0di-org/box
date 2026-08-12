@@ -237,7 +237,11 @@ class RuntimeService : Service() {
             // Starting before the APK assets are installed is what "no verified guest image"
             // means; provisioning is part of the same user gesture.
             if (!runtime.isProvisioned()) {
-                Log.i(TAG, "Provisioning guest image")
+                // Which image, and which one it is replacing. On a device that already had a box
+                // this line is the difference between "a new version is being installed" and the
+                // old silence, where a rebuilt image was skipped with nothing said about it.
+                Log.i(TAG, "Provisioning guest image ${runtime.bundledImage()} " +
+                    "(installed: ${runtime.installedImage() ?: "none"})")
                 val provisioned = runtime.provision()
                 if (provisioned.isFailure) {
                     Log.e(TAG, "Guest provisioning failed", provisioned.exceptionOrNull())
@@ -255,14 +259,29 @@ class RuntimeService : Service() {
                 .onFailure { Log.e(TAG, "QEMU failed to stop", it) }
                 .onSuccess { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
+        if (intent?.action == ACTION_REPROVISION_IMAGE) scope.launch {
+            // Debuggable builds only, on the same reasoning as the exec probe below: the service
+            // is not exported, so only this UID can reach it either way, and the build check is
+            // what keeps a released app from carrying a "throw away the system disk" Intent.
+            //
+            // It cannot reach `/workspace` even here — that is refused in GuestImageInstall, not
+            // gated on the build — so the worst this can cost a developer is a boot.
+            if (!isDebuggable()) {
+                Log.w(TAG, "Ignoring a reprovision request in a non-debuggable build")
+                return@launch
+            }
+            Log.i(TAG, "Reinstalling guest image ${runtime.bundledImage()}, keeping the workspace")
+            runtime.reprovisionImage()
+                .onSuccess { Log.i(TAG, "Guest image reinstalled") }
+                .onFailure { Log.e(TAG, "Reinstalling the guest image failed", it) }
+        }
         if (intent?.action == ACTION_EXEC_PROBE) scope.launch {
             // A caller-supplied command, but only in a debuggable build. Verifying what the guest
             // actually did — whether a unit came up, whether a device node exists — otherwise means
             // reading a serial console that arrives in fragments and drops most of itself. The
             // service is not exported, so only this UID can reach it either way; the build check is
             // what keeps a released app from carrying a general-purpose guest shell on an Intent.
-            val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
-            val requested = if (debuggable) intent.getStringExtra(EXTRA_PROBE_COMMAND) else null
+            val requested = if (isDebuggable()) intent.getStringExtra(EXTRA_PROBE_COMMAND) else null
             val command = requested ?: "printf device-agentd-ok"
             runtime.start()
                 .onSuccess {
@@ -277,6 +296,9 @@ class RuntimeService : Service() {
         }
         return START_NOT_STICKY
     }
+
+    private fun isDebuggable(): Boolean =
+        applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
     private fun publishState(state: RuntimeState) {
         sharedFolder.onRuntimeState(state)
@@ -405,6 +427,18 @@ class RuntimeService : Service() {
         const val ACTION_START = "dev.localagent.runtime.qemu.START"
         const val ACTION_STOP = "dev.localagent.runtime.qemu.STOP"
         const val ACTION_EXEC_PROBE = "dev.localagent.runtime.qemu.EXEC_PROBE"
+
+        /**
+         * Reinstall the guest image, keeping `/workspace`. Debuggable builds only.
+         *
+         * Reachable through the debug-only VmProbeActivity, which forwards whatever action it is
+         * given, so this needs no new surface:
+         *
+         * ```
+         * adb shell am start -n dev.localagent.workstation.stock/dev.localagent.workstation.VmProbeActivity          *   --es runtime_action dev.localagent.runtime.qemu.REPROVISION_IMAGE
+         * ```
+         */
+        const val ACTION_REPROVISION_IMAGE = "dev.localagent.runtime.qemu.REPROVISION_IMAGE"
 
         /** Debuggable builds only. See the probe branch in [onStartCommand]. */
         const val EXTRA_PROBE_COMMAND = "probe_command"

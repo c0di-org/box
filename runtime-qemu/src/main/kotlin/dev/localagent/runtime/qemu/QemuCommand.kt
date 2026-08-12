@@ -5,8 +5,13 @@ package dev.localagent.runtime.qemu
  * guest management uses Unix sockets rather than LAN TCP listeners.
  */
 object QemuCommand {
+    /**
+     * The image's four files are resolved by [RuntimeStorage] from the manifest that describes
+     * them, rather than read from fixed fields here. Nothing below knows what an image is called
+     * or where it is keyed — it is handed paths.
+     */
     fun boot(storage: RuntimeStorage): List<String> =
-        if (storage.hasHeadlessBootSet()) headless(storage) else uefi(storage)
+        storage.headlessBootFiles()?.let { headless(storage, it) } ?: uefi(storage)
 
     /** Temporary compatibility boot path used by the device proof image. Production images use
      * the direct-kernel headless path below, which is smaller and boots faster. */
@@ -19,7 +24,7 @@ object QemuCommand {
         "-nographic",
         "-drive", "if=pflash,format=raw,readonly=on,file=${storage.uefiCode.absolutePath}",
         "-drive", "if=pflash,format=raw,file=${storage.uefiVars.absolutePath}",
-        "-drive", "if=none,id=system,format=qcow2,file=${storage.systemDisk.absolutePath}",
+        "-drive", "if=none,id=system,format=qcow2,file=${storage.uefiSystemDisk.absolutePath}",
         "-device", "virtio-blk-pci,drive=system,romfile=",
         "-netdev", "user,id=net0",
         "-device", "virtio-net-pci,netdev=net0,romfile=",
@@ -30,7 +35,7 @@ object QemuCommand {
         "-no-reboot",
     )
 
-    private fun headless(storage: RuntimeStorage): List<String> = listOf(
+    private fun headless(storage: RuntimeStorage, image: GuestImageFiles): List<String> = listOf(
         "qemu-system-aarch64",
         "-machine", "virt,accel=tcg,highmem=off",
         "-cpu", "cortex-a53",
@@ -60,15 +65,15 @@ object QemuCommand {
         "-display", "none",
         "-device", "virtio-gpu-pci,xres=1280,yres=800,romfile=",
         "-vnc", "unix:${storage.vncSocket.absolutePath}",
-        "-kernel", storage.kernel.absolutePath,
-        "-initrd", storage.initrd.absolutePath,
+        "-kernel", image.kernel.absolutePath,
+        "-initrd", image.initrd.absolutePath,
         // tty0 puts the kernel's own console on that screen, so a boot is watchable and a guest
         // that never reaches userspace still shows why. ttyAMA0 stays last and so stays
         // /dev/console, which is what the existing serial logging reads.
         "-append", "root=/dev/vda rw console=tty0 console=ttyAMA0",
-        "-drive", "if=none,id=system,format=qcow2,file=${storage.systemDisk.absolutePath}",
+        "-drive", "if=none,id=system,format=qcow2,file=${image.system.absolutePath}",
         "-device", "virtio-blk-pci,drive=system,romfile=",
-        "-drive", "if=none,id=workspace,format=qcow2,file=${storage.workspace.absolutePath}",
+        "-drive", "if=none,id=workspace,format=qcow2,file=${image.workspace.absolutePath}",
         "-device", "virtio-blk-pci,drive=workspace,romfile=",
         "-netdev", "user,id=net0",
         "-device", "virtio-net-pci,netdev=net0,romfile=",

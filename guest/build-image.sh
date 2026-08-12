@@ -6,6 +6,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/guest/image/out}"
 SUITE="${DEBIAN_SUITE:-bookworm}"
+
+# What this image is, as opposed to what files it happens to produce.
+#
+# The app used to know its guest as four filenames, which meant it had no way to answer the one
+# question that matters on a device that already has a box: "is this the same image?" These three
+# values plus the content hash derived at the end are that answer, and they are what lets a second
+# image -- a bare Ubuntu, a toolchain-specific one -- exist without colliding with this one.
+IMAGE_ID="${IMAGE_ID:-box-minimal-claude}"
+IMAGE_NAME="${IMAGE_NAME:-Box Minimal}"
+IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-Debian ${SUITE} arm64 with agentd, the Claude Code harness and a minimal desktop.}"
 # Raised from 4096 to fit the baked harness (~315 MB). Unused space costs almost nothing in the
 # APK: the image ships as a compressed qcow2, and empty blocks compress to nearly zero.
 IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-6144}"
@@ -231,4 +241,70 @@ mkfs.ext4 -q -L local-agent-workspace "$WORKSPACE_RAW"
 qemu-img convert -f raw -O qcow2 -c "$WORKSPACE_RAW" "$WORKSPACE_QCOW2"
 (cd "$OUT_DIR" && sha256sum "$(basename "$WORKSPACE_QCOW2")" > "$(basename "$WORKSPACE_QCOW2").sha256")
 rm "$WORKSPACE_RAW"
+
+# --- the manifest -----------------------------------------------------------------------------
+#
+# The four files above are the image; this is the description of it, and it is what the app reads
+# instead of knowing their names. Two things follow from having it.
+#
+# The first is that a payload has a *role* rather than a position. `base-system.qcow2` is the
+# system disk because it says so here, not because it is third in a list that the Gradle script
+# and RuntimeStorage had to agree on by hand.
+#
+# The second is the version, and it is the reason this file exists at all. A device that already
+# has a box preserves its disks across an app update, deliberately -- an update must never wipe
+# the user's Linux machine. Without an identity to compare, that rule also silently swallowed
+# every rebuilt image: the file was already there, so it was kept, and a changed agentd.py
+# surfaced as a protocol error at handshake rather than as anything a build could report. Making
+# the version a hash of the payloads means a rebuild always produces a new identity, so "already
+# installed" and "a different image" stop being the same answer.
+#
+# It is a content hash rather than a number somebody bumps precisely because the failure being
+# fixed is a *forgotten* step. A version that has to be remembered would be forgotten in exactly
+# the dev loop this is meant to repair. It also keeps the build reproducible: no timestamp, so two
+# builds of the same tree agree, which is the same rule BUILD-INFO follows.
+digest_of() { cut -d' ' -f1 < "$OUT_DIR/$1.sha256"; }
+bytes_of() { wc -c < "$OUT_DIR/$1" | tr -d ' '; }
+
+KERNEL_SHA="$(digest_of kernel)"
+INITRD_SHA="$(digest_of initrd.img)"
+SYSTEM_SHA="$(digest_of base-system.qcow2)"
+WORKSPACE_SHA="$(digest_of workspace.qcow2)"
+
+IMAGE_VERSION="$(printf 'kernel %s\ninitrd %s\nsystem %s\nworkspace %s\n' \
+  "$KERNEL_SHA" "$INITRD_SHA" "$SYSTEM_SHA" "$WORKSPACE_SHA" | sha256sum | cut -c1-16)"
+
+# These values are ours rather than a user's, but they still land inside a quoted JSON string, and
+# a stray quote would produce a manifest the app rejects at parse time on the device rather than
+# here. Escaping is cheaper than finding that out later.
+json_string() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+cat > "$OUT_DIR/image.json" <<EOF
+{
+  "schema": 1,
+  "id": "$(json_string "$IMAGE_ID")",
+  "version": "$IMAGE_VERSION",
+  "name": "$(json_string "$IMAGE_NAME")",
+  "description": "$(json_string "$IMAGE_DESCRIPTION")",
+  "payloads": [
+    { "role": "kernel", "file": "kernel", "sha256": "$KERNEL_SHA", "bytes": $(bytes_of kernel) },
+    { "role": "initrd", "file": "initrd.img", "sha256": "$INITRD_SHA", "bytes": $(bytes_of initrd.img) },
+    { "role": "system", "file": "base-system.qcow2", "sha256": "$SYSTEM_SHA", "bytes": $(bytes_of base-system.qcow2) },
+    { "role": "workspace", "file": "workspace.qcow2", "sha256": "$WORKSPACE_SHA", "bytes": $(bytes_of workspace.qcow2) }
+  ],
+  "contains": {
+    "desktop": true,
+    "harnesses": [
+      {
+        "id": "claude-code",
+        "name": "Claude Code",
+        "entry": "/opt/local-agent/harness/box-claude-harness.mjs"
+      }
+    ],
+    "source": { "commit": "$BOX_COMMIT", "path": "/usr/src/box" }
+  }
+}
+EOF
+
 echo "Created $QCOW2"
+echo "Image $IMAGE_ID@$IMAGE_VERSION described in $OUT_DIR/image.json"

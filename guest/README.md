@@ -31,6 +31,7 @@ Output lands in `guest/image/out/`:
 
 | file | what it is |
 | --- | --- |
+| `image.json` | what this image is: id, version, payload roles, what it contains |
 | `base-system.qcow2` | the read-only Debian rootfs (~425 MB) |
 | `kernel`, `initrd.img` | extracted from the guest's `linux-image-arm64` |
 | `workspace.qcow2` | an empty ext4 workspace disk |
@@ -41,9 +42,31 @@ Output lands in `guest/image/out/`:
 boots an old service against a new client — which fails as a protocol error at
 handshake, not as an obvious build error.
 
-`app/build.gradle.kts`'s `prepareStockGuestAssets` re-hashes every payload and fails
-the build on any mismatch with its `.sha256`, so a half-copied or stale image cannot
-silently ship. That check is the reason the build script regenerates the checksums
+### What `image.json` is for
+
+Nothing else names these files. `app/build.gradle.kts` reads the manifest for its payload
+list, and `RuntimeStorage` installs each payload by *role* — `kernel`, `initrd`, `system`,
+`workspace` — rather than by position in a list that three places had to agree on by hand.
+
+The `version` is a hash of the four payload digests, which makes it the answer to the one
+question a device with a box already on it needs to ask: is this the same image? It has to
+be derived rather than bumped, because the failure it fixes is a forgotten step — a version
+somebody had to remember to raise would be forgotten in exactly the loop this repairs. It
+carries no timestamp, so two builds of the same tree agree, the same rule `BUILD-INFO`
+follows.
+
+`id` is the machine rather than the build of it, and it is the directory an image installs
+into on the device. Two ids can sit on a phone at once, each with its own `/workspace`;
+two versions of one id are the same machine updated, and share it.
+
+`contains` is what an image advertises — a desktop, which harnesses and where. Nothing
+reads it yet. It is written now so that images already on devices can answer the question
+when something finally asks.
+
+`app/build.gradle.kts`'s `prepareStockGuestAssets` re-hashes every payload and fails the
+build on any mismatch with its `.sha256` *or* with the digest in `image.json`, so a
+half-copied or stale image cannot silently ship, and the two halves of a build cannot come
+from different images. That check is the reason the build script regenerates the checksums
 itself rather than leaving them to be written by hand.
 
 `guest/image/out/` is gitignored and must stay that way — `base-system.qcow2` is well
@@ -73,7 +96,7 @@ docker run --rm --platform linux/arm64 --privileged -v "$PWD:/workspace" \
   -e OUT_DIR=/workspace/guest/image/out-new local-agent-guest-builder
 ```
 
-Release images are built in a locked ARM64 CI container and published with a
-versioned manifest and SHA-256. Mutable `system-overlay.qcow2` and `workspace.qcow2`
-disks are created on the Android device during provisioning and are never replaced by
-base-image updates.
+Release images are built in a locked ARM64 CI container and published with their
+`image.json` and per-payload SHA-256 files. On the device, the system disk is replaced
+whenever the installed version differs from the one in the APK; the `workspace.qcow2`
+beside it is created once and is never replaced by an image update.

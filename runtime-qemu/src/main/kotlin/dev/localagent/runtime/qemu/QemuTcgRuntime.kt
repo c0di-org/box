@@ -63,8 +63,20 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
 
     override fun state(): StateFlow<RuntimeState> = runtimeState.asStateFlow()
 
-    /** True when a complete verified boot set is already installed in app-private storage. */
-    fun isProvisioned(): Boolean = storage.hasHeadlessBootSet() || storage.hasUefiBootSet()
+    /**
+     * True when the image this APK carries is already installed, exactly.
+     *
+     * Not merely "some boot set exists", which is what this used to mean and why a rebuilt guest
+     * image never reached a device that had one. A newer version of the same image now reads as
+     * not provisioned, so the ordinary start path installs it — and because only the image-owned
+     * payloads are replaced, the user's `/workspace` comes through untouched.
+     */
+    fun isProvisioned(): Boolean = storage.isImageUpToDate() || storage.hasUefiBootSet()
+
+    /** What is installed and what the APK would install, for logs and eventually for the UI. */
+    fun installedImage(): GuestImageIdentity? = storage.installedIdentity()
+
+    fun bundledImage(): GuestImageIdentity? = storage.bundledIdentity()
 
     /**
      * True once this process has run its one VM and settled, so it can no longer start another.
@@ -90,6 +102,35 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             throw cancelled
         } catch (error: Exception) {
             fail("Guest provisioning failed", error)
+        }
+    }
+
+    /**
+     * Reinstalls the image over itself, keeping the user's `/workspace`.
+     *
+     * Separate from [provision] because it is the destructive one: provisioning asks "what is
+     * missing or out of date", this asserts "replace it regardless". The system disk and the
+     * workspace have always been two qcow2 files on two virtio-blk devices, so keeping one while
+     * discarding the other costs nothing structural — it only ever needed to be sayable.
+     */
+    suspend fun reprovisionImage(): Result<Unit> = lifecycleMutex.withLock {
+        if (NativeQemu.isRunning()) return@withLock Result.failure(
+            IllegalStateException("Stop the Linux workspace before reinstalling its image"),
+        )
+        try {
+            runtimeState.value = RuntimeState.Provisioning(0f)
+            withContext(Dispatchers.IO) {
+                storage.reprovisionImage { progress ->
+                    runtimeState.value = RuntimeState.Provisioning(progress.coerceIn(0f, 1f))
+                }
+            }
+            runtimeState.value = RuntimeState.Stopped
+            Result.success(Unit)
+        } catch (cancelled: CancellationException) {
+            runtimeState.value = RuntimeState.NotProvisioned
+            throw cancelled
+        } catch (error: Exception) {
+            fail("Reinstalling the guest image failed", error)
         }
     }
 
