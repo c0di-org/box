@@ -219,7 +219,7 @@ doc comment contains the warning that should govern this whole proposal:
 reasons that apply with more force here — the agent holds its answer for a whole session, so a
 stale one lasts longer than a stale layout does.
 
-Send the same window-derived facts the UI uses, and re-send them when they change:
+Send the window-derived facts the UI already computes, and re-send them when they change:
 
 ```json
 {"type": "viewport", "layout": "wide", "widthDp": 1280, "hardwareKeyboard": true}
@@ -236,6 +236,20 @@ dense output, long commands and wide tables when there is a keyboard and 1280dp;
 fewer scrolls and tappable next steps on a compact window. `hardwareKeyboard` is worth carrying
 separately from width because it changes what is reasonable to ask the *user* to type, which
 width alone does not tell you.
+
+**`hardwareKeyboard` is the one field here that does not exist yet**, and it is worth being exact
+about why. `rememberBoxLayout` derives `Single`/`Wide` from the window's width and nothing else, so
+`layout` and `widthDp` are a straight read of what the UI already knows. A keyboard fact is not in
+there and cannot be: it comes from `Configuration.keyboard` / `keyboardHidden`, which is device
+state, which is the category this proposal just spent a paragraph refusing to send.
+
+The distinction that makes it acceptable is *re-sent*, not *derived*. What the contract rejected is
+a fact told once and believed for a session — "this is a DeX device" — and `hardwareKeyboard`
+arriving on every config change is no more stale than `widthDp` is. It is a keyboard being
+*attached right now*, not a device type. So: derive it from `Configuration`, send it through the
+same command, and let it change. If that feels like too much for a first cut, drop the field and
+ship `layout` and `widthDp` alone — they are free, and an agent that knows the window is 1280dp
+wide has already guessed most of what the keyboard would have told it.
 
 Cheap to send, changes every message.
 
