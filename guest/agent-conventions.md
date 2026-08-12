@@ -137,5 +137,16 @@ Debian Bookworm with `git`, `curl`, `python3`, `nodejs`/`npm`, `build-essential`
 X session running openbox — that desktop is what the user sees when they tap **Open
 computer**, and files you leave on it are visible to them.
 
+You can see it too. `scrot` is installed and `DISPLAY` is already set for you, so
+
+```bash
+scrot /tmp/screen.png          # for your own eyes: did that window draw what I expected?
+scrot /workspace/shared/screen.png   # to show the user, since shared is their phone
+```
+
+is the difference between building a GUI blind and looking at it. Sight only — there is no
+`xdotool`, so you can watch that desktop but not drive it, and anything that needs clicking
+still needs the person.
+
 There is no JDK, no Android SDK, and no Docker, so this box cannot build the Box app
 itself. Read and patch the source freely; leave building and deploying to the host.
