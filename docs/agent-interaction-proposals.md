@@ -117,9 +117,15 @@ discovered later:
 - **Their side wins on conflict**, so a name collision keeps the phone's copy and parks the other
   as `name.from-box`. Attachments should be named to avoid the question entirely — timestamp or
   content hash prefix, not `screenshot.png`.
-- **Deleting is one-way.** A file the guest removes comes back on the next copy. So the agent must
-  never "clean up" the inbox, and anything sensitive that went through it has to be deleted by the
-  user on the phone side.
+- **Deleting is one-way in both directions**, and this is the bullet to get right. A file the
+  guest removes comes back on the next copy, because the phone is the source of truth — so the
+  agent must never "clean up" the inbox. But a file the *user* deletes is the mirror image: the
+  box keeps its copy and simply stops carrying it out (`SharedSync.plan`, the `onPhone == null &&
+  inBox != null` case). **Deleting an attachment on the phone does not remove it from the box.**
+  There is no user-facing way to unsend one, which matters more for an inbox than anywhere else in
+  the shared folder — an inbox is exactly where someone puts a thing they might want back. The UI
+  copy has to say so at the point of attaching, and the retraction path is either its own proposal
+  or an accepted limitation, but it cannot be left implied.
 
 ### Contract impact
 
