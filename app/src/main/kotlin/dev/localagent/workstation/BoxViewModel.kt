@@ -25,6 +25,7 @@ import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
+import dev.localagent.workstation.agent.PermissionMode
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.computer.ControlHolder
@@ -364,10 +365,31 @@ class BoxViewModel @JvmOverloads constructor(
 
     fun resolvePermission(requestId: String, decision: PermissionDecision) {
         val sessionId = mutableUiState.value.selectedSessionId ?: return
-        if (decision is PermissionDecision.AllowAlways) {
-            mutableUiState.update { it.copy(alwaysAllowed = it.alwaysAllowed + decision.scope) }
-        }
         viewModelScope.launch { agents.resolvePermission(sessionId, requestId, decision) }
+        if (decision !is PermissionDecision.AllowAlways) return
+
+        mutableUiState.update { it.copy(alwaysAllowed = it.alwaysAllowed + decision.scope) }
+        // "Always" has to mean the ones already on screen too. A turn that asks twice about the same
+        // scope raises both before either is answered, so widening the rule and then only checking
+        // asks that arrive *later* leaves its own sibling sitting there blocked — which reads exactly
+        // like the button having done nothing.
+        val alsoCovered = mutableUiState.value.transcript?.pendingPermissions.orEmpty()
+            .filter { it.requestId != requestId && it.ask.alwaysAllowScope == decision.scope }
+        viewModelScope.launch {
+            alsoCovered.forEach { agents.resolvePermission(sessionId, it.requestId, decision) }
+        }
+    }
+
+    /**
+     * Asks the harness to change how much it asks about.
+     *
+     * Nothing is updated here: the mode belongs to the running harness and comes back as an event,
+     * so a control that could not reach the guest visibly stays where it was instead of claiming a
+     * change the agent never made.
+     */
+    fun setPermissionMode(mode: PermissionMode) {
+        val sessionId = mutableUiState.value.selectedSessionId ?: return
+        viewModelScope.launch { agents.setPermissionMode(sessionId, mode) }
     }
 
     fun interruptSession() {

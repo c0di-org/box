@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +68,7 @@ import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.CodeLanguage
 import dev.localagent.workstation.agent.HarnessDescriptor
+import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionOutcome
 import dev.localagent.workstation.agent.TaskItem
@@ -90,6 +93,8 @@ fun TranscriptRow(
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
     onStopSubAgent: (String) -> Unit,
+    onPermissionDecision: (String, PermissionDecision) -> Unit,
+    onReviewPermission: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (item) {
@@ -97,11 +102,14 @@ fun TranscriptRow(
         is TranscriptItem.Agent -> AgentProse(item, harness, modifier)
         is TranscriptItem.Thinking -> ThinkingBlock(item, modifier)
         is TranscriptItem.Tool -> ToolCard(item, modifier)
-        is TranscriptItem.SubAgent ->
-            SubAgentCard(item, onOpenArtifact, onRetry, onStopSubAgent, modifier)
+        is TranscriptItem.SubAgent -> SubAgentCard(
+            item, onOpenArtifact, onRetry, onStopSubAgent,
+            onPermissionDecision, onReviewPermission, modifier,
+        )
         is TranscriptItem.Diff -> DiffCard(item, modifier)
         is TranscriptItem.Checklist -> ChecklistCard(item, modifier)
-        is TranscriptItem.Permission -> PermissionRecord(item, modifier)
+        is TranscriptItem.Permission ->
+            PermissionRecord(item, onPermissionDecision, onReviewPermission, modifier)
         is TranscriptItem.Artifacts -> ArtifactRow(item, onOpenArtifact, modifier)
         is TranscriptItem.Error -> ErrorCard(item, onRetry, modifier)
         is TranscriptItem.Ended -> EndedRow(item, modifier)
@@ -336,6 +344,8 @@ private fun SubAgentCard(
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
     onStop: (String) -> Unit,
+    onPermissionDecision: (String, PermissionDecision) -> Unit,
+    onReviewPermission: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Open while it is working, because a card that hides live work is a spinner with a chevron.
@@ -448,6 +458,8 @@ private fun SubAgentCard(
                             onOpenArtifact = onOpenArtifact,
                             onRetry = onRetry,
                             onStopSubAgent = onStop,
+                            onPermissionDecision = onPermissionDecision,
+                            onReviewPermission = onReviewPermission,
                         )
                     }
                 }
@@ -590,11 +602,29 @@ private fun ChecklistRow(task: TaskItem) {
 // Permission, artifacts, errors
 // ---------------------------------------------------------------------------
 
+/**
+ * A permission moment in the transcript: a one-line record once it is answered, and a card you can
+ * answer *from* while it is not.
+ *
+ * The inline answer is not a shortcut for the sheet — it is what makes several of these possible at
+ * once. A turn that asks for two commands blocks on both, and one modal can only ever be about one
+ * of them; the second sat in the transcript as a line of text saying it was waiting, with nothing
+ * anywhere that could answer it. Each card now carries its own decision, so they can be answered in
+ * any order, and the row itself opens the sheet for whoever wants the full diff first.
+ */
 @Composable
-private fun PermissionRecord(item: TranscriptItem.Permission, modifier: Modifier = Modifier) {
+private fun PermissionRecord(
+    item: TranscriptItem.Permission,
+    onDecision: (String, PermissionDecision) -> Unit,
+    onReview: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val decision = item.decision
+    if (decision == null) {
+        PendingPermissionCard(item, onDecision, onReview, modifier)
+        return
+    }
     val (label, tint) = when (decision) {
-        null -> "Waiting for your decision" to MaterialTheme.colorScheme.tertiary
         PermissionDecision.Allow -> "You allowed this" to MaterialTheme.colorScheme.primary
         is PermissionDecision.AllowAlways ->
             "You allowed ${decision.scope}" to MaterialTheme.colorScheme.primary
@@ -615,6 +645,90 @@ private fun PermissionRecord(item: TranscriptItem.Permission, modifier: Modifier
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+@Composable
+private fun PendingPermissionCard(
+    item: TranscriptItem.Permission,
+    onDecision: (String, PermissionDecision) -> Unit,
+    onReview: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tint = MaterialTheme.colorScheme.tertiary
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = tint.copy(alpha = 0.09f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.45f)),
+    ) {
+        Column(Modifier.padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickable { onReview(item.requestId) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Lock, null, Modifier.size(16.dp), tint = tint)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        item.ask.headline,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    askOneLiner(item.ask)?.let { detail ->
+                        Text(
+                            detail,
+                            fontFamily = if (item.ask is PermissionAsk.RunCommand) {
+                                FontFamily.Monospace
+                            } else {
+                                FontFamily.Default
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                RowChevron()
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Widening the rule is a decision about the future, so it stays a quiet text
+                // button even here, where the other two are the obvious things to press.
+                item.ask.alwaysAllowScope?.let { scope ->
+                    TextButton(
+                        onClick = { onDecision(item.requestId, PermissionDecision.AllowAlways(scope)) },
+                    ) {
+                        Text("Always", fontSize = 13.sp)
+                    }
+                }
+                TextButton(onClick = { onDecision(item.requestId, PermissionDecision.Deny) }) {
+                    Text("Deny", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.width(2.dp))
+                Button(
+                    onClick = { onDecision(item.requestId, PermissionDecision.Allow) },
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+                ) {
+                    Text("Allow", fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+/** Enough of the ask to answer a familiar one without opening the sheet for the whole story. */
+private fun askOneLiner(ask: PermissionAsk): String? = when (ask) {
+    is PermissionAsk.RunCommand -> ask.command
+    is PermissionAsk.EditFile -> ask.diff.path
+    is PermissionAsk.NetworkAccess -> ask.purpose ?: ask.host
+    is PermissionAsk.Generic -> ask.description
 }
 
 @Composable

@@ -231,6 +231,18 @@ class HarnessWireTest {
     }
 
     @Test
+    fun `a mode this build cannot read falls back to asking about everything`() {
+        val accepting = parse("""{"type":"permission_mode","mode":"accept_edits"}""")
+            as AgentEvent.PermissionModeChanged
+        val future = parse("""{"type":"permission_mode","mode":"telepathy"}""")
+            as AgentEvent.PermissionModeChanged
+
+        assertEquals(PermissionMode.AcceptEdits, accepting.mode)
+        // The wrong guess here is the one that stops asking, so an unknown mode is never that.
+        assertEquals(PermissionMode.Ask, future.mode)
+    }
+
+    @Test
     fun `an error carries its detail and whether the session can continue`() {
         val event = parse(
             """{"type":"error","message":"Not signed in","detail":"Add a key","recoverable":false}""",

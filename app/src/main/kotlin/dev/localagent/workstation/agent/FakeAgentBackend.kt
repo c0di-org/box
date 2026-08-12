@@ -38,6 +38,9 @@ class FakeAgentBackend(
     private val scripts = ConcurrentHashMap<String, Job>()
     private val awaitingDecision = ConcurrentHashMap<String, CompletableDeferred<PermissionDecision>>()
 
+    /** How much each scripted session asks about. The scripts honour it, or the control would lie. */
+    private val modes = ConcurrentHashMap<String, PermissionMode>()
+
     /** Scripted sub-agents still running, by session and id, so one can be stopped on its own. */
     private val subAgents = ConcurrentHashMap<Pair<String, String>, Job>()
 
@@ -132,6 +135,20 @@ class FakeAgentBackend(
         decision: PermissionDecision,
     ) {
         awaitingDecision.remove(requestId)?.complete(decision)
+    }
+
+    override suspend fun setPermissionMode(sessionId: String, mode: PermissionMode) {
+        modes[sessionId] = mode
+        // Echoed as an event exactly as the harness does it, so the control is reading the same
+        // source of truth in the demo as it does against a real guest.
+        emit(
+            AgentEvent.PermissionModeChanged(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                mode = mode,
+            ),
+        )
     }
 
     override suspend fun interrupt(sessionId: String) {
@@ -293,6 +310,14 @@ class FakeAgentBackend(
         )
     }
 
+    /** Whether the session's mode covers this ask without troubling the user. */
+    private fun answersItself(sessionId: String, ask: PermissionAsk): Boolean =
+        when (modes[sessionId] ?: PermissionMode.Ask) {
+            PermissionMode.Ask -> false
+            PermissionMode.AcceptEdits -> ask is PermissionAsk.EditFile
+            PermissionMode.Auto -> true
+        }
+
     /**
      * Ends a scripted sub-agent the way a real stop ends one: cancelled, and said out loud.
      *
@@ -378,7 +403,13 @@ class FakeAgentBackend(
                 ask = ask,
             ),
         )
-        touch(sessionId, SessionStatus.NeedsYou("Waiting for approval"))
+        // A mode that skips the sheet still leaves the ask in the transcript, then answers it — the
+        // record of what was allowed on the user's behalf is the point of the mode, not a detail.
+        if (answersItself(sessionId, ask)) {
+            scope.launch { resolvePermission(sessionId, requestId, PermissionDecision.Allow) }
+        } else {
+            touch(sessionId, SessionStatus.NeedsYou("Waiting for approval"))
+        }
         val decision = gate.await()
         emit(
             AgentEvent.PermissionResolved(
@@ -577,6 +608,35 @@ class FakeAgentBackend(
                 "to read the runtime module while I go through what the docs already cover.",
         )
         beat(300)
+
+        // Two asks at once, neither blocking the script — the shape a parallel turn actually has,
+        // and the one that used to lose a request. The run carries on while both wait, so the demo
+        // has two answerable cards on screen at the same time.
+        val checks = listOf(
+            "git -C /workspace/src/box status --porcelain" to "See what is already modified",
+            "./gradlew :runtime-api:dependencies" to "Check what the module exposes",
+        )
+        checks.forEach { (command, why) ->
+            scope.launch {
+                val decision = ask(
+                    sessionId,
+                    PermissionAsk.RunCommand(
+                        command = command,
+                        workingDirectory = "/workspace/src/box",
+                        rationale = why,
+                    ),
+                )
+                if (decision is PermissionDecision.Deny || decision is PermissionDecision.Abandoned) return@launch
+                tool(
+                    sessionId = sessionId,
+                    call = ToolCall.Shell(command, "/workspace/src/box"),
+                    output = listOf("(nothing to report)"),
+                    outcome = ToolOutcome.Success(summary = "clean"),
+                    stepMillis = 300,
+                )
+            }
+        }
+        beat(400)
 
         val subAgentId = "a-${ids.incrementAndGet()}"
         emit(

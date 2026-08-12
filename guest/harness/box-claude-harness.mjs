@@ -144,6 +144,9 @@ function handleCommand(line) {
     case 'interrupt':
       if (activeQuery) activeQuery.interrupt().catch(() => {});
       break;
+    case 'set_permission_mode':
+      setPermissionMode(String(command.mode ?? 'ask')).catch(() => {});
+      break;
     case 'stop_subagent':
       // Its own command rather than an `interrupt` carrying a sub-agent id, because an older
       // harness reads an unknown field while obeying the type it knows — and would stop the whole
@@ -332,6 +335,57 @@ function describeAsk(name, input = {}) {
 }
 
 // ---------------------------------------------------------------- permissions
+
+/**
+ * Box's three modes, in the SDK's own names.
+ *
+ * `auto` is a model classifier that approves what it judges safe and escalates the rest — not
+ * `bypassPermissions`, which turns the whole gate off and which Box does not offer from a phone.
+ */
+const PERMISSION_MODES = {
+  ask: 'default',
+  accept_edits: 'acceptEdits',
+  auto: 'auto',
+};
+
+/** What the harness currently asks about, echoed to the app so the control cannot drift from it. */
+let permissionMode = 'ask';
+
+/**
+ * Changes the mode, and only claims to have changed it once the harness agrees.
+ *
+ * `setPermissionMode` needs streaming input, which is how this harness always runs. An unknown mode
+ * is ignored rather than guessed at: the wrong guess here is the one that stops asking.
+ */
+async function setPermissionMode(mode) {
+  const sdkMode = PERMISSION_MODES[mode];
+  if (!sdkMode) {
+    diagnostic(`unknown permission mode ${mode}`);
+    return;
+  }
+  if (!activeQuery || typeof activeQuery.setPermissionMode !== 'function') {
+    emit({
+      type: 'error',
+      message: 'Box could not change what the agent asks about.',
+      detail: 'The installed agent does not support changing permission mode mid-session.',
+      recoverable: true,
+    });
+    return;
+  }
+  try {
+    await activeQuery.setPermissionMode(sdkMode);
+  } catch (error) {
+    emit({
+      type: 'error',
+      message: 'Box could not change what the agent asks about.',
+      detail: clip(String(error?.message ?? error), 512),
+      recoverable: true,
+    });
+    return;
+  }
+  permissionMode = mode;
+  emit({ type: 'permission_mode', mode });
+}
 
 let nextRequestId = 0;
 
@@ -746,6 +800,9 @@ async function main() {
   }
 
   emit({ type: 'session_started', cwd, harness: 'claude-code' });
+  // Said out loud at the start, so the control in the composer begins by reporting the guest's
+  // actual mode rather than the app's assumption about it.
+  emit({ type: 'permission_mode', mode: permissionMode });
 
   activeQuery = query({
     prompt: prompts(),

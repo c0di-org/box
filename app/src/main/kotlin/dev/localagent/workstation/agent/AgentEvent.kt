@@ -142,8 +142,12 @@ sealed interface AgentEvent {
     // ---- permission --------------------------------------------------------
 
     /**
-     * The agent is blocked until the user answers. Exactly one request is outstanding at a time;
-     * the UI raises [PermissionSheet] and refuses to send new input until it resolves.
+     * The agent is blocked on this one until the user answers.
+     *
+     * **Several can be outstanding at once.** An agent that asks for two commands in one turn
+     * blocks on both, and they are answered independently and in any order. Box used to assume one
+     * — the transcript kept a single slot — so a second request evicted the first, and answering
+     * the one on screen left the other blocked forever with nothing left that could raise it.
      */
     data class PermissionRequested(
         override val eventId: String,
@@ -174,6 +178,19 @@ sealed interface AgentEvent {
         val planId: String,
         val items: List<TaskItem>,
         override val subAgentId: String? = null,
+    ) : AgentEvent
+
+    /**
+     * The harness confirming how much it will ask about from here on.
+     *
+     * Emitted when the mode is set and once when a session starts, so the control in the composer
+     * is showing the guest's answer rather than this process's guess.
+     */
+    data class PermissionModeChanged(
+        override val eventId: String,
+        override val sessionId: String,
+        override val at: Long,
+        val mode: PermissionMode,
     ) : AgentEvent
 
     /** What the agent is doing right now. Drives the session-list dot and the composer state. */
@@ -348,6 +365,25 @@ sealed interface PermissionDecision {
 
     /** The session ended or the user backed out without answering. */
     data object Abandoned : PermissionDecision
+}
+
+/**
+ * How much the agent has to ask about.
+ *
+ * Not a preference stored in the app: it is state inside the running harness, so it arrives as
+ * [AgentEvent.PermissionModeChanged] like anything else the agent does. That way the control shows
+ * what the guest is *actually* doing rather than what this process last remembered asking for, and
+ * it survives Android killing the UI mid-session.
+ */
+enum class PermissionMode {
+    /** Every edit, command and request raises a sheet. The default, and the only one Box assumes. */
+    Ask,
+
+    /** File edits go through; commands and network still ask. */
+    AcceptEdits,
+
+    /** The harness decides for itself, and only escalates what it judges risky. */
+    Auto,
 }
 
 // ---------------------------------------------------------------------------

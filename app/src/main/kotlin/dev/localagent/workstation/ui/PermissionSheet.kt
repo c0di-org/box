@@ -65,6 +65,11 @@ import dev.localagent.workstation.agent.PermissionDecision
  *    it is the only button here that changes future behaviour.
  *  - The evidence is scrollable but the decision buttons are pinned, so a long diff can never
  *    push the choice off screen or invite a blind tap.
+ *
+ * It is about one request at a time, which is not the same as there being only one: a turn can block
+ * on two tools at once. The sheet takes the oldest and says how many are behind it, and each request
+ * also carries its own inline decision in the transcript, so nothing depends on this modal being the
+ * only way to answer.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +78,8 @@ fun PermissionSheet(
     harnessName: String?,
     onDecision: (PermissionDecision) -> Unit,
     onDismiss: () -> Unit,
+    /** How many other requests are blocked behind this one. */
+    alsoWaiting: Int = 0,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -83,6 +90,22 @@ fun PermissionSheet(
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 26.dp)) {
             PermissionHeader(pending.ask, harnessName)
+            if (alsoWaiting > 0) {
+                // One turn can block on several tools at once. Saying so is the difference between
+                // "answer this" and "answer this, then the next one arrives" — and it stops the
+                // sheet reappearing from looking like a bug.
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (alsoWaiting == 1) {
+                        "One more request is waiting behind this one."
+                    } else {
+                        "$alsoWaiting more requests are waiting behind this one."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
             Spacer(Modifier.height(16.dp))
 
             Box(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {

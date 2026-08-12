@@ -20,7 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** A stub SDK that asks permission once, then reports what it was told. */
 const STUB_SDK = `
 export function query({ prompt, options }) {
-  return (async function* () {
+  const stream = (async function* () {
     yield { type: 'system', subtype: 'init', session_id: 's1', cwd: options.cwd, tools: [] };
 
     // Drain the first prompt so streaming-input mode behaves like the real thing.
@@ -51,6 +51,12 @@ export function query({ prompt, options }) {
     };
     yield { type: 'result', subtype: 'success', result: 'done', num_turns: 1 };
   })();
+  // Echoed to stderr so a test can see which name the harness reached for: Box's three modes are
+  // its own vocabulary, and the mapping to the SDK's is the part that can silently be wrong.
+  stream.setPermissionMode = async (mode) => {
+    process.stderr.write('[stub] setPermissionMode ' + mode + '\\n');
+  };
+  return stream;
 }
 `;
 
@@ -72,7 +78,7 @@ function stubbedHarness() {
 }
 
 /** Runs the harness, answering the first permission request with `decision`. */
-function runSession(decision) {
+function runSession(decision, onStarted = null) {
   const { root, harness } = stubbedHarness();
   const child = spawn(process.execPath, [harness], {
     cwd: root,
@@ -86,12 +92,17 @@ function runSession(decision) {
   });
 
   const events = [];
+  let diagnostics = '';
+  child.stderr.on('data', (chunk) => { diagnostics += String(chunk); });
   return new Promise((resolve, reject) => {
     child.stdin.write(JSON.stringify({ type: 'prompt', text: 'clone it' }) + '\n');
     const reader = createInterface({ input: child.stdout });
     reader.on('line', (line) => {
       const event = JSON.parse(line);
       events.push(event);
+      if (event.type === 'session_started' && onStarted) {
+        child.stdin.write(JSON.stringify(onStarted) + '\n');
+      }
       if (event.type === 'permission_requested') {
         child.stdin.write(JSON.stringify({
           type: 'decision', requestId: event.requestId, decision,
@@ -100,7 +111,10 @@ function runSession(decision) {
       if (event.type === 'session_ended') child.stdin.end();
     });
     child.on('error', reject);
-    child.on('close', () => resolve(events));
+    child.on('close', () => {
+      events.diagnostics = diagnostics;
+      resolve(events);
+    });
     setTimeout(() => { child.kill(); reject(new Error('harness did not finish')); }, 15000);
   });
 }
@@ -111,7 +125,11 @@ test('a session asks, waits to be answered, and acts on the answer', async () =>
   const events = await runSession('allow');
   const order = kinds(events);
 
-  assert.deepEqual(order.slice(0, 2), ['session_started', 'activity']);
+  // A session opens by saying it started and how much it will ask about — the composer's mode
+  // control reads the second of those rather than assuming.
+  assert.deepEqual(order.slice(0, 2), ['session_started', 'permission_mode']);
+  assert.equal(events[1].mode, 'ask');
+  assert.ok(order.indexOf('activity') < order.indexOf('permission_requested'));
   // The ask precedes its resolution, and both precede anything the agent said afterwards.
   assert.ok(order.indexOf('permission_requested') < order.indexOf('permission_resolved'));
   assert.ok(order.indexOf('permission_resolved') < order.indexOf('message'));
@@ -155,4 +173,24 @@ test('every event is a complete line of JSON carrying a protocol version', async
     assert.equal(typeof event.at, 'number');
     assert.equal(typeof event.type, 'string');
   }
+});
+
+test('changing what the agent asks about reaches the SDK, and is said back', async () => {
+  const events = await runSession('allow', { type: 'set_permission_mode', mode: 'accept_edits' });
+
+  // Box says "accept_edits"; the SDK's own name for it is "acceptEdits".
+  assert.match(events.diagnostics, /setPermissionMode acceptEdits/);
+  const said = events.filter((event) => event.type === 'permission_mode');
+  // Once at the start, once for the change — the composer never has to assume.
+  assert.deepEqual(said.map((event) => event.mode), ['ask', 'accept_edits']);
+});
+
+test('a mode the harness does not know changes nothing at all', async () => {
+  const events = await runSession('allow', { type: 'set_permission_mode', mode: 'telepathy' });
+
+  assert.equal(events.diagnostics.includes('setPermissionMode'), false);
+  assert.deepEqual(
+    events.filter((event) => event.type === 'permission_mode').map((event) => event.mode),
+    ['ask'],
+  );
 });

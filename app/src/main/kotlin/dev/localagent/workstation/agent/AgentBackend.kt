@@ -35,6 +35,15 @@ interface AgentBackend {
     /** Answers the outstanding [AgentEvent.PermissionRequested]. Idempotent per request id. */
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
 
+    /**
+     * Asks the harness to change how much it asks about.
+     *
+     * A request, not a setting: the mode lives in the running harness, and the UI only believes it
+     * once [AgentEvent.PermissionModeChanged] comes back. A control that flipped locally would keep
+     * claiming edits are being accepted long after the process that agreed to it died.
+     */
+    suspend fun setPermissionMode(sessionId: String, mode: PermissionMode)
+
     /** Ctrl-C equivalent: stop what the agent is doing, keep the session. */
     suspend fun interrupt(sessionId: String)
 

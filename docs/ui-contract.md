@@ -20,8 +20,8 @@ The transcript is an **append-only event log**. Two rules:
 
 Event kinds: `SessionStarted` · `SessionEnded` · `UserMessage` · `AgentMessage` · `AgentThinking` ·
 `ToolCallStarted` · `ToolCallProgress` · `ToolCallFinished` · `FileChanged` ·
-`PermissionRequested` · `PermissionResolved` · `TaskProgress` · `ActivityChanged` ·
-`ArtifactOffered` · `AgentError`.
+`PermissionRequested` · `PermissionResolved` · `PermissionModeChanged` · `TaskProgress` ·
+`ActivityChanged` · `ArtifactOffered` · `AgentError`.
 
 ### Sub-agents are in the same log
 
@@ -43,7 +43,10 @@ time, on behalf of the session, so attributing an ask would offer a choice the s
 The `Task` call finishes like any other tool call, and its outcome is how the card ends:
 `Success` when the sub-agent reported back, `Cancelled` when the user stopped it.
 
-On the wire this is one optional field. A harness line gains `"subAgentId": "toolu_7"`, and a
+On the wire the mode is `{"type": "permission_mode", "mode": "ask" | "accept_edits" | "auto"}` out,
+and `{"type": "set_permission_mode", "mode": …}` in.
+
+On the wire sub-agent attribution is one optional field. A harness line gains `"subAgentId": "toolu_7"`, and a
 harness that has never heard of sub-agents omits it and keeps working — one author, as before.
 `ToolCall.Task` is the tool kind `"task"`. Stopping one is a **new stdin command**, deliberately not
 a field on `interrupt`:
@@ -76,6 +79,30 @@ human-readable string ("edits in this project"); `null` hides the always-allow b
 Decisions are `Allow` / `AllowAlways(scope)` / `Deny` / `Abandoned`, and `Abandoned` is what a
 dismissed sheet produces — dismissing never approves.
 
+**Several requests can be outstanding at once.** One turn can ask for two commands and block on
+both. `Transcript.pendingPermissions` is therefore a list, oldest first — `pendingPermission` is
+just its head, the one the sheet raises — and each request is answered by id, in any order. Two
+rules fall out of that and both were once broken:
+
+- Only a `PermissionResolved` for *that* id, or the session ending, stops a request from being
+  outstanding. Nothing else may clear one. An `ActivityChanged` used to, so a parallel turn
+  narrating itself while blocked silently discarded a live question, and no surface could raise it
+  again.
+- Every unanswered request renders its own inline decision in the transcript. A modal can only ever
+  be about one of them, so the modal cannot be the only way to answer.
+
+`AllowAlways` widens a rule, so it also answers any request already outstanding under the same
+scope. Otherwise "always allow" visibly does nothing to the sibling ask that raised it.
+
+### How much it asks about — `PermissionModeChanged`
+
+`PermissionMode` is `Ask` / `AcceptEdits` / `Auto`, and it lives **in the running harness**, not in
+app state. The app requests a change through `AgentBackend.setPermissionMode` and believes it only
+when `PermissionModeChanged` comes back; a harness announces its mode once at session start too. So
+the control in the composer reports what the guest is actually doing, and it survives Android
+killing the UI mid-session. An unrecognised mode on the wire degrades to `Ask` — the wrong guess in
+the other direction is the one that stops asking.
+
 ## 2. What the UI needs from a harness driver — `agent/AgentBackend.kt`
 
 ```kotlin
@@ -87,6 +114,7 @@ interface AgentBackend {
     suspend fun startSession(harnessId: String, prompt: String?): String
     suspend fun send(sessionId: String, text: String)
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
+    suspend fun setPermissionMode(sessionId: String, mode: PermissionMode)
     suspend fun interrupt(sessionId: String)
     suspend fun interruptSubAgent(sessionId: String, subAgentId: String)
     suspend fun closeSession(sessionId: String)

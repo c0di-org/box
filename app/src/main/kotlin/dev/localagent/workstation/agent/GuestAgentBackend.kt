@@ -303,6 +303,20 @@ class GuestAgentBackend(
         )
     }
 
+    override suspend fun setPermissionMode(sessionId: String, mode: PermissionMode) {
+        val record = records[sessionId] ?: return
+        record.write(
+            mapOf(
+                "type" to "set_permission_mode",
+                "mode" to when (mode) {
+                    PermissionMode.Ask -> "ask"
+                    PermissionMode.AcceptEdits -> "accept_edits"
+                    PermissionMode.Auto -> "auto"
+                },
+            ),
+        )
+    }
+
     override suspend fun interrupt(sessionId: String) {
         records[sessionId]?.write(mapOf("type" to "interrupt"))
     }

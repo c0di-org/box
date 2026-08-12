@@ -100,6 +100,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onInterrupt = boxViewModel::interruptSession,
             onStopSubAgent = boxViewModel::interruptSubAgent,
             onPermissionDecision = boxViewModel::resolvePermission,
+            onPermissionMode = boxViewModel::setPermissionMode,
             onOpenArtifact = { artifact ->
                 when (artifact) {
                     dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openComputer()

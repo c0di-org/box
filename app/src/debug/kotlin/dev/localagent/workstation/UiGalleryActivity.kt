@@ -17,6 +17,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
+import dev.localagent.workstation.agent.PermissionMode
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.agent.TranscriptItem
 import dev.localagent.workstation.computer.ControlHolder
@@ -83,6 +84,7 @@ class UiGalleryActivity : ComponentActivity() {
                     onInterrupt = model::interrupt,
                     onStopSubAgent = model::stopSubAgent,
                     onPermissionDecision = model::decide,
+                    onPermissionMode = model::permissionMode,
                     onOpenArtifact = {},
                     onCloseSession = {},
                     onSelectComputerPanel = model::panel,
@@ -278,6 +280,11 @@ private class GalleryModel(private val scope: CoroutineScope) {
     fun stopSubAgent(subAgentId: String) {
         val sessionId = selection.value ?: return
         scope.launch { backend.interruptSubAgent(sessionId, subAgentId) }
+    }
+
+    fun permissionMode(mode: PermissionMode) {
+        val sessionId = selection.value ?: return
+        scope.launch { backend.setPermissionMode(sessionId, mode) }
     }
 
     fun decide(requestId: String, decision: PermissionDecision) {
