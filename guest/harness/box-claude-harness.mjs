@@ -105,6 +105,16 @@ function nextAuthCode() {
 
 let activeQuery = null;
 
+/**
+ * How permission is answered, in the SDK's own vocabulary.
+ *
+ * Owned by the app: Box has one setting for the whole box, and the app tells every harness what it
+ * is on attach, ahead of the first prompt. Starting at 'default' matters — a harness that came up
+ * before the app could speak to it asks, which is the state a user can always recover from.
+ */
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
+let permissionMode = 'default';
+
 function handleCommand(line) {
   let command;
   try {
@@ -141,11 +151,30 @@ function handleCommand(line) {
       pushAuthCode(String(command.code ?? ''));
       break;
     }
+    case 'permission_mode': {
+      const mode = String(command.mode ?? '');
+      if (!PERMISSION_MODES.has(mode)) {
+        diagnostic(`ignoring unknown permission mode ${mode}`);
+        return;
+      }
+      permissionMode = mode;
+      // Two paths on purpose. A query that has not been created yet reads the variable when it is;
+      // one already running is told, because the SDK will not consult `canUseTool` again for a
+      // mode it has already resolved against. `setPermissionMode` exists on the query object at
+      // runtime but not in the published types, so its absence is a diagnostic rather than a crash
+      // — the next session opens in the right mode either way.
+      if (activeQuery && typeof activeQuery.setPermissionMode === 'function') {
+        activeQuery.setPermissionMode(mode).catch((error) => {
+          diagnostic(`could not change permission mode: ${error?.message ?? error}`);
+        });
+      }
+      // Into the log as well as into the SDK. The transcript is the record of what happened, and
+      // "nothing asked for the next hour" is only honest if the log says why.
+      emit({ type: 'permission_mode', mode });
+      break;
+    }
     case 'interrupt':
       if (activeQuery) activeQuery.interrupt().catch(() => {});
-      break;
-    case 'set_permission_mode':
-      setPermissionMode(String(command.mode ?? 'ask')).catch(() => {});
       break;
     case 'stop_subagent':
       // Its own command rather than an `interrupt` carrying a sub-agent id, because an older
@@ -335,57 +364,6 @@ function describeAsk(name, input = {}) {
 }
 
 // ---------------------------------------------------------------- permissions
-
-/**
- * Box's three modes, in the SDK's own names.
- *
- * `auto` is a model classifier that approves what it judges safe and escalates the rest — not
- * `bypassPermissions`, which turns the whole gate off and which Box does not offer from a phone.
- */
-const PERMISSION_MODES = {
-  ask: 'default',
-  accept_edits: 'acceptEdits',
-  auto: 'auto',
-};
-
-/** What the harness currently asks about, echoed to the app so the control cannot drift from it. */
-let permissionMode = 'ask';
-
-/**
- * Changes the mode, and only claims to have changed it once the harness agrees.
- *
- * `setPermissionMode` needs streaming input, which is how this harness always runs. An unknown mode
- * is ignored rather than guessed at: the wrong guess here is the one that stops asking.
- */
-async function setPermissionMode(mode) {
-  const sdkMode = PERMISSION_MODES[mode];
-  if (!sdkMode) {
-    diagnostic(`unknown permission mode ${mode}`);
-    return;
-  }
-  if (!activeQuery || typeof activeQuery.setPermissionMode !== 'function') {
-    emit({
-      type: 'error',
-      message: 'Box could not change what the agent asks about.',
-      detail: 'The installed agent does not support changing permission mode mid-session.',
-      recoverable: true,
-    });
-    return;
-  }
-  try {
-    await activeQuery.setPermissionMode(sdkMode);
-  } catch (error) {
-    emit({
-      type: 'error',
-      message: 'Box could not change what the agent asks about.',
-      detail: clip(String(error?.message ?? error), 512),
-      recoverable: true,
-    });
-    return;
-  }
-  permissionMode = mode;
-  emit({ type: 'permission_mode', mode });
-}
 
 let nextRequestId = 0;
 
@@ -800,16 +778,16 @@ async function main() {
   }
 
   emit({ type: 'session_started', cwd, harness: 'claude-code' });
-  // Said out loud at the start, so the control in the composer begins by reporting the guest's
-  // actual mode rather than the app's assumption about it.
-  emit({ type: 'permission_mode', mode: permissionMode });
 
   activeQuery = query({
     prompt: prompts(),
     options: {
       cwd,
+      // Kept even under a mode that never calls it: the SDK only reaches `canUseTool` when the
+      // permission flow falls through to a prompt, so this is the ask path rather than a gate, and
+      // dropping it when the mode is permissive would mean rebuilding the query to get it back.
       canUseTool,
-      permissionMode: 'default',
+      permissionMode,
       includePartialMessages: false,
     },
   });

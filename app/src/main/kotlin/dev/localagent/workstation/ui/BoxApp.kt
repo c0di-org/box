@@ -53,10 +53,11 @@ import dev.localagent.workstation.BoxDestination
 import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
-import dev.localagent.workstation.agent.PermissionMode
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopTransport
 
@@ -84,18 +85,19 @@ fun BoxApp(
     onInterrupt: () -> Unit,
     onStopSubAgent: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
-    onPermissionMode: (PermissionMode) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onCloseSession: (String) -> Unit,
     onSelectComputerPanel: (ComputerPanel) -> Unit,
     onOpenBox: () -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String) -> Unit,
+    onSelectFilesPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefreshFiles: () -> Unit,
     onOpenFile: (FileEntry) -> Unit,
     onCloseFile: () -> Unit,
+    onOpenInPhoneFiles: () -> Unit,
     onNoticeShown: () -> Unit,
     onDismissGreeting: () -> Unit = {},
     onShowSignIn: () -> Unit = {},
@@ -104,6 +106,7 @@ fun BoxApp(
     onOpenSignInUrl: (String) -> Unit = {},
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
+    onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     desktop: DesktopTransport? = null,
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
@@ -188,7 +191,6 @@ fun BoxApp(
                         dismissedRequests = dismissedRequests - requestId
                         reviewingRequestId = requestId
                     },
-                    onPermissionMode = onPermissionMode,
                     onReviewPermission = if (waiting.isNotEmpty() && sheetTarget == null) {
                         { dismissedRequests = emptySet() }
                     } else {
@@ -197,6 +199,7 @@ fun BoxApp(
                     modifier = modifier,
                     showComputerAction = showComputerAction,
                     onSignIn = onShowSignIn,
+                    onSetPermissionMode = onSetPermissionMode,
                 )
             }
 
@@ -215,11 +218,13 @@ fun BoxApp(
                         onStop = onStop,
                         onShowDiagnostics = { showDiagnostics = true },
                         onRunCommand = onRunCommand,
+                        onSelectFilesPlace = onSelectFilesPlace,
                         onOpenDirectory = onOpenDirectory,
                         onNavigateUp = onNavigateUp,
                         onRefreshFiles = onRefreshFiles,
                         onOpenFile = onOpenFile,
                         onCloseFile = onCloseFile,
+                        onOpenInPhoneFiles = onOpenInPhoneFiles,
                         // No "open the computer" button on a panel that is already on it.
                         chat = { modifier -> conversation(modifier, null, false) },
                         modifier = Modifier.fillMaxSize(),
@@ -458,18 +463,19 @@ private fun PreviewBox(state: BoxUiState) {
             onInterrupt = {},
             onStopSubAgent = {},
             onPermissionDecision = { _, _ -> },
-            onPermissionMode = {},
             onOpenArtifact = {},
             onCloseSession = {},
             onSelectComputerPanel = {},
             onOpenBox = {},
             onStop = {},
             onRunCommand = {},
+            onSelectFilesPlace = {},
             onOpenDirectory = {},
             onNavigateUp = {},
             onRefreshFiles = {},
             onOpenFile = {},
             onCloseFile = {},
+            onOpenInPhoneFiles = {},
             onNoticeShown = {},
         )
     }

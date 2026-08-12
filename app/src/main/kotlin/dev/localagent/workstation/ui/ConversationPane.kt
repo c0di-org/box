@@ -1,5 +1,8 @@
 package dev.localagent.workstation.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
@@ -34,6 +39,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -49,9 +55,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,12 +74,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionDecision
-import dev.localagent.workstation.agent.PermissionMode
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.Transcript
+import kotlinx.coroutines.launch
 
 /**
  * The primary surface. A user should be able to live here and never open the computer view, so
@@ -86,7 +95,6 @@ fun ConversationPane(
     onStopSubAgent: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onReviewRequest: (String) -> Unit,
-    onPermissionMode: (PermissionMode) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onStartComputer: () -> Unit,
     onOpenComputer: () -> Unit,
@@ -95,6 +103,7 @@ fun ConversationPane(
     onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = true,
     onSignIn: () -> Unit = {},
+    onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
 ) {
     val session = state.selectedSession
     val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
@@ -112,6 +121,11 @@ fun ConversationPane(
             showComputerAction = showComputerAction,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // Above the rest, and not dismissable: everything else here is about whether Box can work,
+        // and this is about what it is allowed to do without asking. A user scrolling past a
+        // booting-computer banner must not scroll past this one.
+        PermissionModeBanner(state.permissionMode, onSetPermissionMode)
 
         // While the computer is down, its own banner is the true and actionable one. Showing the
         // transport's view as well says the same thing twice, in red, about a normal state.
@@ -160,8 +174,8 @@ fun ConversationPane(
             placeholder = "Ask Box anything…",
             onSend = onSend,
             onReview = onReviewPermission,
-            mode = state.transcript?.permissionMode ?: PermissionMode.Ask,
-            onModeChange = if (session == null) null else onPermissionMode,
+            mode = state.permissionMode,
+            onModeChange = onSetPermissionMode,
         )
     }
 }
@@ -267,6 +281,39 @@ private fun ConnectionBanner(connection: SessionConnection) {
     }
 }
 
+/** The words for each mode, in one place: the menu names it and the banner reports it. */
+private fun permissionModeLabel(mode: AgentPermissionMode): String = when (mode) {
+    AgentPermissionMode.Ask -> "Ask every time"
+    AgentPermissionMode.AcceptEdits -> "Accept file edits"
+    AgentPermissionMode.Everything -> "Approve everything"
+}
+
+/**
+ * What is being skipped, while it is being skipped.
+ *
+ * Not a chip in the corner and not a line in a menu nobody opens: an agent working unsupervised
+ * looks identical to an agent with nothing to ask about, so the only honest place for this is the
+ * same strip that says the computer is booting — present in every conversation, carrying the way
+ * out, and coloured like the risk it describes.
+ */
+@Composable
+private fun PermissionModeBanner(mode: AgentPermissionMode, onSet: (AgentPermissionMode) -> Unit) {
+    if (mode == AgentPermissionMode.Ask) return
+    Banner(
+        tint = when (mode) {
+            AgentPermissionMode.Everything -> MaterialTheme.colorScheme.error
+            else -> MaterialTheme.colorScheme.tertiary
+        },
+        icon = { Icon(Icons.Outlined.LockOpen, null, Modifier.size(17.dp)) },
+        title = when (mode) {
+            AgentPermissionMode.Everything -> "Approving everything"
+            else -> "Accepting file edits"
+        },
+        body = "Box is not asking before the agent acts.",
+        action = "Ask again" to { onSet(AgentPermissionMode.Ask) },
+    )
+}
+
 @Composable
 private fun ComputerBanner(runtimeState: RuntimeState, onStart: () -> Unit) {
     val banner: Triple<String, String?, String?> = when (runtimeState) {
@@ -351,9 +398,13 @@ private fun TranscriptList(
     val items = transcript?.items.orEmpty()
     val listState = rememberLazyListState()
     val lastKey = items.lastOrNull()?.key
+    val total = items.size + queued.size
+    val scope = rememberCoroutineScope()
+    // Following the agent is the default, but only while the user is actually down here. Reading
+    // something ten cards back and being dragged to the bottom by an event they were not watching
+    // is the transcript taking the conversation away from them mid-sentence.
     LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity) {
-        val total = items.size + queued.size
-        if (total > 0) listState.animateScrollToItem(total)
+        if (total > 0 && listState.isNearEnd()) listState.animateScrollToItem(total)
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -393,7 +444,59 @@ private fun TranscriptList(
                 }
             }
         }
+        JumpToLatest(
+            // Tighter than the auto-scroll's own slack, so the affordance is gone by the time
+            // following resumes rather than sitting there offering to do what already happens.
+            visible = remember(listState) { derivedStateOf { !listState.isNearEnd(slack = 1) } }.value,
+            onClick = { scope.launch { listState.animateScrollToItem(total) } },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+        )
     }
+}
+
+/**
+ * The way back down, and nothing more.
+ *
+ * It only exists while the user has scrolled away from the end, which is exactly when the
+ * transcript stops following on its own — the pair is one behaviour. Quiet by design: the same
+ * surface and outline as a tool card, because it is a way to move, not a thing that happened.
+ */
+@Composable
+private fun JumpToLatest(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible, modifier, enter = fadeIn(), exit = fadeOut()) {
+        Surface(
+            onClick = onClick,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 3.dp,
+        ) {
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.ArrowDownward, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("Latest", style = MaterialTheme.typography.bodyMedium, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/**
+ * Whether the list is close enough to its end that new arrivals should still pull it along.
+ *
+ * Measured in items with slack, not in pixels, because the answer is needed *after* the arrival
+ * that prompted the question: at the bottom of a live transcript the last laid-out row is
+ * routinely one or two behind the newest one. Anything further back than that was a deliberate
+ * scroll by a person, and is left alone.
+ */
+internal fun LazyListState.isNearEnd(slack: Int = 2): Boolean {
+    val info = layoutInfo
+    if (info.totalItemsCount == 0) return true
+    val last = info.visibleItemsInfo.lastOrNull()?.index ?: return true
+    return last >= info.totalItemsCount - 1 - slack
 }
 
 /**
@@ -504,9 +607,9 @@ internal fun Composer(
     onReview: (() -> Unit)?,
     modifier: Modifier = Modifier,
     footer: Boolean = true,
-    mode: PermissionMode = PermissionMode.Ask,
-    /** Null where there is no session to set it on — the opening hero shares this composer. */
-    onModeChange: ((PermissionMode) -> Unit)? = null,
+    mode: AgentPermissionMode = AgentPermissionMode.Ask,
+    /** Null where the setting has nowhere to go — the opening hero shares this composer. */
+    onModeChange: ((AgentPermissionMode) -> Unit)? = null,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var modeMenuOpen by remember { mutableStateOf(false) }
@@ -617,7 +720,7 @@ internal fun Composer(
                         Icons.AutoMirrored.Outlined.Send,
                         contentDescription = "Send",
                         tint = when {
-                            canSend && mode != PermissionMode.Ask -> modeTint(mode)
+                            canSend && mode != AgentPermissionMode.Ask -> modeTint(mode)
                             canSend -> MaterialTheme.colorScheme.onSurface
                             else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         },
@@ -628,20 +731,10 @@ internal fun Composer(
         if (footer) {
             Spacer(Modifier.height(8.dp))
             Text(
-                // A mode that stops asking has to say so somewhere that is always on screen. The
-                // control alone is an icon, and an icon is not a sentence.
-                when (mode) {
-                    PermissionMode.Ask -> "Box can make mistakes. Review all work."
-                    PermissionMode.AcceptEdits -> "Accepting file edits without asking."
-                    PermissionMode.Auto -> "Approving what it judges safe without asking."
-                },
+                "Box can make mistakes. Review all work.",
                 style = MaterialTheme.typography.bodyMedium,
                 fontSize = 11.sp,
-                color = if (mode == PermissionMode.Ask) {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                } else {
-                    modeTint(mode)
-                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
             )
         }
     }
@@ -650,18 +743,18 @@ internal fun Composer(
 /**
  * What the agent has to ask about, on the composer where the asking happens.
  *
- * Deliberately here and not in a settings screen: it is the answer to "stop asking me about this",
- * which is a thing people want *while* being asked, and the transcript is where they are when they
- * want it. It shows the mode the guest confirmed, never the one this process last requested — see
- * `AgentEvent.PermissionModeChanged`.
+ * Deliberately here rather than in the header's overflow menu, where it started: it is the answer to
+ * "stop asking me about this", which is a thing people want *while* being asked, and a setting
+ * nobody finds is a setting that turns into fatigue at the sheet instead. The label lives in the
+ * menu; the trigger is an icon, because the composer's row is not where a sentence fits.
  */
 @Composable
 private fun ModeControl(
-    mode: PermissionMode,
+    mode: AgentPermissionMode,
     open: Boolean,
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
-    onPick: (PermissionMode) -> Unit,
+    onPick: (AgentPermissionMode) -> Unit,
 ) {
     Box {
         Row(
@@ -673,9 +766,9 @@ private fun ModeControl(
         ) {
             Icon(
                 modeIcon(mode),
-                contentDescription = "What the agent asks about: ${modeName(mode)}",
+                contentDescription = "Permission: ${permissionModeLabel(mode)}",
                 modifier = Modifier.size(17.dp),
-                tint = if (mode == PermissionMode.Ask) {
+                tint = if (mode == AgentPermissionMode.Ask) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     modeTint(mode)
@@ -689,13 +782,15 @@ private fun ModeControl(
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = onDismiss) {
-            PermissionMode.entries.forEach { option ->
+            AgentPermissionMode.entries.forEach { option ->
                 DropdownMenuItem(
                     onClick = { onPick(option) },
+                    // A check on the one in force rather than a switch per row: these are three
+                    // answers to one question, and only one of them can be true.
                     leadingIcon = {
                         Icon(
                             if (option == mode) Icons.Outlined.Check else modeIcon(option),
-                            contentDescription = null,
+                            contentDescription = if (option == mode) "in use" else null,
                             modifier = Modifier.size(18.dp),
                             tint = if (option == mode) {
                                 MaterialTheme.colorScheme.primary
@@ -706,14 +801,14 @@ private fun ModeControl(
                     },
                     text = {
                         Column {
-                            Text(modeName(option), fontSize = 14.sp)
+                            Text(permissionModeLabel(option), fontSize = 14.sp)
                             Text(
-                                // Each says what it stops asking about, because that is the part
+                                // Each says what it stops stopping, because that is the part
                                 // someone is agreeing to.
                                 when (option) {
-                                    PermissionMode.Ask -> "Every edit and command"
-                                    PermissionMode.AcceptEdits -> "Commands only; edits go through"
-                                    PermissionMode.Auto -> "Only what it judges risky"
+                                    AgentPermissionMode.Ask -> "Every edit and command"
+                                    AgentPermissionMode.AcceptEdits -> "Commands still stop"
+                                    AgentPermissionMode.Everything -> "Nothing stops"
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontSize = 11.sp,
@@ -727,22 +822,16 @@ private fun ModeControl(
     }
 }
 
-private fun modeName(mode: PermissionMode): String = when (mode) {
-    PermissionMode.Ask -> "Ask"
-    PermissionMode.AcceptEdits -> "Accept edits"
-    PermissionMode.Auto -> "Auto"
+private fun modeIcon(mode: AgentPermissionMode) = when (mode) {
+    AgentPermissionMode.Ask -> Icons.Outlined.Lock
+    AgentPermissionMode.AcceptEdits -> Icons.Outlined.EditNote
+    AgentPermissionMode.Everything -> Icons.Outlined.Bolt
 }
 
-private fun modeIcon(mode: PermissionMode) = when (mode) {
-    PermissionMode.Ask -> Icons.Outlined.Lock
-    PermissionMode.AcceptEdits -> Icons.Outlined.EditNote
-    PermissionMode.Auto -> Icons.Outlined.Bolt
-}
-
-/** Not the error colour: these are states the user chose, not mistakes. */
+/** The banner's colours, so the two places this state appears agree about how loud it is. */
 @Composable
-private fun modeTint(mode: PermissionMode): Color = when (mode) {
-    PermissionMode.Ask -> MaterialTheme.colorScheme.onSurfaceVariant
-    PermissionMode.AcceptEdits -> MaterialTheme.colorScheme.tertiary
-    PermissionMode.Auto -> MaterialTheme.colorScheme.tertiary
+private fun modeTint(mode: AgentPermissionMode): Color = when (mode) {
+    AgentPermissionMode.Ask -> MaterialTheme.colorScheme.onSurfaceVariant
+    AgentPermissionMode.AcceptEdits -> MaterialTheme.colorScheme.tertiary
+    AgentPermissionMode.Everything -> MaterialTheme.colorScheme.error
 }

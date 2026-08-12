@@ -38,9 +38,6 @@ class FakeAgentBackend(
     private val scripts = ConcurrentHashMap<String, Job>()
     private val awaitingDecision = ConcurrentHashMap<String, CompletableDeferred<PermissionDecision>>()
 
-    /** How much each scripted session asks about. The scripts honour it, or the control would lie. */
-    private val modes = ConcurrentHashMap<String, PermissionMode>()
-
     /** Scripted sub-agents still running, by session and id, so one can be stopped on its own. */
     private val subAgents = ConcurrentHashMap<Pair<String, String>, Job>()
 
@@ -52,6 +49,13 @@ class FakeAgentBackend(
         ),
     )
     override val harnesses: StateFlow<List<HarnessDescriptor>> = harnessList.asStateFlow()
+
+    private val modeState = MutableStateFlow(AgentPermissionMode.Ask)
+    override val permissionMode: StateFlow<AgentPermissionMode> = modeState.asStateFlow()
+
+    override suspend fun setPermissionMode(mode: AgentPermissionMode) {
+        modeState.value = mode
+    }
 
     private val sessionList = MutableStateFlow(seedSessions())
     override val sessions: StateFlow<List<SessionSummary>> = sessionList.asStateFlow()
@@ -135,20 +139,6 @@ class FakeAgentBackend(
         decision: PermissionDecision,
     ) {
         awaitingDecision.remove(requestId)?.complete(decision)
-    }
-
-    override suspend fun setPermissionMode(sessionId: String, mode: PermissionMode) {
-        modes[sessionId] = mode
-        // Echoed as an event exactly as the harness does it, so the control is reading the same
-        // source of truth in the demo as it does against a real guest.
-        emit(
-            AgentEvent.PermissionModeChanged(
-                eventId = next(),
-                sessionId = sessionId,
-                at = System.currentTimeMillis(),
-                mode = mode,
-            ),
-        )
     }
 
     override suspend fun interrupt(sessionId: String) {
@@ -310,14 +300,6 @@ class FakeAgentBackend(
         )
     }
 
-    /** Whether the session's mode covers this ask without troubling the user. */
-    private fun answersItself(sessionId: String, ask: PermissionAsk): Boolean =
-        when (modes[sessionId] ?: PermissionMode.Ask) {
-            PermissionMode.Ask -> false
-            PermissionMode.AcceptEdits -> ask is PermissionAsk.EditFile
-            PermissionMode.Auto -> true
-        }
-
     /**
      * Ends a scripted sub-agent the way a real stop ends one: cancelled, and said out loud.
      *
@@ -391,6 +373,10 @@ class FakeAgentBackend(
     }
 
     private suspend fun ask(sessionId: String, ask: PermissionAsk): PermissionDecision {
+        // The demo has to be able to lie about nothing that matters. With auto-approve on, the
+        // scripted flow stops stopping — otherwise the setting looks broken in the one build a
+        // person is most likely to try it in.
+        if (modeState.value.approves(ask)) return PermissionDecision.Allow
         val requestId = "p-${ids.incrementAndGet()}"
         val gate = CompletableDeferred<PermissionDecision>()
         awaitingDecision[requestId] = gate
@@ -403,13 +389,7 @@ class FakeAgentBackend(
                 ask = ask,
             ),
         )
-        // A mode that skips the sheet still leaves the ask in the transcript, then answers it — the
-        // record of what was allowed on the user's behalf is the point of the mode, not a detail.
-        if (answersItself(sessionId, ask)) {
-            scope.launch { resolvePermission(sessionId, requestId, PermissionDecision.Allow) }
-        } else {
-            touch(sessionId, SessionStatus.NeedsYou("Waiting for approval"))
-        }
+        touch(sessionId, SessionStatus.NeedsYou("Waiting for approval"))
         val decision = gate.await()
         emit(
             AgentEvent.PermissionResolved(

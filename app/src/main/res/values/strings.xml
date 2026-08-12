@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Box</string>
+    <!-- Under the app's name in Android's list of storage places. "Shared" alone says nothing there. -->
+    <string name="shared_folder_summary">Shared with your box</string>
 </resources>

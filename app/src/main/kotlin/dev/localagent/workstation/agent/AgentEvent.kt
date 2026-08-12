@@ -180,19 +180,6 @@ sealed interface AgentEvent {
         override val subAgentId: String? = null,
     ) : AgentEvent
 
-    /**
-     * The harness confirming how much it will ask about from here on.
-     *
-     * Emitted when the mode is set and once when a session starts, so the control in the composer
-     * is showing the guest's answer rather than this process's guess.
-     */
-    data class PermissionModeChanged(
-        override val eventId: String,
-        override val sessionId: String,
-        override val at: Long,
-        val mode: PermissionMode,
-    ) : AgentEvent
-
     /** What the agent is doing right now. Drives the session-list dot and the composer state. */
     data class ActivityChanged(
         override val eventId: String,
@@ -365,25 +352,6 @@ sealed interface PermissionDecision {
 
     /** The session ended or the user backed out without answering. */
     data object Abandoned : PermissionDecision
-}
-
-/**
- * How much the agent has to ask about.
- *
- * Not a preference stored in the app: it is state inside the running harness, so it arrives as
- * [AgentEvent.PermissionModeChanged] like anything else the agent does. That way the control shows
- * what the guest is *actually* doing rather than what this process last remembered asking for, and
- * it survives Android killing the UI mid-session.
- */
-enum class PermissionMode {
-    /** Every edit, command and request raises a sheet. The default, and the only one Box assumes. */
-    Ask,
-
-    /** File edits go through; commands and network still ask. */
-    AcceptEdits,
-
-    /** The harness decides for itself, and only escalates what it judges risky. */
-    Auto,
 }
 
 // ---------------------------------------------------------------------------

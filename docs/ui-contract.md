@@ -20,8 +20,8 @@ The transcript is an **append-only event log**. Two rules:
 
 Event kinds: `SessionStarted` · `SessionEnded` · `UserMessage` · `AgentMessage` · `AgentThinking` ·
 `ToolCallStarted` · `ToolCallProgress` · `ToolCallFinished` · `FileChanged` ·
-`PermissionRequested` · `PermissionResolved` · `PermissionModeChanged` · `TaskProgress` ·
-`ActivityChanged` · `ArtifactOffered` · `AgentError`.
+`PermissionRequested` · `PermissionResolved` · `TaskProgress` · `ActivityChanged` ·
+`ArtifactOffered` · `AgentError`.
 
 ### Sub-agents are in the same log
 
@@ -42,9 +42,6 @@ time, on behalf of the session, so attributing an ask would offer a choice the s
 
 The `Task` call finishes like any other tool call, and its outcome is how the card ends:
 `Success` when the sub-agent reported back, `Cancelled` when the user stopped it.
-
-On the wire the mode is `{"type": "permission_mode", "mode": "ask" | "accept_edits" | "auto"}` out,
-and `{"type": "set_permission_mode", "mode": …}` in.
 
 On the wire sub-agent attribution is one optional field. A harness line gains `"subAgentId": "toolu_7"`, and a
 harness that has never heard of sub-agents omits it and keeps working — one author, as before.
@@ -94,27 +91,19 @@ rules fall out of that and both were once broken:
 `AllowAlways` widens a rule, so it also answers any request already outstanding under the same
 scope. Otherwise "always allow" visibly does nothing to the sibling ask that raised it.
 
-### How much it asks about — `PermissionModeChanged`
-
-`PermissionMode` is `Ask` / `AcceptEdits` / `Auto`, and it lives **in the running harness**, not in
-app state. The app requests a change through `AgentBackend.setPermissionMode` and believes it only
-when `PermissionModeChanged` comes back; a harness announces its mode once at session start too. So
-the control in the composer reports what the guest is actually doing, and it survives Android
-killing the UI mid-session. An unrecognised mode on the wire degrades to `Ask` — the wrong guess in
-the other direction is the one that stops asking.
-
 ## 2. What the UI needs from a harness driver — `agent/AgentBackend.kt`
 
 ```kotlin
 interface AgentBackend {
     val harnesses: StateFlow<List<HarnessDescriptor>>
     val sessions: StateFlow<List<SessionSummary>>
+    val permissionMode: StateFlow<AgentPermissionMode>
+    suspend fun setPermissionMode(mode: AgentPermissionMode)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
     suspend fun startSession(harnessId: String, prompt: String?): String
     suspend fun send(sessionId: String, text: String)
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
-    suspend fun setPermissionMode(sessionId: String, mode: PermissionMode)
     suspend fun interrupt(sessionId: String)
     suspend fun interruptSubAgent(sessionId: String, subAgentId: String)
     suspend fun closeSession(sessionId: String)
@@ -128,6 +117,21 @@ Two requirements that are easy to miss:
 - `connection()` is **orthogonal** to whether the agent is busy. A finished session can be
   disconnected and a running one can survive a reconnect. `Disconnected` is a normal state, not an
   error: the VM takes ~90s to boot and Android reclaims it whenever it likes.
+
+`permissionMode` is one setting for the whole box — `Ask`, `AcceptEdits`, `Everything` — and not a
+per-session one: it says how far the user currently trusts the agents they are running, and a
+conversation quietly keeping its own answer is how someone ends up approving everything in a session
+they had forgotten was set that way. The values are the Claude Agent SDK's own permission modes, so
+a backend passes them through rather than implementing them; on the wire it is one more stdin
+command, `{"type": "permission_mode", "mode": "bypassPermissions"}`, told to a session before its
+first prompt and again whenever it changes. Anything but `Ask` is drawn as a banner above every
+conversation for as long as it is in force — a box that is silently approving everything looks
+exactly like a box with nothing to approve, and that is the one confusion this must never cause.
+
+The control for it sits on the composer, next to send, with the same menu on a long-press of send
+itself. It started in the header's overflow menu and moved because of where it is wanted: "stop
+asking me about this" is a thought someone has *while* being asked, and a setting nobody finds is
+one that turns into fatigue at the sheet instead.
 
 `interruptSubAgent` is not `interrupt` with an argument. Stopping the session throws away
 everything in flight; stopping a sub-agent asks one delegate to stand down and lets the agent that

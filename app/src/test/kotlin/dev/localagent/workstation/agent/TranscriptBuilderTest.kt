@@ -100,6 +100,27 @@ class TranscriptBuilderTest {
         assertEquals(2, artifacts.artifacts.size)
     }
 
+    /**
+     * A crash, an interrupt or a truncated replay all end a session with calls still open, and
+     * nothing can ever arrive for them afterwards.
+     */
+    @Test
+    fun `a session that ends closes the calls that never reported back`() {
+        val transcript = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 1, "c1", ToolCall.Shell("npm test")),
+            AgentEvent.ToolCallStarted("e2", SESSION, 2, "c2", ToolCall.Shell("npm run build")),
+            AgentEvent.ToolCallFinished("e3", SESSION, 3, "c2", ToolOutcome.Success(summary = "built")),
+            AgentEvent.SessionEnded("e4", SESSION, 4, SessionOutcome.Interrupted),
+        ).toTranscript(SESSION)
+
+        val tools = transcript.items.filterIsInstance<TranscriptItem.Tool>()
+        assertEquals(2, tools.size)
+        assertTrue(tools.none { it.running })
+        assertEquals(ToolOutcome.Cancelled, tools.first { it.callId == "c1" }.outcome)
+        // The one that did report keeps what it said; only the orphan is settled.
+        assertTrue(tools.first { it.callId == "c2" }.outcome is ToolOutcome.Success)
+    }
+
     // ---- several requests at once ------------------------------------------
 
     /**
@@ -185,17 +206,6 @@ class TranscriptBuilderTest {
         ).toTranscript(SESSION)
 
         assertTrue(transcript.pendingPermissions.isEmpty())
-    }
-
-    @Test
-    fun `the mode the harness reports is the mode the composer shows`() {
-        val transcript = listOf(
-            AgentEvent.PermissionModeChanged("e1", SESSION, 1, PermissionMode.AcceptEdits),
-        ).toTranscript(SESSION)
-
-        assertEquals(PermissionMode.AcceptEdits, transcript.permissionMode)
-        // It is a fact about the session, not a row in it.
-        assertTrue(transcript.items.isEmpty())
     }
 
     // ---- sub-agents --------------------------------------------------------
@@ -296,6 +306,24 @@ class TranscriptBuilderTest {
         val inner = outer.items.single() as TranscriptItem.SubAgent
         assertEquals("a2", inner.subAgentId)
         assertEquals("63 declarations.", (inner.items.single() as TranscriptItem.Agent).text)
+    }
+
+    /** A delegate cannot outlive the session that sent it, and neither can its calls. */
+    @Test
+    fun `a session that ends closes a sub-agent and the work inside it`() {
+        val transcript = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 1, "a1", ToolCall.Task("Audit runtime-api")),
+            AgentEvent.ToolCallStarted(
+                "e2", SESSION, 2, "c1", ToolCall.Search("public "), subAgentId = "a1",
+            ),
+            AgentEvent.SessionEnded("e3", SESSION, 3, SessionOutcome.Interrupted),
+        ).toTranscript(SESSION)
+
+        val agent = transcript.items.filterIsInstance<TranscriptItem.SubAgent>().single()
+        assertEquals(false, agent.running)
+        assertTrue(agent.stopped)
+        val inner = agent.items.single() as TranscriptItem.Tool
+        assertEquals(false, inner.running)
     }
 
     private fun message(id: String, messageId: String, text: String, complete: Boolean = true) =

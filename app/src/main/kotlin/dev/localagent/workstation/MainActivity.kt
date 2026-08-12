@@ -100,7 +100,6 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onInterrupt = boxViewModel::interruptSession,
             onStopSubAgent = boxViewModel::interruptSubAgent,
             onPermissionDecision = boxViewModel::resolvePermission,
-            onPermissionMode = boxViewModel::setPermissionMode,
             onOpenArtifact = { artifact ->
                 when (artifact) {
                     dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openComputer()
@@ -113,11 +112,13 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onOpenBox = openBox,
             onStop = boxViewModel::stop,
             onRunCommand = boxViewModel::runCommand,
+            onSelectFilesPlace = boxViewModel::selectFilesPlace,
             onOpenDirectory = boxViewModel::openDirectory,
             onNavigateUp = boxViewModel::navigateUp,
             onRefreshFiles = boxViewModel::refreshFiles,
             onOpenFile = boxViewModel::openFile,
             onCloseFile = boxViewModel::closeFile,
+            onOpenInPhoneFiles = boxViewModel::openSharedInPhoneFiles,
             onNoticeShown = boxViewModel::noticeShown,
             onDismissGreeting = boxViewModel::dismissReadyGreeting,
             desktop = BoxContainer.desktop(LocalContext.current.applicationContext as android.app.Application),
@@ -128,6 +129,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onOpenSignInUrl = { url -> openInBrowser(context, url) },
             onSubmitSignInCode = boxViewModel::submitSignInCode,
             onCancelSignIn = boxViewModel::cancelSignIn,
+            onSetPermissionMode = boxViewModel::setPermissionMode,
         )
     }
 }

@@ -25,7 +25,6 @@ data class Transcript(
     val pendingPermissions: List<PendingPermission> = emptyList(),
     val outcome: SessionOutcome? = null,
     val workingDirectory: String = "/workspace",
-    val permissionMode: PermissionMode = PermissionMode.Ask,
 ) {
     val isBusy: Boolean
         get() = activity is AgentActivity.Thinking || activity is AgentActivity.Working
@@ -189,7 +188,6 @@ class TranscriptBuilder(
 
     /** Keyed by request id and insertion-ordered: several can be outstanding, answered in any order. */
     private val pending = LinkedHashMap<String, PendingPermission>()
-    private var permissionMode: PermissionMode = PermissionMode.Ask
     private var outcome: SessionOutcome? = null
     private var workingDirectory: String = "/workspace"
     private var lastArtifactKey: String? = null
@@ -213,6 +211,7 @@ class TranscriptBuilder(
                 outcome = event.outcome
                 activity = AgentActivity.Ended
                 pending.clear()
+                settleOpenCalls(event.at)
                 put(TranscriptItem.Ended("end:${event.eventId}", event.at, event.outcome))
             }
 
@@ -319,10 +318,6 @@ class TranscriptBuilder(
                 }
             }
 
-            is AgentEvent.PermissionModeChanged -> {
-                permissionMode = event.mode
-            }
-
             is AgentEvent.ArtifactOffered -> {
                 val run = lastArtifactKey?.let { items[it] as? TranscriptItem.Artifacts }
                 if (run != null) {
@@ -344,6 +339,30 @@ class TranscriptBuilder(
                         recoverable = event.recoverable,
                     ),
                 )
+        }
+    }
+
+    /**
+     * Closes everything still open, at every depth, because the session that owned it has ended.
+     *
+     * Nothing can arrive for these afterwards, so a card still spinning here spins forever — after
+     * a crash, an interrupt, or a log truncated mid-run. `HarnessWire.toolOutcome` settles the same
+     * argument for a finish it cannot read: a call that admits it does not know how it went beats
+     * one that pretends to still be working. Cancelled rather than failed, because what stopped it
+     * was the session ending rather than the tool — which is also what a sub-agent's card already
+     * means by it, and a delegate outliving the session it was sent from is not a state to draw.
+     */
+    private fun settleOpenCalls(at: Long) {
+        items.entries.forEach { entry ->
+            val tool = entry.value as? TranscriptItem.Tool ?: return@forEach
+            if (tool.running) entry.setValue(tool.copy(outcome = ToolOutcome.Cancelled))
+        }
+        // Depth first: a sub-agent's own calls are settled before its card is republished, so the
+        // card it ends up with is the finished transcript rather than the one being closed.
+        subAgents.forEach { (id, fold) ->
+            fold.inner.settleOpenCalls(at)
+            if (fold.outcome == null) fold.outcome = ToolOutcome.Cancelled
+            publish(id, fold, at)
         }
     }
 
@@ -417,7 +436,6 @@ class TranscriptBuilder(
         pendingPermissions = pending.values.toList(),
         outcome = outcome,
         workingDirectory = workingDirectory,
-        permissionMode = permissionMode,
     )
 }
 

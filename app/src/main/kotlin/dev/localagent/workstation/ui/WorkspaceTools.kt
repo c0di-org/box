@@ -63,10 +63,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.text.format.DateUtils
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.CommandRecord
+import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.OpenedFile
 import java.util.Locale
 
@@ -93,9 +95,12 @@ fun TerminalTool(
         draft = ""
     }
     val listState = rememberLazyListState()
+    // The transcript's rule, for the same reason: output follows the end only while the user is
+    // at the end of it. A command that prints two hundred lines while someone is reading line
+    // four used to take the screen off them.
     LaunchedEffect(state.commandHistory.size, state.runningCommand) {
         val extra = if (state.runningCommand != null) 1 else 0
-        if (state.commandHistory.isNotEmpty() || extra > 0) {
+        if ((state.commandHistory.isNotEmpty() || extra > 0) && listState.isNearEnd()) {
             listState.animateScrollToItem(state.commandHistory.size + extra)
         }
     }
@@ -263,38 +268,74 @@ private fun CommandOutput(record: CommandRecord) {
     }
 }
 
+/**
+ * Two places, and the one that always works comes first.
+ *
+ * **Shared** is a directory on the phone that Box publishes to Android, so it is also a place in
+ * the system Files app and in every Open/Save dialog. **In the box** is the guest's `/workspace`,
+ * which needs a booted VM. Putting them side by side is what makes the shared folder discoverable
+ * from inside Box rather than only from a Files app the user has to think to open.
+ *
+ * Browsing is read-only in both places. That is not a gap in Shared: creating, renaming, deleting
+ * and editing already work on those files through Android itself, and building a second, weaker
+ * copy of that inside Box would be three more surfaces to keep right for no new ability. The
+ * "Open in Files" button is the route to them.
+ */
 @Composable
 fun FilesTool(
     state: BoxUiState,
     onOpenBox: () -> Unit,
+    onSelectPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
     onOpenFile: (FileEntry) -> Unit,
     onCloseFile: () -> Unit,
+    onOpenInPhoneFiles: () -> Unit,
 ) {
-    if (state.runtimeState != RuntimeState.Ready) {
-        RuntimeGate(state.runtimeState, onOpenBox)
-        return
-    }
-
     state.openedFile?.let { file ->
         FilePreview(file, onCloseFile)
         return
     }
 
+    val shared = state.filesPlace == FilesPlace.Shared
     Column(
         Modifier.fillMaxSize().padding(horizontal = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        PlaceSwitcher(state.filesPlace, onSelectPlace)
+        if (!shared && state.runtimeState != RuntimeState.Ready) {
+            Box(Modifier.weight(1f)) { RuntimeGate(state.runtimeState, onOpenBox) }
+            return@Column
+        }
+        if (shared) {
+            Spacer(Modifier.height(10.dp))
+            SharedFolderNote(state, onOpenInPhoneFiles)
+        }
+        Spacer(Modifier.height(4.dp))
+
+        val segments = if (shared) {
+            state.sharedPath.trim('/').let { if (it.isBlank()) emptyList() else it.split('/') }
+        } else {
+            state.currentPath.removePrefix("/workspace").trim('/')
+                .let { if (it.isBlank()) emptyList() else it.split('/') }
+        }
         Row(
             Modifier.fillMaxWidth().widthIn(max = 1000.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onNavigateUp, enabled = state.currentPath != "/workspace") {
+            IconButton(onClick = onNavigateUp, enabled = segments.isNotEmpty()) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Up one folder")
             }
-            WorkspaceBreadcrumb(state.currentPath, onOpenDirectory, Modifier.weight(1f))
+            Breadcrumb(
+                root = if (shared) "Shared" else "workspace",
+                segments = segments,
+                onOpen = { depth ->
+                    val relative = segments.take(depth).joinToString("/")
+                    onOpenDirectory(if (shared) relative else listOf("/workspace", relative).filter(String::isNotEmpty).joinToString("/"))
+                },
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = onRefresh) {
                 Icon(Icons.Outlined.Refresh, contentDescription = "Refresh files")
             }
@@ -306,22 +347,17 @@ fun FilesTool(
             shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
         ) {
-            if (state.filesLoading) {
+            // Only the guest listing can be slow enough to be worth a progress bar; the shared
+            // folder is a local directory read.
+            if (!shared && state.filesLoading) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-            val sorted = remember(state.files) {
-                state.files.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            val entries = if (shared) state.sharedFiles else state.files
+            val sorted = remember(entries) {
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
             }
-            if (!state.filesLoading && sorted.isEmpty()) {
-                Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
-                            Icon(Icons.Outlined.FolderOpen, null, Modifier.padding(18.dp).size(30.dp))
-                        }
-                        Spacer(Modifier.height(14.dp))
-                        Text("Empty", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
+            if (sorted.isEmpty() && !(state.filesLoading && !shared)) {
+                EmptyPlace(shared)
             } else {
                 LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
                     items(sorted, key = { it.path }) { entry ->
@@ -339,26 +375,148 @@ fun FilesTool(
 }
 
 @Composable
-private fun WorkspaceBreadcrumb(
-    currentPath: String,
-    onOpenDirectory: (String) -> Unit,
+private fun PlaceSwitcher(place: FilesPlace, onSelect: (FilesPlace) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().widthIn(max = 1000.dp).padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilesPlace.entries.forEach { candidate ->
+            val selected = candidate == place
+            Surface(
+                onClick = { onSelect(candidate) },
+                shape = CircleShape,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                },
+                contentColor = if (selected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            ) {
+                Text(
+                    if (candidate == FilesPlace.Shared) "Shared" else "In the box",
+                    Modifier.padding(horizontal = 15.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Where these files are, and what the last sync did with them.
+ *
+ * Copying a person's files between two machines without telling them is the kind of thing that
+ * feels like a bug the first time they notice it. So the panel says where the folder is on both
+ * sides, and when it was last levelled — and it names the `.from-box` copies rather than counting
+ * them, because a file appearing beside your own with a suffix you did not choose is the one
+ * outcome that needs a sentence rather than a number.
+ */
+@Composable
+private fun SharedFolderNote(state: BoxUiState, onOpenInPhoneFiles: () -> Unit) {
+    val note = state.sharedSync
+    Surface(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 1000.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp)) {
+            Text(
+                "On your phone, and in your box at /workspace/shared.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                when {
+                    state.runtimeState != RuntimeState.Ready ->
+                        "Your box is closed. Anything you put here goes in when it opens."
+                    note == null -> "Nothing copied yet."
+                    else -> "Last levelled ${whenThatWas(note.atMillis)}."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            note?.kept?.forEach { copy ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "You and the box both changed a file. Yours was kept, and the box's is beside " +
+                        "it as $copy.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+            if (note != null && note.trouble.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "${note.trouble.size} could not be copied into the box: " +
+                        note.trouble.joinToString(", "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            TextButton(onClick = onOpenInPhoneFiles, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("Open in Files")
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyPlace(shared: Boolean) {
+    Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                Icon(Icons.Outlined.FolderOpen, null, Modifier.padding(18.dp).size(30.dp))
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("Empty", style = MaterialTheme.typography.titleMedium)
+            if (shared) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Put a file here from any app and the box gets a copy.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** "3 minutes ago". The stamp comes from `:computer`, which shares this phone's wall clock. */
+private fun whenThatWas(atMillis: Long): String = DateUtils.getRelativeTimeSpanString(
+    atMillis,
+    System.currentTimeMillis(),
+    DateUtils.MINUTE_IN_MILLIS,
+).toString().lowercase(Locale.getDefault())
+
+/**
+ * The path, as buttons. [onOpen] is given how many segments to keep, so the same row works for a
+ * relative path on the phone and an absolute one in the guest without knowing which it has.
+ */
+@Composable
+private fun Breadcrumb(
+    root: String,
+    segments: List<String>,
+    onOpen: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val relative = currentPath.removePrefix("/workspace").trim('/')
-    val segments = if (relative.isBlank()) emptyList() else relative.split('/')
     Row(
         modifier.horizontalScroll(rememberScrollState()),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { onOpenDirectory("/workspace") }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-            Text("workspace", fontFamily = FontFamily.Monospace)
+        TextButton(onClick = { onOpen(0) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+            Text(root, fontFamily = FontFamily.Monospace)
         }
-        var path = "/workspace"
-        segments.forEach { segment ->
-            path += "/$segment"
-            val target = path
+        segments.forEachIndexed { index, segment ->
             Icon(Icons.Outlined.ChevronRight, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = { onOpenDirectory(target) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+            TextButton(onClick = { onOpen(index + 1) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
                 Text(segment, fontFamily = FontFamily.Monospace)
             }
         }

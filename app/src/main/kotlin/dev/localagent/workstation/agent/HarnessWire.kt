@@ -131,10 +131,6 @@ internal object HarnessWire {
                 subAgentId = agent,
             )
 
-            "permission_mode" -> AgentEvent.PermissionModeChanged(
-                eventId, session, at, mode = permissionMode(json.optString("mode")),
-            )
-
             "activity" -> AgentEvent.ActivityChanged(
                 eventId, session, at, activity(json.optJSONObject("activity")),
             )
@@ -255,17 +251,6 @@ internal object HarnessWire {
                 alwaysAllowScope = scope,
             )
         }
-    }
-
-    /**
-     * Anything unrecognised is [PermissionMode.Ask], which is the one mode that cannot surprise
-     * anybody: a newer harness naming a mode this build has never heard of must not leave the
-     * composer claiming edits are being waved through.
-     */
-    private fun permissionMode(value: String): PermissionMode = when (value) {
-        "accept_edits" -> PermissionMode.AcceptEdits
-        "auto" -> PermissionMode.Auto
-        else -> PermissionMode.Ask
     }
 
     private fun decision(value: String): PermissionDecision = when (value) {

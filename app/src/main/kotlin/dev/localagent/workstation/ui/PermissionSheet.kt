@@ -1,7 +1,11 @@
 package dev.localagent.workstation.ui
 
+import android.content.res.Configuration
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,11 +41,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,6 +85,25 @@ import dev.localagent.workstation.agent.PermissionDecision
  * on two tools at once. The sheet takes the oldest and says how many are behind it, and each request
  * also carries its own inline decision in the transcript, so nothing depends on this modal being the
  * only way to answer.
+ *
+ * ## The keyboard, and why Enter does not simply mean Allow
+ *
+ * On a Fold or in DeX there is a hardware keyboard, and reaching for the screen to answer every
+ * request is the kind of friction that turns into "allow always" out of fatigue. But the obvious
+ * binding — Enter approves — quietly undoes the first choice above: a sheet that appears under the
+ * cursor while someone is typing would take a stray Return as consent, and consent is the one
+ * thing this sheet exists to make deliberate.
+ *
+ * So the keyboard gets the same shape as the touch surface rather than a shortcut past it. The
+ * sheet itself takes focus when it opens — focus lives somewhere, but on nothing that decides
+ * anything. Tab and the arrow keys move onto Deny first and Allow second, and the focused button
+ * says so with a ring, so Enter is always visibly attached to a choice the user made. Enter is
+ * then not a binding this file adds at all: it is what a focused button already does.
+ *
+ * Esc dismisses. Not "deny" — dismissing is the gesture that already exists here (swipe the sheet
+ * away), it produces `Abandoned`, and it must keep meaning exactly that: the agent is left
+ * waiting, nothing is approved, and no refusal the user never made is put in their mouth.
+
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,13 +116,34 @@ fun PermissionSheet(
     alsoWaiting: Int = 0,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetFocus = remember { FocusRequester() }
+    // Somewhere for key events to land that is not a decision. Without this, Esc goes nowhere
+    // until the user has already picked a button — which is the moment they least need it.
+    LaunchedEffect(pending.requestId) { runCatching { sheetFocus.requestFocus() } }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         sheetMaxWidth = 640.dp,
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 26.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp)
+                .padding(bottom = 26.dp)
+                .focusRequester(sheetFocus)
+                .focusable()
+                .onPreviewKeyEvent { event ->
+                    // Preview, so it is caught wherever focus has since moved to — including on
+                    // the Allow button, where Esc still has to mean back out rather than nothing.
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                        onDismiss()
+                        true
+                    } else {
+                        false
+                    }
+                },
+        ) {
             PermissionHeader(pending.ask, harnessName)
             if (alsoWaiting > 0) {
                 // One turn can block on several tools at once. Saying so is the difference between
@@ -268,8 +323,33 @@ private fun Footnote(text: String) {
     )
 }
 
+/**
+ * Shown only where there are keys to press.
+ *
+ * A phone with no keyboard attached has nothing to learn from this, and a line of shortcuts under
+ * a security decision on a 6" screen is noise in the one place noise is expensive.
+ */
+@Composable
+private fun KeyboardHint() {
+    val hasKeys = LocalConfiguration.current.keyboard != Configuration.KEYBOARD_NOKEYS
+    if (!hasKeys) return
+    Spacer(Modifier.height(10.dp))
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Text(
+            "Tab to choose · Enter to confirm · Esc to leave it unanswered",
+            style = MaterialTheme.typography.bodyMedium,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+        )
+    }
+}
+
 @Composable
 private fun PermissionActions(ask: PermissionAsk, onDecision: (PermissionDecision) -> Unit) {
+    val denyFocus = remember { MutableInteractionSource() }
+    val allowFocus = remember { MutableInteractionSource() }
+    val denyFocused by denyFocus.collectIsFocusedAsState()
+    val allowFocused by allowFocus.collectIsFocusedAsState()
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth(),
@@ -279,7 +359,14 @@ private fun PermissionActions(ask: PermissionAsk, onDecision: (PermissionDecisio
                 onClick = { onDecision(PermissionDecision.Deny) },
                 modifier = Modifier.weight(1f).height(52.dp),
                 shape = RoundedCornerShape(15.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                // The ring is the honest part of the keyboard path: it is the only thing on screen
+                // that says which of these two Enter is currently pointing at.
+                border = if (denyFocused) {
+                    BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                },
+                interactionSource = denyFocus,
             ) {
                 Icon(Icons.Outlined.Close, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -293,12 +380,19 @@ private fun PermissionActions(ask: PermissionAsk, onDecision: (PermissionDecisio
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                 ),
+                border = if (allowFocused) {
+                    BorderStroke(2.dp, MaterialTheme.colorScheme.onPrimary)
+                } else {
+                    null
+                },
+                interactionSource = allowFocus,
             ) {
                 Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Allow", fontWeight = FontWeight.SemiBold)
             }
         }
+        KeyboardHint()
         ask.alwaysAllowScope?.let { scope ->
             Spacer(Modifier.height(4.dp))
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
