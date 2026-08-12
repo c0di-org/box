@@ -194,3 +194,15 @@ test('a Task block is the sub-agent card, and its id is the sub-agent', () => {
   // The call that spawns a sub-agent belongs to the agent that spawned it, not to the delegate.
   assert.equal('subAgentId' in events[0], false);
 });
+
+test('sending a sub-agent is asked for in those words, and never blanket-approved', () => {
+  const ask = describeAsk('Task', {
+    description: 'Audit runtime-api',
+    prompt: 'List every public declaration.',
+    subagent_type: 'Explore',
+  });
+  assert.match(ask.description, /Audit runtime-api/);
+  assert.deepEqual(ask.details[0], ['Kind', 'Explore']);
+  // One sub-agent is one cost; "always allow" would answer for every later one too.
+  assert.equal(ask.alwaysAllowScope, null);
+});

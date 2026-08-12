@@ -288,6 +288,25 @@ function describeAsk(name, input = {}) {
         // should let someone make in one tap.
         alwaysAllowScope: null,
       };
+    case 'Task':
+    case 'Agent':
+      // Reached only if the guest's settings make spawning one an ask — which is what Box's own
+      // conventions tell the agent to do anyway. Without this case the sheet said "a tool Box does
+      // not model yet" about the one decision here that costs a second model its own run.
+      return {
+        kind: 'generic',
+        title: 'Send a sub-agent?',
+        description: input.description
+          ? `It wants to hand this off: ${clip(input.description, 200)}`
+          : 'It wants to hand a piece of work to a sub-agent.',
+        details: [
+          ...(input.subagent_type ? [['Kind', String(input.subagent_type)]] : []),
+          ...(input.prompt ? [['Asked to', clip(input.prompt, 400)]] : []),
+        ],
+        // Never a blanket yes. Each sub-agent is its own cost in tokens and in a phone's time, and
+        // "always allow" would answer for the ones nobody has thought of yet.
+        alwaysAllowScope: null,
+      };
     case 'WebFetch': {
       let host = input.url ?? '';
       try { host = new URL(input.url).host; } catch { /* keep the raw string */ }
