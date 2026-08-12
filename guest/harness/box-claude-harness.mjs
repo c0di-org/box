@@ -13,6 +13,9 @@
  *   1. The event log is append-only. Nothing is mutated; a tool call that finishes emits a second
  *      event referencing the first by callId, and streamed text re-emits under one messageId.
  *   2. A credential never appears in an event, ever. It is read from disk and handed to the SDK.
+ *
+ * Sub-agents live in that same flat log: a Task tool call names one, and everything the delegate
+ * then says or does carries its `subAgentId`. See `attribution` and `stopSubAgent`.
  */
 
 import { createInterface } from 'node:readline';
@@ -173,6 +176,12 @@ function handleCommand(line) {
     case 'interrupt':
       if (activeQuery) activeQuery.interrupt().catch(() => {});
       break;
+    case 'stop_subagent':
+      // Its own command rather than an `interrupt` carrying a sub-agent id, because an older
+      // harness reads an unknown field while obeying the type it knows — and would stop the whole
+      // session. An unknown type is dropped with a diagnostic, which is the right failure.
+      stopSubAgent(String(command.subAgentId ?? '')).catch(() => {});
+      break;
     default:
       diagnostic(`unknown command ${command.type}`);
   }
@@ -224,6 +233,17 @@ function describeTool(name, input = {}) {
       return { kind: 'fetch', url: input.url ?? '' };
     case 'WebSearch':
       return { kind: 'search', query: input.query ?? '', scope: 'the web' };
+    case 'Task':
+    case 'Agent':
+      // A sub-agent, and the one tool whose card outlives the call: everything the delegate then
+      // does arrives stamped with this block's id. Left as `generic` it was one opaque card
+      // spinning for the whole life of a sub-agent that was, meanwhile, invisible.
+      return {
+        kind: 'task',
+        description: input.description ?? input.subagent_type ?? 'Sub-agent',
+        prompt: clip(input.prompt ?? '', 2048) || null,
+        agentType: input.subagent_type ?? null,
+      };
     default:
       return {
         kind: 'generic',
@@ -381,12 +401,89 @@ const toolNames = new Map();
 /** TodoWrite is a checklist, not a tool card: it drives the plan block instead. */
 let planId = 0;
 
+/**
+ * Live sub-agents, keyed by the tool_use id of the Task block that started them.
+ *
+ * That id is the one the rest of Box knows a sub-agent by, because it is the only identity the
+ * sub-agent's own messages carry: every message and tool result it produces arrives with
+ * `parent_tool_use_id` set to it. The SDK's task id is a *different* identifier, known only from
+ * `task_started` — and it is the one `stopTask` wants, which is the whole reason this map exists.
+ */
+const subAgents = new Map();
+
+/**
+ * Sub-agents already reported as stopped.
+ *
+ * A stopped sub-agent still returns a tool_result — its aborted report — and letting that through
+ * would finish the card a second time as a success. The card would then say the delegate completed
+ * normally, moments after the user watched themselves stop it.
+ */
+const stoppedSubAgents = new Set();
+
+/**
+ * Stops one sub-agent, or says plainly why it could not.
+ *
+ * `stopTask` is a real per-task cancel, which is what makes this honest rather than a UI gesture:
+ * the sub-agent is told to stand down and the agent that sent it carries on with what it hears
+ * back. It is also not in the SDK's published surface for every version Box may find in a guest,
+ * so its absence is a reportable condition and never a crash.
+ */
+async function stopSubAgent(subAgentId) {
+  if (stoppedSubAgents.has(subAgentId)) return;
+  const taskId = subAgents.get(subAgentId);
+  if (!taskId || !activeQuery || typeof activeQuery.stopTask !== 'function') {
+    emit({
+      type: 'error',
+      message: 'Box could not stop that sub-agent.',
+      detail: taskId
+        ? 'The installed agent does not offer per-task stopping.'
+        : 'It had already finished, or never reported itself as a task.',
+      recoverable: true,
+    });
+    return;
+  }
+  try {
+    await activeQuery.stopTask(taskId);
+  } catch (error) {
+    emit({
+      type: 'error',
+      message: 'Box could not stop that sub-agent.',
+      detail: clip(String(error?.message ?? error), 512),
+      recoverable: true,
+    });
+    return;
+  }
+  // Marked before the event, so the aborted tool_result that follows is dropped rather than
+  // overwriting this with a success.
+  stoppedSubAgents.add(subAgentId);
+  subAgents.delete(subAgentId);
+  emit({ type: 'tool_finished', callId: subAgentId, outcome: { status: 'cancelled' } });
+}
+
+/**
+ * Who produced this message.
+ *
+ * `parent_tool_use_id` is the SDK's whole answer to that question, and ignoring it — which this
+ * harness used to do — is what flattened a sub-agent into the transcript of the agent that sent it:
+ * two voices under one byline, with the delegate's tool cards indistinguishable from its parent's.
+ * Stamped onto the event instead, it becomes the identity the app nests a card around.
+ */
+function attribution(message) {
+  const parent = message.parent_tool_use_id;
+  return parent ? { subAgentId: parent } : {};
+}
+
 function translateAssistant(message) {
+  const from = attribution(message);
   for (const block of message.message?.content ?? []) {
     if (block.type === 'text' && block.text) {
-      emit({ type: 'message', messageId: message.uuid, text: clip(block.text), complete: true });
+      emit({
+        type: 'message', messageId: message.uuid, text: clip(block.text), complete: true, ...from,
+      });
     } else if (block.type === 'thinking' && block.thinking) {
-      emit({ type: 'thinking', messageId: message.uuid, text: clip(block.thinking), complete: true });
+      emit({
+        type: 'thinking', messageId: message.uuid, text: clip(block.thinking), complete: true, ...from,
+      });
     } else if (block.type === 'tool_use') {
       if (block.name === 'TodoWrite') {
         emit({
@@ -396,11 +493,14 @@ function translateAssistant(message) {
             text: todo.content ?? todo.activeForm ?? '',
             state: todo.status ?? 'pending',
           })),
+          ...from,
         });
         continue;
       }
       toolNames.set(block.id, block.name);
-      emit({ type: 'tool_started', callId: block.id, tool: describeTool(block.name, block.input) });
+      emit({
+        type: 'tool_started', callId: block.id, tool: describeTool(block.name, block.input), ...from,
+      });
 
       // An edit the user already approved still has to show up as a change in the transcript.
       if (block.name === 'Write' && block.input?.file_path) {
@@ -410,6 +510,7 @@ function translateAssistant(message) {
           path: block.input.file_path,
           patch: createPatch(block.input.file_path, block.input.content ?? ''),
           changeKind: 'create',
+          ...from,
         });
       } else if (block.name === 'Edit' && block.input?.file_path) {
         const patch = editPatch(block.input.file_path, block.input.old_string ?? '', block.input.new_string ?? '');
@@ -420,6 +521,7 @@ function translateAssistant(message) {
             path: block.input.file_path,
             patch,
             changeKind: 'modify',
+            ...from,
           });
         }
       }
@@ -428,8 +530,12 @@ function translateAssistant(message) {
 }
 
 function translateToolResults(message) {
+  const from = attribution(message);
   for (const block of message.message?.content ?? []) {
     if (block.type !== 'tool_result') continue;
+    // The delegate's own aborted report. Its card has already said it was stopped, by the person
+    // reading it, and that is the truer of the two answers.
+    if (stoppedSubAgents.has(block.tool_use_id)) continue;
     const output = Array.isArray(block.content)
       ? block.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n')
       : String(block.content ?? '');
@@ -439,8 +545,10 @@ function translateToolResults(message) {
       outcome: block.is_error
         ? { status: 'failure', message: clip(output, 2048) || 'The tool failed.', output: clip(output) }
         : { status: 'success', output: clip(output), summary: null },
+      ...from,
     });
     toolNames.delete(block.tool_use_id);
+    subAgents.delete(block.tool_use_id);
   }
 }
 
@@ -672,8 +780,16 @@ async function main() {
         case 'system':
           if (message.subtype === 'init') {
             emit({ type: 'activity', activity: { kind: 'thinking' } });
-          } else if (message.subtype === 'task_progress') {
-            emit({ type: 'activity', activity: { kind: 'working', label: message.description } });
+          } else if (message.subtype === 'task_started' || message.subtype === 'task_progress') {
+            // The only place the two ids for one sub-agent appear together: the tool_use id its
+            // own messages carry, and the task id `stopTask` takes. Without this pairing a sub-agent
+            // can be watched but not stopped.
+            if (message.tool_use_id && message.task_id) {
+              subAgents.set(message.tool_use_id, message.task_id);
+            }
+            if (message.subtype === 'task_progress') {
+              emit({ type: 'activity', activity: { kind: 'working', label: message.description } });
+            }
           }
           break;
         case 'assistant':
@@ -683,7 +799,12 @@ async function main() {
           translateToolResults(message);
           break;
         case 'tool_progress':
-          emit({ type: 'tool_progress', callId: message.tool_use_id, chunk: '' });
+          emit({
+            type: 'tool_progress',
+            callId: message.tool_use_id,
+            chunk: '',
+            ...attribution(message),
+          });
           break;
         case 'result':
           ended = true;
@@ -751,4 +872,4 @@ if (isEntryPoint) {
   });
 }
 
-export { describeTool, describeAsk, editPatch, createPatch };
+export { describeTool, describeAsk, editPatch, createPatch, translateAssistant, translateToolResults };

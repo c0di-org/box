@@ -1,9 +1,12 @@
 /**
- * The Claude-specific half of the harness: tool names and permission asks translated into Box's
- * vocabulary. Pure functions, no SDK call, no network — run with `node --test`.
+ * The Claude-specific half of the harness: tool names, permission asks and SDK messages translated
+ * into Box's vocabulary. No SDK call, no network — run with `node --test`.
  *
  * The patch cases matter most. The permission sheet exists so someone can approve an edit without
  * opening a terminal, so a diff with invented line numbers would be worse than no diff at all.
+ *
+ * The attribution cases matter for the same reason one level up: a sub-agent's work shown as the
+ * parent's is a transcript that misreports who did what.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +14,34 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { describeTool, describeAsk, editPatch, createPatch } =
+const { describeTool, describeAsk, editPatch, createPatch, translateAssistant, translateToolResults } =
   await import('../harness/box-claude-harness.mjs');
+
+/**
+ * The events one translation call writes.
+ *
+ * `emit` writes a whole line to stdout synchronously, which is the property the app depends on, so
+ * borrowing stdout for the duration of the call is enough to read what a translation says. Nothing
+ * else writes while `run` is on the stack.
+ */
+function emitted(run) {
+  const lines = [];
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try {
+    run();
+  } finally {
+    process.stdout.write = original;
+  }
+  return lines.join('').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+
+const assistant = (content, parent = null) => ({
+  type: 'assistant',
+  uuid: 'a1',
+  parent_tool_use_id: parent,
+  message: { role: 'assistant', content },
+});
 
 const scratch = mkdtempSync(join(tmpdir(), 'box-harness-'));
 
@@ -98,4 +127,70 @@ test('a malformed URL still produces an ask instead of throwing', () => {
   const ask = describeAsk('WebFetch', { url: 'not a url' });
   assert.equal(ask.kind, 'network_access');
   assert.equal(ask.host, 'not a url');
+});
+
+test('a sub-agent is a first-class tool call carrying what it was asked to do', () => {
+  const tool = describeTool('Task', {
+    description: 'Audit runtime-api',
+    prompt: 'List every public declaration and note which carry KDoc.',
+    subagent_type: 'Explore',
+  });
+  assert.equal(tool.kind, 'task');
+  assert.equal(tool.description, 'Audit runtime-api');
+  assert.equal(tool.agentType, 'Explore');
+  assert.match(tool.prompt, /^List every public declaration/);
+});
+
+test('a sub-agent with no description still gets a name to show', () => {
+  assert.equal(describeTool('Task', { subagent_type: 'Explore' }).description, 'Explore');
+  assert.equal(describeTool('Task', {}).description, 'Sub-agent');
+});
+
+test('what the session\'s own agent says carries no attribution', () => {
+  const events = emitted(() => translateAssistant(assistant([{ type: 'text', text: 'On it.' }])));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'message');
+  // Absent, not null-and-present: an older app reading this line sees exactly what it used to.
+  assert.equal('subAgentId' in events[0], false);
+});
+
+test('everything a sub-agent says and does is stamped with the sub-agent', () => {
+  const events = emitted(() => translateAssistant(assistant([
+    { type: 'text', text: 'Starting from the entry points.' },
+    { type: 'thinking', thinking: 'nine files' },
+    { type: 'tool_use', id: 'c1', name: 'Grep', input: { pattern: 'public ' } },
+  ], 'a1')));
+
+  assert.deepEqual(events.map((event) => event.type), ['message', 'thinking', 'tool_started']);
+  for (const event of events) assert.equal(event.subAgentId, 'a1');
+  // Still the same structured card it would be in the parent's own transcript.
+  assert.equal(events[2].tool.kind, 'search');
+});
+
+test('a tool result belonging to a sub-agent finishes the sub-agent\'s own card', () => {
+  const events = emitted(() => translateToolResults({
+    type: 'user',
+    parent_tool_use_id: 'a1',
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'c1', content: '63 matches' }],
+    },
+  }));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].callId, 'c1');
+  assert.equal(events[0].subAgentId, 'a1');
+  assert.match(events[0].outcome.output, /63 matches/);
+});
+
+test('a Task block is the sub-agent card, and its id is the sub-agent', () => {
+  const events = emitted(() => translateAssistant(assistant([
+    { type: 'tool_use', id: 'a1', name: 'Task', input: { description: 'Audit runtime-api' } },
+  ])));
+
+  assert.equal(events[0].type, 'tool_started');
+  assert.equal(events[0].callId, 'a1');
+  assert.equal(events[0].tool.kind, 'task');
+  // The call that spawns a sub-agent belongs to the agent that spawned it, not to the delegate.
+  assert.equal('subAgentId' in events[0], false);
 });

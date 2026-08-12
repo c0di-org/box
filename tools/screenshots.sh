@@ -42,6 +42,7 @@ SHOTS=(
   "phone chat 3 progress"        # the plain-language checklist, mid-run
   "phone chat 0 chat"            # and how it ended
   "phone permission 0 permission" # the moment before it edits a file
+  "phone subagent 0 subagent"    # a sub-agent working, and the one control that stops just it
   "phone terminal 0 terminal"    # the machine, driven directly
   "tablet chat 3 progress"       # unfolded: the list keeps its place beside the conversation
   "tablet chat 0 chat"

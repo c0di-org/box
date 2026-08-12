@@ -49,6 +49,17 @@ interface AgentBackend {
     /** Ctrl-C equivalent: stop what the agent is doing, keep the session. */
     suspend fun interrupt(sessionId: String)
 
+    /**
+     * Stop one sub-agent — the one named by [subAgentId] — and leave the session running.
+     *
+     * Separate from [interrupt] rather than a nullable argument to it, because the two are not the
+     * same act and confusing them is expensive: stopping the session throws away everything in
+     * flight, while this asks one delegate to stand down and lets the agent that sent it carry on
+     * with whatever it hears back. A backend that cannot single one out should do nothing at all
+     * rather than fall back to interrupting the session.
+     */
+    suspend fun interruptSubAgent(sessionId: String, subAgentId: String)
+
     /** Tear the session down and forget it. */
     suspend fun closeSession(sessionId: String)
 }

@@ -334,6 +334,19 @@ class GuestAgentBackend(
         records[sessionId]?.write(mapOf("type" to "interrupt"))
     }
 
+    /**
+     * A command of its own, not an `interrupt` carrying a sub-agent id.
+     *
+     * The guest image is upgraded independently of the APK, so this can reach a harness that has
+     * never heard of sub-agents — and an older harness reads an unknown *field* while acting on the
+     * type it recognises. `{"type":"interrupt","subAgentId":…}` would therefore stop the whole
+     * session on exactly the phones least able to explain why. An unknown *type* is dropped with a
+     * diagnostic, which is the failure this should have.
+     */
+    override suspend fun interruptSubAgent(sessionId: String, subAgentId: String) {
+        records[sessionId]?.write(mapOf("type" to "stop_subagent", "subAgentId" to subAgentId))
+    }
+
     override suspend fun closeSession(sessionId: String) {
         val record = records.remove(sessionId) ?: return
         record.connection.value = SessionConnection.Ended

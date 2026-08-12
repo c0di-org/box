@@ -3,6 +3,7 @@ package dev.localagent.workstation.agent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,7 +22,8 @@ import java.util.concurrent.atomic.AtomicLong
  * permission sheet, disconnection — can be built, demoed and screenshotted before the harness
  * transport lands. The headline script is the mockup's "clone project and run" flow, and it
  * deliberately pauses on a permission request so the sheet is reachable in two taps from a cold
- * start.
+ * start. A second one — [runAuditScript] — delegates to a sub-agent and parks there, so the card
+ * and its Stop button are reachable the same way.
  */
 class FakeAgentBackend(
     private val scope: CoroutineScope,
@@ -35,6 +37,9 @@ class FakeAgentBackend(
     private val connections = ConcurrentHashMap<String, MutableStateFlow<SessionConnection>>()
     private val scripts = ConcurrentHashMap<String, Job>()
     private val awaitingDecision = ConcurrentHashMap<String, CompletableDeferred<PermissionDecision>>()
+
+    /** Scripted sub-agents still running, by session and id, so one can be stopped on its own. */
+    private val subAgents = ConcurrentHashMap<Pair<String, String>, Job>()
 
     private val harnessList = MutableStateFlow(
         listOf(
@@ -138,6 +143,9 @@ class FakeAgentBackend(
 
     override suspend fun interrupt(sessionId: String) {
         scripts.remove(sessionId)?.cancel()
+        // Stopping the session stops everything it delegated. The cards say so rather than being
+        // left spinning by a script that will never speak again.
+        subAgents.keys.filter { it.first == sessionId }.forEach { stopSubAgent(sessionId, it.second) }
         awaitingDecision.keys.forEach { awaitingDecision.remove(it)?.complete(PermissionDecision.Abandoned) }
         emit(
             AgentEvent.ActivityChanged(
@@ -148,6 +156,10 @@ class FakeAgentBackend(
             ),
         )
         touch(sessionId, SessionStatus.Idle)
+    }
+
+    override suspend fun interruptSubAgent(sessionId: String, subAgentId: String) {
+        stopSubAgent(sessionId, subAgentId)
     }
 
     override suspend fun closeSession(sessionId: String) {
@@ -194,9 +206,13 @@ class FakeAgentBackend(
     }
 
     private fun ensureScript(sessionId: String) {
-        if (sessionId != CLONE_SESSION) return
         if (scripts.containsKey(sessionId)) return
-        scripts[sessionId] = scope.launch { runCloneScript(sessionId) }
+        val script: (suspend () -> Unit) = when (sessionId) {
+            CLONE_SESSION -> ({ runCloneScript(sessionId) })
+            AUDIT_SESSION -> ({ runAuditScript(sessionId) })
+            else -> return
+        }
+        scripts[sessionId] = scope.launch { script() }
     }
 
     /** Streams [text] into one message id so the UI exercises its streaming path. */
@@ -280,6 +296,78 @@ class FakeAgentBackend(
                 at = System.currentTimeMillis(),
                 planId = "$sessionId-plan",
                 items = items,
+            ),
+        )
+    }
+
+    /**
+     * Ends a scripted sub-agent the way a real stop ends one: cancelled, and said out loud.
+     *
+     * The card is closed here rather than by the cancelled script, because a cancelled coroutine
+     * is in no position to emit anything — which is exactly how a stopped sub-agent ends up
+     * spinning forever on the screen that asked it to stop.
+     */
+    private fun stopSubAgent(sessionId: String, subAgentId: String) {
+        val running = subAgents.remove(sessionId to subAgentId) ?: return
+        running.cancel()
+        emit(
+            AgentEvent.ToolCallFinished(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                callId = subAgentId,
+                outcome = ToolOutcome.Cancelled,
+            ),
+        )
+    }
+
+    /**
+     * Everything a sub-agent emits, stamped with its own id.
+     *
+     * Deliberately the same [emit] and the same event types the parent uses: the nesting the UI
+     * draws is a property of the log, not of a second channel, so a scripted sub-agent exercises
+     * exactly the path the harness will.
+     */
+    private suspend fun subAgentTool(
+        sessionId: String,
+        subAgentId: String,
+        call: ToolCall,
+        summary: String,
+        stepMillis: Long = 420,
+    ) {
+        val callId = "c-${ids.incrementAndGet()}"
+        emit(
+            AgentEvent.ToolCallStarted(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                callId = callId,
+                call = call,
+                subAgentId = subAgentId,
+            ),
+        )
+        beat(stepMillis)
+        emit(
+            AgentEvent.ToolCallFinished(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                callId = callId,
+                outcome = ToolOutcome.Success(summary = summary),
+                subAgentId = subAgentId,
+            ),
+        )
+    }
+
+    private fun subAgentSays(sessionId: String, subAgentId: String, text: String) {
+        emit(
+            AgentEvent.AgentMessage(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                messageId = "m-${ids.incrementAndGet()}",
+                text = text,
+                subAgentId = subAgentId,
             ),
         )
     }
@@ -470,6 +558,123 @@ class FakeAgentBackend(
         }
     }
 
+    /**
+     * The sub-agent demo: one agent delegating, and a delegate you can stop.
+     *
+     * Kept out of the clone script on purpose. That one exists to reach the permission sheet in two
+     * taps from a cold start, and anything added before the ask pushes the sheet further away.
+     *
+     * The delegate parks instead of finishing, which is the only way a Stop button is reachable by
+     * hand: a scripted sub-agent that completes in eight seconds cannot be stopped by anyone, and a
+     * control nobody can press is not demoable. Stopping it is what lets the rest of this run.
+     */
+    private suspend fun runAuditScript(sessionId: String) {
+        emit(
+            AgentEvent.UserMessage(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                text = "Go through the public API and tell me what isn't documented.",
+            ),
+        )
+        touch(sessionId, SessionStatus.Active)
+        beat(500)
+
+        activity(sessionId, AgentActivity.Thinking("Planning the audit"))
+        beat(800)
+        stream(
+            sessionId,
+            "There are four modules and a few hundred public declarations. I'll send a sub-agent " +
+                "to read the runtime module while I go through what the docs already cover.",
+        )
+        beat(300)
+
+        val subAgentId = "a-${ids.incrementAndGet()}"
+        emit(
+            AgentEvent.ToolCallStarted(
+                eventId = next(),
+                sessionId = sessionId,
+                at = System.currentTimeMillis(),
+                callId = subAgentId,
+                call = ToolCall.Task(
+                    description = "Audit runtime-api for missing docs",
+                    prompt = "List every public declaration in runtime-api and note which of them " +
+                        "carry KDoc. Report the gaps, grouped by file.",
+                    agentType = "Explore",
+                ),
+            ),
+        )
+        activity(sessionId, AgentActivity.Working("Auditing runtime-api"))
+
+        // Launched on the backend's own scope rather than inside this script, so stopping the
+        // sub-agent is not the same act as stopping the run that spawned it.
+        subAgents[sessionId to subAgentId] = scope.launch { runSubAgent(sessionId, subAgentId) }
+
+        // The parent keeps working while its delegate does. This is the interleaving the card
+        // exists to untangle: both are talking, and only one of them is the one you can stop.
+        tool(
+            sessionId = sessionId,
+            call = ToolCall.Search("@param", "/workspace/docs"),
+            output = listOf("docs/runtime.md: 12 matches", "docs/development.md: 3 matches"),
+            outcome = ToolOutcome.Success(summary = "15 matches in 2 files"),
+            stepMillis = 500,
+        )
+
+        subAgents[sessionId to subAgentId]?.join()
+
+        val stopped = log(sessionId).value
+            .filterIsInstance<AgentEvent.ToolCallFinished>()
+            .lastOrNull { it.callId == subAgentId }
+            ?.outcome is ToolOutcome.Cancelled
+        beat(400)
+        stream(
+            sessionId,
+            if (stopped) {
+                "Stopped the audit. It had already got through the state machine, and everything " +
+                    "it read is in its card above — I can pick it back up from there whenever."
+            } else {
+                "The audit came back: 22 of 63 public declarations in runtime-api have no KDoc, " +
+                    "and they cluster in the state machine. That is where I'd start."
+            },
+        )
+        activity(sessionId, AgentActivity.Idle)
+        touch(
+            sessionId,
+            SessionStatus.Idle,
+            if (stopped) "Audit stopped partway." else "22 of 63 declarations are undocumented.",
+        )
+    }
+
+    /** What the delegate does, in its own voice, under its own id. */
+    private suspend fun runSubAgent(sessionId: String, subAgentId: String) {
+        subAgentSays(sessionId, subAgentId, "Starting from the module's entry points.")
+        beat(500)
+        subAgentTool(
+            sessionId, subAgentId,
+            ToolCall.Search("public ", "/workspace/runtime-api/src"),
+            summary = "63 matches in 9 files",
+        )
+        subAgentTool(
+            sessionId, subAgentId,
+            ToolCall.ReadFile("/workspace/runtime-api/src/main/kotlin/ComputerRuntime.kt"),
+            summary = "118 lines",
+        )
+        subAgentSays(
+            sessionId, subAgentId,
+            "The interface itself is documented. The state machine underneath it is where the " +
+                "gaps are — reading that next.",
+        )
+        beat(500)
+        subAgentTool(
+            sessionId, subAgentId,
+            ToolCall.ReadFile("/workspace/runtime-api/src/main/kotlin/RuntimeState.kt"),
+            summary = "74 lines",
+        )
+        // Parked, not finished. See runAuditScript: a delegate that finishes on its own before a
+        // hand reaches the Stop button is a feature nobody in the demo can try.
+        awaitCancellation()
+    }
+
     /** Anything the user types after the script. Short, honest, and never claims to have run. */
     private suspend fun runGenericScript(sessionId: String, prompt: String) {
         activity(sessionId, AgentActivity.Thinking())
@@ -501,6 +706,7 @@ class FakeAgentBackend(
         return listOf(
             SessionSummary(CLONE_SESSION, "chatgpt", "Clone project and run", SessionStatus.Active, base, preview = "Setting up the project…"),
             SessionSummary("s-review", "cursor", "Review PR #42", SessionStatus.Active, base - 4 * 60_000, preview = "Reading the diff…"),
+            SessionSummary(AUDIT_SESSION, "claude", "Audit the public API", SessionStatus.Active, base - 2 * 60_000, preview = "A sub-agent is reading runtime-api…"),
             SessionSummary("s-auth", "claude", "Refactor auth flow", SessionStatus.Finished, base - 42 * 60_000, preview = "Split the token refresh out of the interceptor."),
             SessionSummary("s-logs", "claude", "Summarize logs", SessionStatus.Finished, base - 96 * 60_000, preview = "Three distinct crash signatures."),
             SessionSummary("s-layout", "chatgpt", "Fix mobile layout", SessionStatus.Finished, base - 130 * 60_000, preview = "The grid needed a min-width, not a media query."),
@@ -605,6 +811,7 @@ class FakeAgentBackend(
 
     private companion object {
         const val CLONE_SESSION = "s-clone"
+        const val AUDIT_SESSION = "s-audit"
 
         val VITE_CONFIG_PATCH = """
             @@ -1,8 +1,12 @@

@@ -18,6 +18,7 @@ import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.TranscriptBuilder
+import dev.localagent.workstation.agent.TranscriptItem
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopInput
 import dev.localagent.workstation.computer.DesktopState
@@ -80,6 +81,7 @@ class UiGalleryActivity : ComponentActivity() {
                     onNewConversation = {},
                     onSend = model::send,
                     onInterrupt = model::interrupt,
+                    onStopSubAgent = model::stopSubAgent,
                     onPermissionDecision = model::decide,
                     onOpenArtifact = {},
                     onCloseSession = {},
@@ -116,6 +118,7 @@ val SCENES = listOf(
     "tasks",
     "chat",
     "permission",
+    "subagent",
     // The machine.
     "computer",
     "computer-chat",
@@ -142,6 +145,10 @@ private class GalleryModel(private val scope: CoroutineScope) {
 
     /** The scripted "clone my project" conversation — the one the README is written about. */
     private val headline: String get() = backend.sessions.value.first().id
+
+    /** The other scripted conversation: one agent delegating to a sub-agent it can stop. */
+    private val subAgentSession: String
+        get() = backend.sessions.value.first { it.title == "Audit the public API" }.id
 
     init {
         scope.launch { backend.harnesses.collect { list -> mutable.update { it.copy(harnesses = list) } } }
@@ -195,6 +202,17 @@ private class GalleryModel(private val scope: CoroutineScope) {
             "permission" -> {
                 select(headline)
                 awaitPending()
+            }
+
+            // A sub-agent mid-run, which is the only state where it can be stopped. The scripted
+            // delegate parks rather than finishing, so this shot is reachable at zero pace.
+            "subagent" -> {
+                select(subAgentSession)
+                state.first { transcript ->
+                    transcript.transcript?.items?.any {
+                        it is TranscriptItem.SubAgent && it.items.isNotEmpty()
+                    } == true
+                }
             }
 
             "computer" -> computer(ComputerPanel.None)
@@ -255,6 +273,11 @@ private class GalleryModel(private val scope: CoroutineScope) {
     fun interrupt() {
         val sessionId = selection.value ?: return
         scope.launch { backend.interrupt(sessionId) }
+    }
+
+    fun stopSubAgent(subAgentId: String) {
+        val sessionId = selection.value ?: return
+        scope.launch { backend.interruptSubAgent(sessionId, subAgentId) }
     }
 
     fun decide(requestId: String, decision: PermissionDecision) {
