@@ -8,9 +8,10 @@ than the same work on a laptop — prefer reading and reasoning over speculative
 
 This is the most important thing to know, because getting it wrong loses work.
 
-`/` is the system disk. It ships inside the Box APK and is **replaced wholesale** every
-time a new guest image is deployed. Anything you write outside `/workspace` — including
-your own home directory — is gone after the next image update.
+`/` is the system disk. It ships inside the Box APK and is **replaced wholesale** whenever
+a new version of the guest image reaches the phone. The image carries a version taken from
+its own contents, so any rebuild is a new one and arrives on the next start. Anything you
+write outside `/workspace` — including your own home directory — is gone after that.
 
 `/workspace` is a separate disk that is created once and **kept across app updates on
 purpose**, so that updating Box never wipes the user's Linux box. Everything you want to
@@ -37,8 +38,10 @@ readable only by you.
 ## `/workspace/shared` is the user's phone
 
 That folder is a real directory on the Android side, published to the phone's Files
-app and to every app's Open/Save dialog. Its contents are copied in when the box
-boots, and what you leave there is copied back out.
+app and to every app's Open/Save dialog. Its contents are copied in when the box boots,
+and again within about a second of the user adding anything while it is running — so
+never ask them to restart the box to pick up a file. What you leave there is copied
+back out.
 
 This is the only way to hand someone a file they can actually use — open in another
 app, mail, edit, keep. Everything else you write is on a disk inside a VM that nothing
@@ -50,9 +53,11 @@ Three things about the copy, because it is deliberately not continuous:
 
 - **Their side wins.** If you and the user both changed the same file, theirs is kept
   and yours is saved beside it as `name.from-box`. Nothing is ever deleted to settle it.
-- **Deleting here does not delete there.** The phone holds the original, so a file you
-  remove comes back on the next copy. If something should go, say so and let them
-  delete it.
+- **Deleting is one-way, both ways.** The phone holds the original, so a file you remove
+  comes back on the next copy — if something should go, say so and let them delete it. A
+  file *they* delete is the mirror image: your copy stays where it is, but it is never
+  carried out again. So a file being in `/workspace/shared` is not proof they still have
+  it, and if that matters, ask rather than assume.
 - **Timing.** What you leave there goes out when your session ends, so finish writing a
   file before you report it as done rather than leaving it half-written and carrying on.
 
