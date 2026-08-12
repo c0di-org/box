@@ -101,13 +101,13 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onPermissionDecision = boxViewModel::resolvePermission,
             onOpenArtifact = { artifact ->
                 when (artifact) {
-                    dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openDesktop()
+                    dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openComputer()
                     is dev.localagent.workstation.agent.Artifact.Preview ->
                         boxViewModel.openPreview("The preview")
                 }
             },
             onCloseSession = boxViewModel::closeSession,
-            onSelectComputerTool = boxViewModel::selectComputerTool,
+            onSelectComputerPanel = boxViewModel::selectComputerPanel,
             onOpenBox = openBox,
             onStop = boxViewModel::stop,
             onRunCommand = boxViewModel::runCommand,
@@ -117,9 +117,8 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onOpenFile = boxViewModel::openFile,
             onCloseFile = boxViewModel::closeFile,
             onNoticeShown = boxViewModel::noticeShown,
+            onDismissGreeting = boxViewModel::dismissReadyGreeting,
             desktop = BoxContainer.desktop(LocalContext.current.applicationContext as android.app.Application),
-            onOpenDesktop = boxViewModel::openDesktop,
-            onCloseDesktop = boxViewModel::closeDesktop,
             onSetDesktopControl = boxViewModel::setDesktopControl,
             onShowSignIn = boxViewModel::showSignIn,
             onDismissSignIn = boxViewModel::dismissSignIn,

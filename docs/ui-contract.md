@@ -89,25 +89,45 @@ interface PreviewTransport {
 
 - Frames go through an Android `Surface`, not a bitmap stream: copying 60fps of ARGB across a
   process boundary would cost more than the VM does.
-- `ControlHolder` is runtime-enforced, not a UI convention. The agent drives by default; when the
-  user takes over, guest-agent input is suspended until they hand it back. The "Agent has control
-  / Take over" pair in the computer header is a view of this state.
+- `ControlHolder` is runtime-enforced, not a UI convention. Opening the Computer destination takes
+  control unless an agent is mid-task, and leaving hands it back; guest-agent input is suspended
+  for as long as the user holds it. The "Take over / You're driving" button in the computer's bar
+  is a view of this state.
 - `release` exists so a forwarded port never outlives the session that asked for it.
 
-Until these land, `DesktopSlot` renders an inert placeholder at the real aspect ratio (so the
-three-pane layout is measured against what will fill it), and "Open computer" / "Open preview"
-are wired but report that the transport is still being built.
+Until the preview transport lands, "Open preview" is wired but reports that it is still being
+built. The desktop transport exists: the computer draws the real guest screen.
 
 ## 4. Layout
 
-Three layouts, chosen from **window size only** — never device type, because a Fold changes class
-mid-process and DeX windows are resized by dragging a corner.
+Two destinations, and the layout question only applies to one of them.
+
+**Computer takes the whole window at every size.** The machine is the surface — live, interactive,
+with the pointer and keyboard going into it — and the agent, terminal and files float over it one
+panel at a time (`ComputerPanel`). It is deliberately not a pane beside the chat: a wide window
+used to give it the narrowest of three columns, non-interactive, which is how "there is a real
+Linux computer in here" ended up reading as a screenshot.
+
+**Tasks** picks between two layouts from **window size only** — never device type, because a Fold
+changes class mid-process and DeX windows are resized by dragging a corner.
 
 | Layout | Width | Panes |
 | --- | --- | --- |
-| `Single` | Compact (< 600dp) | One at a time, bottom nav. The conversation pushes over the list. |
-| `Dual` | Medium/Expanded < 1180dp | Session list + conversation. |
-| `Triple` | ≥ 1180dp | Session list + conversation + the agent's computer. |
+| `Single` | Compact (< 600dp) | One at a time. The conversation pushes over the list. |
+| `Wide` | Medium and up | Task list + conversation. |
 
-The decision is made once in `BoxApp`; every pane below is written to be dropped into any of the
-three without knowing which it landed in.
+The decision is made once in `BoxApp`; every pane below is written to be dropped into either
+without knowing which it landed in.
+
+There is no bottom navigation bar. The computer is the first row of the task list — carrying its
+own live screen — and a button in the conversation's header; both are always on screen, which the
+old nav bar was not.
+
+## 5. Opening the box
+
+`BoxStage` is the whole of it: `Closed`, `Working`, `Open`. What the home surface does with each is
+`BoxUiState.boxOwnsWindow` — the box gets the window when there is nothing else worth showing, and
+becomes a row the moment there is. The opening carries a composer, because the useful thing to do
+with a three-minute boot is queue the first task; `BoxUiState.queued` holds it until the guest can
+take it. The first opening on a device ends in a full-window greeting with both doors on it
+(`readyGreeting`, persisted in `OpeningHistory`); every later one ends in a snackbar and a haptic.

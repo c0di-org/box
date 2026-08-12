@@ -42,89 +42,27 @@ import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BuildConfig
 
-data class StatePresentation(
-    val shortLabel: String,
-    val eyebrow: String,
-    val title: String,
-    val body: String,
-    val color: Color,
-)
+/**
+ * What a runtime state is called, and in what colour.
+ *
+ * This used to carry an eyebrow, a headline and a paragraph for each of ten states — forty pieces
+ * of copy explaining a virtual machine to someone who wanted to know whether they could use it.
+ * The answer is a word and a colour.
+ */
+data class StatePresentation(val shortLabel: String, val color: Color)
 
 @Composable
 fun statePresentation(state: RuntimeState): StatePresentation = when (state) {
-    RuntimeState.NotProvisioned -> StatePresentation(
-        "Not set up",
-        "THE AGENT'S COMPUTER",
-        "A real Linux box,\ninside your phone.",
-        "Agents work in a private Debian workspace. Setting it up prepares the disk image; the " +
-            "first boot takes a couple of minutes.",
-        MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    is RuntimeState.Provisioning -> StatePresentation(
-        "Setting up",
-        "PREPARING THE WORKSPACE",
-        "Setting up the computer",
-        "Verifying the Linux system and creating the private workspace. Keep Box open for this step.",
-        MaterialTheme.colorScheme.primary,
-    )
-    RuntimeState.Stopped -> StatePresentation(
-        "Off",
-        "PRIVATE WORKSPACE",
-        "The computer is off.",
-        "Start it when an agent needs to run something. Files stay in /workspace between sessions.",
-        MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    RuntimeState.Starting -> StatePresentation(
-        "Booting",
-        "STARTING THE VM",
-        "Booting Debian",
-        "Box boots a full ARM64 virtual machine — about 90 seconds on this phone. You can keep " +
-            "using the conversation while it starts.",
-        MaterialTheme.colorScheme.primary,
-    )
-    RuntimeState.Connecting -> StatePresentation(
-        "Connecting",
-        "THE VM IS RUNNING",
-        "Almost there",
-        "Debian is up. Box is waiting for its private control channel so commands and files are " +
-            "safe to use.",
-        MaterialTheme.colorScheme.primary,
-    )
-    RuntimeState.Ready -> StatePresentation(
-        "Ready",
-        "THE AGENT'S COMPUTER",
-        "The computer is ready.",
-        "Agents can run commands and edit files in /workspace. You can take over any time.",
-        MaterialTheme.colorScheme.primary,
-    )
-    RuntimeState.Stopping -> StatePresentation(
-        "Stopping",
-        "SHUTTING DOWN SAFELY",
-        "Stopping the computer",
-        "The virtual machine is closing. The persistent workspace stays stored on this phone.",
-        MaterialTheme.colorScheme.tertiary,
-    )
-    RuntimeState.Suspending -> StatePresentation(
-        "Pausing",
-        "SAVING RUNTIME STATE",
-        "Pausing the computer",
-        "The workspace remains safely stored on this phone.",
-        MaterialTheme.colorScheme.tertiary,
-    )
-    RuntimeState.Suspended -> StatePresentation(
-        "Paused",
-        "WORKSPACE SAVED",
-        "The computer is paused.",
-        "Resume when an agent needs the Linux workspace again.",
-        MaterialTheme.colorScheme.tertiary,
-    )
-    is RuntimeState.Failed -> StatePresentation(
-        "Needs attention",
-        "STARTUP DIDN’T FINISH",
-        "The computer couldn’t start.",
-        state.reason.message.ifBlank { "The Linux runtime stopped before it became ready." },
-        MaterialTheme.colorScheme.error,
-    )
+    RuntimeState.NotProvisioned -> StatePresentation("Not set up", MaterialTheme.colorScheme.onSurfaceVariant)
+    is RuntimeState.Provisioning -> StatePresentation("Setting up", MaterialTheme.colorScheme.primary)
+    RuntimeState.Stopped -> StatePresentation("Closed", MaterialTheme.colorScheme.onSurfaceVariant)
+    RuntimeState.Starting -> StatePresentation("Booting", MaterialTheme.colorScheme.primary)
+    RuntimeState.Connecting -> StatePresentation("Almost ready", MaterialTheme.colorScheme.primary)
+    RuntimeState.Ready -> StatePresentation("Open", MaterialTheme.colorScheme.primary)
+    RuntimeState.Stopping -> StatePresentation("Closing", MaterialTheme.colorScheme.tertiary)
+    RuntimeState.Suspending -> StatePresentation("Pausing", MaterialTheme.colorScheme.tertiary)
+    RuntimeState.Suspended -> StatePresentation("Paused", MaterialTheme.colorScheme.tertiary)
+    is RuntimeState.Failed -> StatePresentation("Didn’t open", MaterialTheme.colorScheme.error)
 }
 
 @Composable
@@ -190,50 +128,36 @@ fun RuntimeGlyph(state: RuntimeState, modifier: Modifier = Modifier) {
 }
 
 /**
- * Shown wherever a tool needs the VM and the VM is not there yet. Deliberately calm: the VM takes
- * ~90 seconds and Android can reclaim it, so this screen is a normal part of the day.
+ * Shown wherever a tool needs the machine and the machine is not there yet.
+ *
+ * Deliberately calm and deliberately short: the box takes about three minutes and Android can
+ * reclaim it, so this is a normal part of the day, not an incident to be written up.
  */
 @Composable
-fun RuntimeGate(
-    destination: String,
-    state: RuntimeState,
-    onOpenBox: () -> Unit,
-) {
-    val presentation = statePresentation(state)
+fun RuntimeGate(state: RuntimeState, onOpenBox: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Column(Modifier.widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            RuntimeGlyph(state, Modifier.size(78.dp))
-            Spacer(Modifier.height(22.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            RuntimeGlyph(state, Modifier.size(64.dp))
+            Spacer(Modifier.height(20.dp))
             Text(
                 when (state) {
-                    RuntimeState.Ready -> "Ready"
                     RuntimeState.Starting, RuntimeState.Connecting, is RuntimeState.Provisioning ->
-                        "The computer is getting ready"
-                    RuntimeState.Stopping -> "The computer is shutting down"
-                    is RuntimeState.Failed -> "The computer needs attention"
-                    else -> "Start the computer to open $destination"
+                        "Opening your box"
+                    RuntimeState.Stopping -> "Closing"
+                    is RuntimeState.Failed -> "Your box didn’t open"
+                    else -> "Your box is closed"
                 },
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
             )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                when {
-                    state == RuntimeState.Starting || state == RuntimeState.Connecting ||
-                        state is RuntimeState.Provisioning ->
-                        "$destination unlocks as soon as the private control channel is up. " +
-                            "Booting takes about 90 seconds."
-                    state == RuntimeState.Stopping ->
-                        "The workspace is safe. You can start the computer again after shutdown finishes."
-                    else -> presentation.body
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(22.dp))
             when (state) {
-                RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended ->
+                RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended -> {
+                    Spacer(Modifier.height(20.dp))
                     Button(onClick = onOpenBox) { Text("Open your box") }
-                is RuntimeState.Failed -> Button(onClick = onOpenBox) { Text("Try again") }
+                }
+                is RuntimeState.Failed -> {
+                    Spacer(Modifier.height(20.dp))
+                    Button(onClick = onOpenBox) { Text("Try again") }
+                }
                 else -> Unit
             }
         }

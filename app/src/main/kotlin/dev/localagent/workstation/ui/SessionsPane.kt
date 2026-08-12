@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -52,7 +51,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.workstation.BoxProgress
-import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.agent.SessionStatus
 import dev.localagent.workstation.agent.SessionSummary
@@ -74,25 +72,22 @@ fun SessionsPane(
     onSelectSession: (String) -> Unit,
     onNewConversation: (String) -> Unit,
     onOpenBox: () -> Unit,
-    onOpenDesktop: () -> Unit,
+    onOpenComputer: () -> Unit,
+    onSendFirstTask: (String) -> Unit,
+    onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
     modifier: Modifier = Modifier,
     showSelection: Boolean = true,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
-        // Three heights for one panel, and the tasks take whatever is left. Animating the height
+        // Two heights for one panel, and the tasks take whatever is left. Animating the height
         // rather than swapping screens is what makes this read as the box moving rather than the
         // app navigating.
         //
-        // Working collapses to nothing: pressing the button hands the window straight back, and
-        // the opening carries on around the mark in the corner (see [OpeningMark]). Waiting three
-        // minutes in front of a screen you cannot use is the thing this whole surface is against.
+        // When the box gets the window and when it becomes a row is [BoxUiState.boxOwnsWindow].
+        val full = state.boxOwnsWindow
         val panelHeight by animateDpAsState(
-            targetValue = when (state.boxStage) {
-                BoxStage.Closed -> maxHeight
-                BoxStage.Working -> 0.dp
-                BoxStage.Open -> HERO_SETTLED_HEIGHT
-            },
+            targetValue = if (full) maxHeight else HERO_SETTLED_HEIGHT,
             animationSpec = tween(SETTLE_MILLIS),
             label = "box panel",
         )
@@ -102,8 +97,15 @@ fun SessionsPane(
                 state = state,
                 progress = progress,
                 desktop = desktop,
+                full = full,
                 onOpen = onOpenBox,
-                onOpenDesktop = onOpenDesktop,
+                onOpenComputer = onOpenComputer,
+                onOpenChat = {
+                    state.sessions.firstOrNull()?.let { onSelectSession(it.id) }
+                        ?: state.harnesses.firstOrNull()?.let { onNewConversation(it.id) }
+                },
+                onSendFirstTask = onSendFirstTask,
+                onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
                 modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
             )
@@ -117,7 +119,7 @@ fun SessionsPane(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
             AnimatedVisibility(
-                visible = state.boxStage != BoxStage.Closed,
+                visible = !full,
                 enter = fadeIn(tween(SETTLE_MILLIS)),
                 exit = fadeOut(tween(SETTLE_MILLIS / 2)),
             ) {
@@ -272,18 +274,8 @@ private fun SessionStatusLabel(status: SessionStatus) {
 @Composable
 private fun NoTasksYet(enabled: Boolean, onNew: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 22.dp)) {
-        Text(
-            "Nothing running yet",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Ask for something and an agent gets to work inside your box — cloning a project, " +
-                "running the tests, starting a server.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
+        Text("Nothing running yet", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(14.dp))
         OutlinedButton(
             onClick = onNew,
             enabled = enabled,

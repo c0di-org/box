@@ -5,5 +5,10 @@
             android:name=".VmProbeActivity"
             android:exported="true"
             android:theme="@style/Theme.Box" />
+        <!-- Debug-only: the shell against a canned state, for the screens an emulator cannot reach. -->
+        <activity
+            android:name=".UiGalleryActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Box" />
     </application>
 </manifest>

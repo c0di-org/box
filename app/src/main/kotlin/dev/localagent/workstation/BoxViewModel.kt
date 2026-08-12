@@ -65,12 +65,15 @@ class BoxViewModel @JvmOverloads constructor(
             val payload = intent?.getBundleExtra(RuntimeService.EXTRA_STATE) ?: return
             val state = RuntimeStateCodec.decode(payload) ?: return
             if (state == RuntimeState.Ready) rememberHowLongThatTook()
+            val arrived = state == RuntimeState.Ready &&
+                mutableUiState.value.runtimeState != RuntimeState.Ready
             mutableUiState.update {
                 it.copy(
                     runtimeState = state,
                     openingSince = openingAfter(it.openingSince, it.runtimeState, state),
                 )
             }
+            if (arrived) announceOpenBox()
             // Held across the whole time the computer is meant to be alive, not just when it is
             // usable: the connection is how Box finds out that `:computer` died, and the startup
             // path is exactly where it dies. See [ComputerLoss].
@@ -200,12 +203,42 @@ class BoxViewModel @JvmOverloads constructor(
     // -----------------------------------------------------------------------
 
     fun selectDestination(destination: BoxDestination) {
-        mutableUiState.update { it.copy(destination = destination) }
+        if (destination == BoxDestination.Computer) openComputer() else showTasks()
     }
 
-    fun selectComputerTool(tool: ComputerTool) {
-        mutableUiState.update { it.copy(computerTool = tool, openedFile = null) }
-        if (tool == ComputerTool.Files) refreshFiles()
+    /**
+     * Go to the machine, and start it if it is off.
+     *
+     * The answer to "show me the computer" is never "no", it is "in a moment" — the same rule
+     * sending a message follows. Somebody who only wants Linux should be able to install Box, press
+     * Computer, and end up at a desktop without ever meeting an agent.
+     *
+     * Walking in also hands over the keyboard, unless an agent is mid-task. Deliberate arrival is
+     * not the stray tap the explicit hand-over was written to protect against, and a desktop that
+     * ignores the first thing you type into it is a desktop that looks broken.
+     */
+    fun openComputer() {
+        wakeComputerIfNeeded()
+        val state = mutableUiState.value
+        val holder = if (state.agentAtWork) ControlHolder.Agent else ControlHolder.User
+        mutableUiState.update { it.copy(destination = BoxDestination.Computer) }
+        setDesktopControl(holder)
+    }
+
+    /** Back to the tasks. Control goes with it; see [BoxUiState.desktopControl]. */
+    fun showTasks() {
+        mutableUiState.update { it.copy(destination = BoxDestination.Tasks) }
+        setDesktopControl(ControlHolder.Agent)
+    }
+
+    fun selectComputerPanel(panel: ComputerPanel) {
+        mutableUiState.update {
+            it.copy(
+                computerPanel = if (it.computerPanel == panel) ComputerPanel.None else panel,
+                openedFile = null,
+            )
+        }
+        if (mutableUiState.value.computerPanel == ComputerPanel.Files) refreshFiles()
     }
 
     fun selectSession(sessionId: String?) {
@@ -375,28 +408,32 @@ class BoxViewModel @JvmOverloads constructor(
     fun cancelSignIn() = auth.cancel()
 
     /**
-     * Show the guest's screen full window.
+     * The box finished opening.
      *
-     * Starts the computer if it is off, for the same reason sending a message does: the answer to
-     * "show me the machine" is never "no", it is "in a moment".
+     * The first one on this device takes the window — it is the only moment where saying what Box
+     * can do costs nothing, because the user is already looking at the screen waiting for it. Every
+     * later one is a line in the corner, on the way past.
      */
-    fun openDesktop() {
-        wakeComputerIfNeeded()
-        mutableUiState.update { it.copy(desktopVisible = true) }
+    private fun announceOpenBox() {
+        if (openings.hasBeenGreeted()) {
+            showNotice("Your box is open.")
+            return
+        }
+        openings.rememberGreeting()
+        mutableUiState.update { it.copy(readyGreeting = true) }
+    }
+
+    fun dismissReadyGreeting() {
+        mutableUiState.update { it.copy(readyGreeting = false) }
     }
 
     /**
-     * Control returns to the agent on the way out; see [BoxUiState.desktopControl].
+     * Who is driving.
      *
      * Told to the transport as well as recorded here, and from a scope that outlives the screen: a
-     * key held down when the desktop closes would otherwise stay held in the guest forever. The
+     * key held down when the desktop goes away would otherwise stay held in the guest forever. A
      * composable cannot do this — its own scope is cancelled as it leaves, before the call runs.
      */
-    fun closeDesktop() {
-        mutableUiState.update { it.copy(desktopVisible = false, desktopControl = ControlHolder.Agent) }
-        viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(ControlHolder.Agent) }
-    }
-
     fun setDesktopControl(holder: ControlHolder) {
         mutableUiState.update { it.copy(desktopControl = holder) }
         viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(holder) }

@@ -2,11 +2,17 @@ package dev.localagent.workstation.ui
 
 import android.content.Context
 import android.graphics.Rect
+import android.text.InputType
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import dev.localagent.workstation.computer.DesktopInput
 import dev.localagent.workstation.computer.Keysyms
 
@@ -104,12 +110,62 @@ class DesktopView(context: Context) : SurfaceView(context) {
             -> {
                 buttons = mouseButtons(event)
                 sendPointer(event)
+                trackLongPress(event)
                 if (event.actionMasked == MotionEvent.ACTION_DOWN) requestFocus()
             }
 
             else -> return super.onTouchEvent(event)
         }
         return true
+    }
+
+    /**
+     * Long press is right click.
+     *
+     * Not a nicety: the guest runs Openbox, where the root menu — the only way to launch anything
+     * from the desktop itself — opens on button 3. A phone has no button 3, so without this the
+     * desktop is a machine you can look at and click on and never start a program from.
+     *
+     * Fingers only. A real mouse under DeX already has the button, and a held left button there is
+     * a drag, which this would break.
+     */
+    private fun trackLongPress(event: MotionEvent) {
+        if (event.getToolType(0) != MotionEvent.TOOL_TYPE_FINGER) return
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                pressOrigin = event.x to event.y
+                postDelayed(rightClick, android.view.ViewConfiguration.getLongPressTimeout().toLong())
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                val (x, y) = pressOrigin ?: return
+                val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+                if (kotlin.math.hypot(event.x - x, event.y - y) > slop) cancelLongPress()
+            }
+
+            else -> cancelLongPress()
+        }
+    }
+
+    override fun cancelLongPress() {
+        super.cancelLongPress()
+        removeCallbacks(rightClick)
+        pressOrigin = null
+    }
+
+    private var pressOrigin: Pair<Float, Float>? = null
+
+    private val rightClick = Runnable {
+        val (x, y) = pressOrigin ?: return@Runnable
+        val guest = toGuest(x, y) ?: return@Runnable
+        pressOrigin = null
+        // The finger already pressed the left button on the way down. Let it go before the right
+        // one, or the guest sees both held and Openbox opens nothing.
+        buttons = 0
+        onInput?.invoke(DesktopInput.Pointer(guest.first, guest.second, 0))
+        onInput?.invoke(DesktopInput.Pointer(guest.first, guest.second, RIGHT))
+        onInput?.invoke(DesktopInput.Pointer(guest.first, guest.second, 0))
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
 
     /**
@@ -158,6 +214,36 @@ class DesktopView(context: Context) : SurfaceView(context) {
     }
 
     // ---- keyboard ----------------------------------------------------------
+
+    /**
+     * There is a keyboard, and it is a picture of one.
+     *
+     * A `SurfaceView` is not an editor, so Android has no reason to raise the IME over it and a
+     * phone would otherwise have no way to type into the guest at all — the desktop would be a
+     * machine you can only point at. Claiming to be a text editor and handing back a plain
+     * [BaseInputConnection] is what makes soft keyboards deliver key events here; they arrive at
+     * [onKeyDown] like any hardware key and take the same path to the guest.
+     *
+     * `fullscreen = false` matters: a keyboard in extract mode would cover the screen it is typing
+     * into with its own text box.
+     */
+    override fun onCheckIsTextEditor(): Boolean = interactive
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.inputType = InputType.TYPE_NULL
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+            EditorInfo.IME_FLAG_NO_FULLSCREEN or
+            EditorInfo.IME_ACTION_NONE
+        return BaseInputConnection(this, false)
+    }
+
+    /** Raise the soft keyboard against this view. The button in the computer's menu. */
+    fun showKeyboard() {
+        interactive = true
+        requestFocus()
+        val manager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        manager?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+    }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = key(event, down = true)
         ?: super.onKeyDown(keyCode, event)
