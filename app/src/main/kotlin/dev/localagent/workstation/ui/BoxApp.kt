@@ -348,7 +348,7 @@ private fun WidePaneLayout(
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize()) {
-        Column(Modifier.width(homeWidth(revealed, windowWidth))) {
+        Column(Modifier.width(homeWidth(!state.boxOwnsWindow, windowWidth))) {
             BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
             home(Modifier.fillMaxSize(), true)
         }
@@ -358,16 +358,16 @@ private fun WidePaneLayout(
 }
 
 /**
- * How wide the home column is: the whole window until the box has settled, then its rail width.
+ * How wide the home column is: the whole window while the box owns the surface, then its rail.
  *
- * A big screen deserves the same treatment as the phone. Showing a 320dp column with an "Open your
- * box" button in it, next to a pane that has nothing to show until the box is open, would be three
- * quarters of a desktop's worth of empty and one small button.
+ * A big screen deserves the same treatment as the phone. Squeezing the opening — or the one
+ * arrival an install ever gets — into a 320dp column beside a pane with nothing in it is how a
+ * moment written to be unmissable gets missed on the largest screen Box runs on.
  */
 @Composable
-private fun homeWidth(revealed: Boolean, windowWidth: Dp) =
+private fun homeWidth(settled: Boolean, windowWidth: Dp) =
     animateDpAsState(
-        targetValue = if (revealed) SESSION_PANE_WIDTH else windowWidth,
+        targetValue = if (settled) SESSION_PANE_WIDTH else windowWidth,
         animationSpec = tween(SETTLE_MILLIS),
         label = "home width",
     ).value

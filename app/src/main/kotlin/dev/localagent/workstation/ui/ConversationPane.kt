@@ -112,8 +112,11 @@ fun ConversationPane(
         Box(Modifier.weight(1f)) {
             when {
                 session == null && queued.isEmpty() -> NoSessionState()
-                state.transcriptLoading && state.transcript == null && queued.isEmpty() ->
-                    TranscriptLoading()
+                // Not while the box is opening: nothing can arrive until it does, the banner
+                // above already says so, and a spinner that has to run for three minutes is the
+                // app pretending to work.
+                state.computerReady && state.transcriptLoading && state.transcript == null &&
+                    queued.isEmpty() -> TranscriptLoading()
                 nothingToShow -> EmptyTranscriptState(harness)
                 else -> TranscriptList(
                     transcript = state.transcript,

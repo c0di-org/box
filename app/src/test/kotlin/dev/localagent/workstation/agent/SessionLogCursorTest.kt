@@ -129,4 +129,24 @@ class SessionLogCursorTest {
         assertEquals(listOf("a"), seenByFirst)
         assertEquals(listOf("a", "b", "c"), seenBySecond)
     }
+
+    @Test
+    fun `a resumed session continues the log's numbering rather than starting over`() {
+        // What went wrong on a real phone: the UI process was replaced, the session was re-opened
+        // against the same log, and the new writer counted its bytes from zero while the file
+        // already held thirteen kilobytes. Every chunk it announced looked, to this cursor, like
+        // something it had read long ago -- so a live conversation went silent while its log kept
+        // growing. The fix belongs to the writer (AgentSessionHost starts at the file's length);
+        // this pins the rule the writer has to satisfy.
+        val file = log("one\ntwo\n")
+        val cursor = SessionLogCursor()
+        assertEquals(listOf("one", "two"), cursor.readFile(file))
+
+        val resumedAt = file.length()
+        assertEquals(resumedAt, cursor.consumed)
+        assertEquals(listOf("three"), cursor.accept(resumedAt, "three\n".toByteArray()))
+
+        // And the failure it replaces: numbering restarted at zero, silently swallowed.
+        assertEquals(emptyList<String>(), SessionLogCursor().apply { readFile(file) }.accept(0L, "three\n".toByteArray()))
+    }
 }
