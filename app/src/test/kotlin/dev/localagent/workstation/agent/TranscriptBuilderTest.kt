@@ -7,7 +7,8 @@ import org.junit.Test
 
 /**
  * The fold is the contract between the event log and the screen, and a mistake in it is invisible
- * until a transcript renders wrong. These cover the four collapses the UI depends on.
+ * until a transcript renders wrong. These cover the collapses the UI depends on — including the
+ * newest one, where a sub-agent's whole transcript folds into a single card in its parent's.
  */
 class TranscriptBuilderTest {
 
@@ -97,6 +98,106 @@ class TranscriptBuilderTest {
 
         val artifacts = transcript.items.single() as TranscriptItem.Artifacts
         assertEquals(2, artifacts.artifacts.size)
+    }
+
+    // ---- sub-agents --------------------------------------------------------
+
+    @Test
+    fun `a sub-agent's work collapses into its own card instead of the parent's transcript`() {
+        val transcript = listOf(
+            message("e1", "m1", "I'll send a sub-agent to read the module."),
+            AgentEvent.ToolCallStarted(
+                "e2", SESSION, 2, "a1",
+                ToolCall.Task("Audit runtime-api", prompt = "List the public declarations."),
+            ),
+            AgentEvent.AgentMessage("e3", SESSION, 3, "m2", "Starting from the entry points.", subAgentId = "a1"),
+            AgentEvent.ToolCallStarted(
+                "e4", SESSION, 4, "c1", ToolCall.Search("public "), subAgentId = "a1",
+            ),
+            AgentEvent.ToolCallFinished(
+                "e5", SESSION, 5, "c1", ToolOutcome.Success(summary = "63 matches"), subAgentId = "a1",
+            ),
+        ).toTranscript(SESSION)
+
+        // The parent sees its own message and one card — not four rows in arrival order.
+        assertEquals(2, transcript.items.size)
+        val agent = transcript.items.last() as TranscriptItem.SubAgent
+        assertEquals("a1", agent.subAgentId)
+        assertEquals("Audit runtime-api", agent.task.description)
+        assertTrue(agent.running)
+        // And inside, folded by the same rules: the call and its result are one card.
+        assertEquals(2, agent.items.size)
+        assertEquals("63 matches", (agent.items.last() as TranscriptItem.Tool).outcome.let {
+            (it as ToolOutcome.Success).summary
+        })
+        assertEquals("Search “public ”", agent.latest)
+    }
+
+    @Test
+    fun `finishing the task that named a sub-agent finishes its card, not a tool card`() {
+        val events = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 1, "a1", ToolCall.Task("Audit runtime-api")),
+            AgentEvent.AgentMessage("e2", SESSION, 2, "m1", "22 of 63 are undocumented.", subAgentId = "a1"),
+            AgentEvent.ToolCallFinished("e3", SESSION, 3, "a1", ToolOutcome.Success(summary = "22 gaps")),
+        )
+
+        val agent = events.toTranscript(SESSION).items.single() as TranscriptItem.SubAgent
+        assertEquals(false, agent.running)
+        assertEquals(false, agent.stopped)
+        assertEquals("22 gaps", (agent.outcome as ToolOutcome.Success).summary)
+    }
+
+    /** Stopping one sub-agent has to be visible as *that*, not as a sub-agent that simply ended. */
+    @Test
+    fun `a stopped sub-agent says it was stopped`() {
+        val agent = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 1, "a1", ToolCall.Task("Audit runtime-api")),
+            AgentEvent.ToolCallFinished("e2", SESSION, 2, "a1", ToolOutcome.Cancelled),
+        ).toTranscript(SESSION).items.single() as TranscriptItem.SubAgent
+
+        assertTrue(agent.stopped)
+        assertEquals(false, agent.running)
+    }
+
+    /** A reconnect can lose the call that named the sub-agent. Its work still has to show up. */
+    @Test
+    fun `an orphaned sub-agent event opens a card rather than vanishing`() {
+        val agent = listOf(
+            AgentEvent.AgentMessage("e1", SESSION, 1, "m1", "Reading the module.", subAgentId = "a9"),
+        ).toTranscript(SESSION).items.single() as TranscriptItem.SubAgent
+
+        assertEquals("a9", agent.subAgentId)
+        assertEquals("Reading the module.", (agent.items.single() as TranscriptItem.Agent).text)
+    }
+
+    /** The card keeps its place: a sub-agent that talks for a minute must not walk down the list. */
+    @Test
+    fun `a sub-agent card stays where it first appeared`() {
+        val transcript = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 10, "a1", ToolCall.Task("Audit")),
+            message("e2", "m1", "meanwhile, I'm reading the docs"),
+            AgentEvent.AgentMessage("e3", SESSION, 90, "m2", "Half way through.", subAgentId = "a1"),
+        ).toTranscript(SESSION)
+
+        val agent = transcript.items.first() as TranscriptItem.SubAgent
+        assertEquals(10L, agent.at)
+    }
+
+    /** A sub-agent of a sub-agent nests inside it, and the fold must terminate while doing so. */
+    @Test
+    fun `a sub-agent's own sub-agent nests one level deeper`() {
+        val transcript = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 1, "a1", ToolCall.Task("Audit the modules")),
+            AgentEvent.ToolCallStarted(
+                "e2", SESSION, 2, "a2", ToolCall.Task("Audit runtime-api"), subAgentId = "a1",
+            ),
+            AgentEvent.AgentMessage("e3", SESSION, 3, "m1", "63 declarations.", subAgentId = "a2"),
+        ).toTranscript(SESSION)
+
+        val outer = transcript.items.single() as TranscriptItem.SubAgent
+        val inner = outer.items.single() as TranscriptItem.SubAgent
+        assertEquals("a2", inner.subAgentId)
+        assertEquals("63 declarations.", (inner.items.single() as TranscriptItem.Agent).text)
     }
 
     private fun message(id: String, messageId: String, text: String, complete: Boolean = true) =

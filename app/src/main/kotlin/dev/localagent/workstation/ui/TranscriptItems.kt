@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Computer
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -51,6 +53,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
@@ -85,6 +89,7 @@ fun TranscriptRow(
     harness: HarnessDescriptor?,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
+    onStopSubAgent: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (item) {
@@ -92,6 +97,8 @@ fun TranscriptRow(
         is TranscriptItem.Agent -> AgentProse(item, harness, modifier)
         is TranscriptItem.Thinking -> ThinkingBlock(item, modifier)
         is TranscriptItem.Tool -> ToolCard(item, modifier)
+        is TranscriptItem.SubAgent ->
+            SubAgentCard(item, onOpenArtifact, onRetry, onStopSubAgent, modifier)
         is TranscriptItem.Diff -> DiffCard(item, modifier)
         is TranscriptItem.Checklist -> ChecklistCard(item, modifier)
         is TranscriptItem.Permission -> PermissionRecord(item, modifier)
@@ -312,12 +319,165 @@ private fun ToolCard(item: TranscriptItem.Tool, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * A sub-agent: one card for a whole delegated piece of work.
+ *
+ * Deliberately the tool card's shape — same surface, same border, same chevron — because to the
+ * person reading it this *is* one step the agent took, and a second visual language for it would
+ * suggest a second kind of thing to reason about. What it adds is the two affordances a tool card
+ * has no use for: what the delegate was asked to do, and a way to tell it to stop.
+ *
+ * Opened, it draws its own transcript through [TranscriptRow] — the same renderers, one level in.
+ * That is what keeps a sub-agent's shell command looking like a shell command.
+ */
+@Composable
+private fun SubAgentCard(
+    item: TranscriptItem.SubAgent,
+    onOpenArtifact: (Artifact) -> Unit,
+    onRetry: () -> Unit,
+    onStop: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Open while it is working, because a card that hides live work is a spinner with a chevron.
+    // Once it has finished, closed: the parent's own summary is the answer, and this is the receipt.
+    var expanded by rememberSaveable(item.key) { mutableStateOf(item.running) }
+    val failed = item.outcome is ToolOutcome.Failure
+    val accent = when {
+        failed -> MaterialTheme.colorScheme.error
+        item.stopped -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    ) {
+        Column {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        item.running ->
+                            CircularProgressIndicator(Modifier.size(15.dp), strokeWidth = 2.dp, color = accent)
+                        failed -> Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(17.dp), tint = accent)
+                        item.stopped -> Icon(Icons.Outlined.Close, null, Modifier.size(17.dp), tint = accent)
+                        else -> Icon(Icons.Outlined.AccountTree, null, Modifier.size(17.dp), tint = accent)
+                    }
+                }
+                Spacer(Modifier.width(11.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        item.task.description,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = if (expanded) 3 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        subAgentSubtitle(item),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = 12.sp,
+                        color = if (failed) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // Only while it is running, and never a session-wide stop: this ends one delegate
+                // and leaves the agent that sent it to carry on with what it hears back.
+                if (item.running) {
+                    TextButton(onClick = { onStop(item.subAgentId) }) {
+                        Icon(Icons.Outlined.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Stop", fontSize = 13.sp)
+                    }
+                }
+                Icon(
+                    if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = if (expanded) "Hide what it did" else "Show what it did",
+                    modifier = Modifier.padding(end = 8.dp).size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(expanded) {
+                // The rule is the nesting. Without it a sub-agent's tool cards read as the parent's,
+                // one indent to the right for no stated reason. Drawn rather than laid out as a
+                // sibling, because a full-height sibling needs the row's intrinsic height — and the
+                // things nested in here (diffs, scrolling code) are not all willing to be asked.
+                val rule = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                Column(
+                    Modifier
+                        .padding(start = 22.dp, end = 12.dp, bottom = 12.dp)
+                        .drawBehind { drawRect(rule, size = Size(2.dp.toPx(), size.height)) }
+                        .padding(start = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(11.dp),
+                ) {
+                    item.task.prompt?.let { prompt ->
+                        Text(
+                            prompt,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (item.items.isEmpty()) {
+                        Text(
+                            "Nothing back from it yet.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    item.items.forEach { nested ->
+                        TranscriptRow(
+                            item = nested,
+                            // No byline in here. The card's own header says who is talking, and
+                            // stamping the harness's mark on a delegate's prose credits the wrong
+                            // agent for it.
+                            harness = null,
+                            onOpenArtifact = onOpenArtifact,
+                            onRetry = onRetry,
+                            onStopSubAgent = onStop,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One line saying where the delegate has got to, in the terms the person cares about. */
+private fun subAgentSubtitle(item: TranscriptItem.SubAgent): String {
+    val kind = item.task.agentType
+    val state = when (val outcome = item.outcome) {
+        null -> item.latest ?: "Working…"
+        is ToolOutcome.Success -> outcome.summary ?: "Finished"
+        is ToolOutcome.Failure -> outcome.message
+        ToolOutcome.Cancelled -> "You stopped this"
+        ToolOutcome.Denied -> "You denied this"
+    }
+    return if (kind == null) state else "$kind · $state"
+}
+
 private fun toolIcon(call: ToolCall): ImageVector = when (call) {
     is ToolCall.Shell -> Icons.Outlined.Terminal
     is ToolCall.ReadFile -> Icons.Outlined.Description
     is ToolCall.EditFile, is ToolCall.WriteFile -> Icons.Outlined.Description
     is ToolCall.Search -> Icons.Outlined.Search
     is ToolCall.Fetch -> Icons.Outlined.Language
+    // Only reachable for a Task whose start event was folded as a plain tool call; the sub-agent
+    // card is what normally draws one.
+    is ToolCall.Task -> Icons.Outlined.AccountTree
     is ToolCall.Generic -> Icons.Outlined.Terminal
 }
 

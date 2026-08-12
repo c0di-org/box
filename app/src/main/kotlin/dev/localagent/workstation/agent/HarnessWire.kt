@@ -42,6 +42,9 @@ internal object HarnessWire {
         val eventId = "${context.sessionId}#$ordinal"
         val at = json.optLong("at", System.currentTimeMillis())
         val session = context.sessionId
+        // Absent on everything the session's own agent does, which is most lines. A harness that
+        // has never heard of sub-agents therefore keeps working unchanged: no field, one author.
+        val agent = json.optStringOrNull("subAgentId")
 
         return when (json.optString("type")) {
             "session_started" -> AgentEvent.SessionStarted(
@@ -64,6 +67,7 @@ internal object HarnessWire {
                 messageId = json.optString("messageId", eventId),
                 text = json.optString("text"),
                 complete = json.optBoolean("complete", true),
+                subAgentId = agent,
             )
 
             "thinking" -> AgentEvent.AgentThinking(
@@ -71,24 +75,28 @@ internal object HarnessWire {
                 messageId = json.optString("messageId", eventId),
                 text = json.optString("text"),
                 complete = json.optBoolean("complete", true),
+                subAgentId = agent,
             )
 
             "tool_started" -> AgentEvent.ToolCallStarted(
                 eventId, session, at,
                 callId = json.optString("callId"),
                 call = toolCall(json.optJSONObject("tool"), context.workingDirectory),
+                subAgentId = agent,
             )
 
             "tool_progress" -> AgentEvent.ToolCallProgress(
                 eventId, session, at,
                 callId = json.optString("callId"),
                 chunk = json.optString("chunk"),
+                subAgentId = agent,
             )
 
             "tool_finished" -> AgentEvent.ToolCallFinished(
                 eventId, session, at,
                 callId = json.optString("callId"),
                 outcome = toolOutcome(json.optJSONObject("outcome")),
+                subAgentId = agent,
             )
 
             "file_changed" -> {
@@ -98,6 +106,7 @@ internal object HarnessWire {
                     eventId, session, at,
                     callId = json.optStringOrNull("callId"),
                     diff = UnifiedDiff.parse(path, patch, changeKind(json.optString("changeKind"))),
+                    subAgentId = agent,
                 )
             }
 
@@ -119,6 +128,7 @@ internal object HarnessWire {
                 items = json.optJSONArray("items").mapObjects { item ->
                     TaskItem(item.optString("text"), taskState(item.optString("state")))
                 },
+                subAgentId = agent,
             )
 
             "activity" -> AgentEvent.ActivityChanged(
@@ -156,6 +166,13 @@ internal object HarnessWire {
             )
             "search" -> ToolCall.Search(json.optString("query"), json.optStringOrNull("scope"))
             "fetch" -> ToolCall.Fetch(json.optString("url"))
+            "task" -> ToolCall.Task(
+                // A sub-agent with no description is still a sub-agent worth showing, and the
+                // label is the one thing the card cannot do without.
+                description = json.optStringOrNull("description") ?: "Sub-agent",
+                prompt = json.optStringOrNull("prompt"),
+                agentType = json.optStringOrNull("agentType"),
+            )
             else -> ToolCall.Generic(
                 name = json.optStringOrNull("name") ?: "Tool",
                 arguments = json.optJSONArray("arguments").mapPairs(),

@@ -98,6 +98,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onNewConversation = { harnessId -> boxViewModel.startSession(harnessId) },
             onSend = boxViewModel::sendMessage,
             onInterrupt = boxViewModel::interruptSession,
+            onStopSubAgent = boxViewModel::interruptSubAgent,
             onPermissionDecision = boxViewModel::resolvePermission,
             onOpenArtifact = { artifact ->
                 when (artifact) {

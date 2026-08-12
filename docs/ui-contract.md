@@ -14,21 +14,56 @@ The transcript is an **append-only event log**. Two rules:
    streaming message re-emits growing text under the same `messageId`. A backend can therefore be
    a dumb pipe, and a transcript can be rebuilt from cold storage by replaying the same events.
 2. **Structured, never stringly.** Tool calls arrive as `ToolCall` variants (`Shell`, `ReadFile`,
-   `EditFile`, `WriteFile`, `Search`, `Fetch`) and file edits as a parsed `FileDiff` — never as
-   JSON the UI has to guess at. Anything Box does not model yet lands in `ToolCall.Generic`, which
-   renders as a labelled key/value card. Degraded, but never a raw dump.
+   `EditFile`, `WriteFile`, `Search`, `Fetch`, `Task`) and file edits as a parsed `FileDiff` —
+   never as JSON the UI has to guess at. Anything Box does not model yet lands in
+   `ToolCall.Generic`, which renders as a labelled key/value card. Degraded, but never a raw dump.
 
 Event kinds: `SessionStarted` · `SessionEnded` · `UserMessage` · `AgentMessage` · `AgentThinking` ·
 `ToolCallStarted` · `ToolCallProgress` · `ToolCallFinished` · `FileChanged` ·
 `PermissionRequested` · `PermissionResolved` · `TaskProgress` · `ActivityChanged` ·
 `ArtifactOffered` · `AgentError`.
 
+### Sub-agents are in the same log
+
+An agent that delegates does not get a second event stream. `ToolCall.Task` names a sub-agent —
+carrying its `description`, the `prompt` it was given and its `agentType` — and the
+`ToolCallStarted.callId` of that call **is** the sub-agent's identity. Everything the sub-agent then
+says or does is an ordinary event carrying that id in `AgentEvent.subAgentId`:
+
+| | |
+| --- | --- |
+| `subAgentId == null` | the session's own agent. Every event can be this. |
+| `subAgentId == "toolu_7"` | the sub-agent named by the `Task` call whose `callId` is `toolu_7`. |
+
+Only the events a sub-agent can genuinely produce carry it: `AgentMessage`, `AgentThinking`,
+`ToolCallStarted` / `Progress` / `Finished`, `FileChanged`, `TaskProgress`. The rest have one author
+by construction, and permission is deliberately not among them — the sheet answers one request at a
+time, on behalf of the session, so attributing an ask would offer a choice the sheet does not have.
+
+The `Task` call finishes like any other tool call, and its outcome is how the card ends:
+`Success` when the sub-agent reported back, `Cancelled` when the user stopped it.
+
+On the wire this is one optional field. A harness line gains `"subAgentId": "toolu_7"`, and a
+harness that has never heard of sub-agents omits it and keeps working — one author, as before.
+`ToolCall.Task` is the tool kind `"task"`. Stopping one is a **new stdin command**, deliberately not
+a field on `interrupt`:
+
+```json
+{"type": "stop_subagent", "subAgentId": "toolu_7"}
+```
+
+An older harness reads an unknown *field* while obeying the type it recognises, so
+`{"type":"interrupt","subAgentId":…}` would stop the whole session on exactly the guests least able
+to explain why. An unknown *type* is dropped with a diagnostic, which is the failure this should
+have.
+
 ### Why the log is not what the UI draws
 
 `TranscriptBuilder` folds the log into a `Transcript` — a list of `TranscriptItem`s where a call
-and its result are **one** card, a message streamed in 40 chunks is **one** bubble, and a checklist
-that ticked four times is **one** block. The event log stays replay-friendly; the view stays
-collapsed. `TranscriptBuilderTest` pins the four collapses the UI depends on.
+and its result are **one** card, a message streamed in 40 chunks is **one** bubble, a checklist
+that ticked four times is **one** block, and a sub-agent's whole transcript is **one** expandable
+`TranscriptItem.SubAgent` holding its own folded items. The event log stays replay-friendly; the
+view stays collapsed. `TranscriptBuilderTest` pins the collapses the UI depends on.
 
 The builder tolerates orphans: a `ToolCallFinished` whose `ToolCallStarted` was lost to a reconnect
 renders as a completed call rather than disappearing.
@@ -53,6 +88,7 @@ interface AgentBackend {
     suspend fun send(sessionId: String, text: String)
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
     suspend fun interrupt(sessionId: String)
+    suspend fun interruptSubAgent(sessionId: String, subAgentId: String)
     suspend fun closeSession(sessionId: String)
 }
 ```
@@ -65,8 +101,15 @@ Two requirements that are easy to miss:
   disconnected and a running one can survive a reconnect. `Disconnected` is a normal state, not an
   error: the VM takes ~90s to boot and Android reclaims it whenever it likes.
 
+`interruptSubAgent` is not `interrupt` with an argument. Stopping the session throws away
+everything in flight; stopping a sub-agent asks one delegate to stand down and lets the agent that
+sent it carry on with whatever it hears back. A backend that cannot single one out should do nothing
+rather than fall back to interrupting the session.
+
 `FakeAgentBackend` implements all of this with a scripted "clone project and run" flow that pauses
-on a real permission request. It is the demo path and the development target.
+on a real permission request. It is the demo path and the development target. A second script —
+"Audit the public API" — delegates to a sub-agent that parks rather than finishing, because a
+delegate that completes in eight seconds is one nobody can try the Stop button on.
 
 ## 3. What the UI needs from the runtime layer — `computer/DesktopTransport.kt`
 

@@ -375,6 +375,17 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch { agents.interrupt(sessionId) }
     }
 
+    /**
+     * Stops one sub-agent. The session keeps running — this is not the Stop button in the header.
+     *
+     * No confirmation and no notice: the card the button is on becomes the answer, and a snackbar
+     * saying "stopped" about a thing that visibly stopped is the app reading itself aloud.
+     */
+    fun interruptSubAgent(subAgentId: String) {
+        val sessionId = mutableUiState.value.selectedSessionId ?: return
+        viewModelScope.launch { agents.interruptSubAgent(sessionId, subAgentId) }
+    }
+
     fun closeSession(sessionId: String) {
         viewModelScope.launch {
             agents.closeSession(sessionId)

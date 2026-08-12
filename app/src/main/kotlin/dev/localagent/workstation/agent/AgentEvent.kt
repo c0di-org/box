@@ -16,6 +16,10 @@ import androidx.compose.runtime.Immutable
  *     not model yet it lands in [ToolCall.Generic], which renders as a labelled key/value card —
  *     degraded, but never a raw dump.
  *
+ * Sub-agents ride the same log rather than a second one. A [ToolCall.Task] names one, and
+ * everything that sub-agent then says or does is an ordinary event carrying its [subAgentId] — so
+ * a replay reconstructs the nesting without the log ever having been a tree.
+ *
  * [TranscriptReducer] folds this log into the [TranscriptItem] list the UI actually draws.
  */
 @Immutable
@@ -26,6 +30,19 @@ sealed interface AgentEvent {
 
     /** Epoch millis, guest clock. Only used for grouping and display. */
     val at: Long
+
+    /**
+     * Who this is about: null for the session's own agent, otherwise the sub-agent that produced
+     * it — named by the [ToolCallStarted.callId] of the [ToolCall.Task] that spawned it.
+     *
+     * A default rather than a member on every event, because most events cannot have a second
+     * author. A session starts once. A permission is answered by the person, for the session, and
+     * is deliberately *not* attributed: the sheet allows one outstanding request at a time, so
+     * saying which sub-agent asked would offer a choice the sheet does not have. Only the events a
+     * sub-agent genuinely produces carry an id, and the ones that do not are not main-agent events
+     * by omission — they have exactly one author.
+     */
+    val subAgentId: String? get() = null
 
     // ---- session lifecycle -------------------------------------------------
 
@@ -65,6 +82,7 @@ sealed interface AgentEvent {
         val messageId: String,
         val text: String,
         val complete: Boolean = true,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     /** Chain-of-thought or plan narration. Rendered collapsed; never shown by default. */
@@ -75,6 +93,7 @@ sealed interface AgentEvent {
         val messageId: String,
         val text: String,
         val complete: Boolean = true,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     // ---- tools -------------------------------------------------------------
@@ -85,6 +104,7 @@ sealed interface AgentEvent {
         override val at: Long,
         val callId: String,
         val call: ToolCall,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     /** Incremental output for a running call — streamed stdout, progress lines, etc. */
@@ -94,6 +114,7 @@ sealed interface AgentEvent {
         override val at: Long,
         val callId: String,
         val chunk: String,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     data class ToolCallFinished(
@@ -102,6 +123,7 @@ sealed interface AgentEvent {
         override val at: Long,
         val callId: String,
         val outcome: ToolOutcome,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     /**
@@ -114,6 +136,7 @@ sealed interface AgentEvent {
         override val at: Long,
         val callId: String?,
         val diff: FileDiff,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     // ---- permission --------------------------------------------------------
@@ -150,6 +173,7 @@ sealed interface AgentEvent {
         override val at: Long,
         val planId: String,
         val items: List<TaskItem>,
+        override val subAgentId: String? = null,
     ) : AgentEvent
 
     /** What the agent is doing right now. Drives the session-list dot and the composer state. */
@@ -215,6 +239,23 @@ sealed interface ToolCall {
 
     data class Fetch(val url: String) : ToolCall {
         override val label: String get() = "Fetch ${url.substringAfter("://").substringBefore('/')}"
+    }
+
+    /**
+     * A sub-agent, sent off to do something on its own.
+     *
+     * A tool call because that is what it is — the parent asked for it and waits for the report —
+     * but the one tool whose card has a life of its own: it runs for minutes, says things, uses
+     * tools, and can be stopped without stopping the session. Its [ToolCallStarted.callId] *is*
+     * the sub-agent's name; everything it does arrives stamped with it in [AgentEvent.subAgentId].
+     */
+    data class Task(
+        val description: String,
+        val prompt: String? = null,
+        /** The kind of sub-agent that was asked for — "Explore", "general-purpose". */
+        val agentType: String? = null,
+    ) : ToolCall {
+        override val label: String get() = description
     }
 
     /** Anything Box does not model yet. Renders as a labelled key/value card, never raw JSON. */

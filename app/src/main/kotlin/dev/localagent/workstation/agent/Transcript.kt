@@ -60,6 +60,32 @@ sealed interface TranscriptItem {
         val running: Boolean get() = outcome == null
     }
 
+    /**
+     * A sub-agent and everything it did, folded into one card.
+     *
+     * The nesting is the point. Letting a sub-agent's messages and tool calls land in the parent's
+     * transcript in arrival order — which is what Box did before this existed — reads as one agent
+     * talking over itself: two voices, four interleaved tool cards, and no way to tell which piece
+     * of work is the one you can stop. [items] is that sub-agent's own transcript, folded by
+     * exactly the same rules, so a card can be opened and read as the conversation it is.
+     */
+    data class SubAgent(
+        override val key: String,
+        override val at: Long,
+        val subAgentId: String,
+        val task: ToolCall.Task,
+        val items: List<TranscriptItem>,
+        val outcome: ToolOutcome?,
+    ) : TranscriptItem {
+        val running: Boolean get() = outcome == null
+
+        /** Stopped by the user, as opposed to having finished or failed on its own. */
+        val stopped: Boolean get() = outcome is ToolOutcome.Cancelled
+
+        /** The last thing it did, for the card that is still closed. */
+        val latest: String? get() = items.asReversed().firstNotNullOfOrNull { it.headline() }
+    }
+
     data class Diff(
         override val key: String,
         override val at: Long,
@@ -103,18 +129,51 @@ sealed interface TranscriptItem {
 }
 
 /**
+ * One line of "what is happening in there", for a collapsed sub-agent card.
+ *
+ * Null for the items that would say nothing useful on one line — reasoning it was asked to hide,
+ * a permission note that is already a line of its own in the parent.
+ */
+private fun TranscriptItem.headline(): String? = when (this) {
+    is TranscriptItem.Agent -> text.lineSequence().firstOrNull { it.isNotBlank() }?.take(140)
+    is TranscriptItem.Tool -> call.label
+    is TranscriptItem.SubAgent -> task.description
+    is TranscriptItem.Diff -> "Changed ${diff.path.substringAfterLast('/')}"
+    is TranscriptItem.Checklist ->
+        items.firstOrNull { it.state == TaskState.Running }?.text ?: items.lastOrNull()?.text
+    is TranscriptItem.Error -> message
+    is TranscriptItem.User, is TranscriptItem.Thinking, is TranscriptItem.Permission,
+    is TranscriptItem.Artifacts, is TranscriptItem.Ended,
+    -> null
+}
+
+/**
  * Incremental fold. Feed it events in order; call [build] whenever the UI needs a snapshot.
  *
  * Late-arriving events for unknown ids are tolerated rather than dropped — a reconnect can
  * deliver a `ToolCallFinished` whose `ToolCallStarted` was lost, and showing an orphaned result
  * beats showing nothing.
  */
-class TranscriptBuilder(private val sessionId: String) {
+class TranscriptBuilder(
+    private val sessionId: String,
+    /**
+     * Set only on a nested fold: the sub-agent whose transcript this instance is building.
+     *
+     * Without it the routing below never terminates. Events keep their [AgentEvent.subAgentId] all
+     * the way down — nothing rewrites an event on its way into a card — so a nested builder handed
+     * one of its own events would forward it to itself forever. Knowing its own name is how a fold
+     * recognises "this one is mine, fold it flat".
+     */
+    private val owner: String? = null,
+) {
     private val items = LinkedHashMap<String, TranscriptItem>()
     private val toolKeys = HashMap<String, String>()
     private val messageKeys = HashMap<String, String>()
     private val planKeys = HashMap<String, String>()
     private val permissionKeys = HashMap<String, String>()
+
+    /** One nested fold per sub-agent, keyed by the [ToolCall.Task] call that spawned it. */
+    private val subAgents = LinkedHashMap<String, SubAgentFold>()
     private var activity: AgentActivity = AgentActivity.Idle
     private var pending: PendingPermission? = null
     private var outcome: SessionOutcome? = null
@@ -124,6 +183,12 @@ class TranscriptBuilder(private val sessionId: String) {
     fun accept(event: AgentEvent) {
         // Any event other than another artifact offer breaks the artifact run.
         if (event !is AgentEvent.ArtifactOffered) lastArtifactKey = null
+
+        val author = event.subAgentId
+        if (author != null && author != owner) {
+            route(author, event)
+            return
+        }
 
         when (event) {
             is AgentEvent.SessionStarted -> {
@@ -153,16 +218,32 @@ class TranscriptBuilder(private val sessionId: String) {
             }
 
             is AgentEvent.ToolCallStarted -> {
-                val key = toolKeys.getOrPut(event.callId) { "tool:${event.callId}" }
-                put(TranscriptItem.Tool(key, event.at, event.callId, event.call, output = "", outcome = null))
+                val task = event.call as? ToolCall.Task
+                if (task != null) {
+                    // The call that names a sub-agent is the sub-agent's card, not a tool card.
+                    val fold = subAgent(event.callId)
+                    fold.task = task
+                    publish(event.callId, fold, event.at)
+                } else {
+                    val key = toolKeys.getOrPut(event.callId) { "tool:${event.callId}" }
+                    put(TranscriptItem.Tool(key, event.at, event.callId, event.call, output = "", outcome = null))
+                }
             }
 
             is AgentEvent.ToolCallProgress -> {
+                // A sub-agent's own progress is its nested transcript; the card has no output line
+                // of its own to append to, and inventing a tool card for it would double it up.
+                if (subAgents.containsKey(event.callId)) return
                 val existing = existingTool(event.callId, event.at)
                 put(existing.copy(output = existing.output + event.chunk))
             }
 
             is AgentEvent.ToolCallFinished -> {
+                subAgents[event.callId]?.let { fold ->
+                    fold.outcome = event.outcome
+                    publish(event.callId, fold, event.at)
+                    return
+                }
                 val existing = existingTool(event.callId, event.at)
                 val merged = when (val result = event.outcome) {
                     is ToolOutcome.Success ->
@@ -229,6 +310,56 @@ class TranscriptBuilder(private val sessionId: String) {
                     ),
                 )
         }
+    }
+
+    // ---- sub-agents --------------------------------------------------------
+
+    /** A sub-agent's card, and the fold that keeps its transcript. */
+    private class SubAgentFold(val key: String, sessionId: String, id: String) {
+        /** Replaced by the real [ToolCall.Task] when its start event arrives — or if it never does,
+         *  this stands in: a result whose call was lost to a reconnect still has to render. */
+        var task: ToolCall.Task = ToolCall.Task("Sub-agent")
+        var outcome: ToolOutcome? = null
+        val inner = TranscriptBuilder(sessionId, owner = id)
+    }
+
+    /**
+     * Hands an attributed event to the fold that owns it, however deep that is.
+     *
+     * A sub-agent can spawn one of its own, and the id on the event names the innermost author, so
+     * the owner may be a fold inside a fold. Anything nobody claims opens a card here: the same
+     * orphan tolerance the tool cards have, for the same reason — a reconnect that lost the start
+     * event should cost the attribution, not the work.
+     */
+    private fun route(id: String, event: AgentEvent) {
+        val holder = subAgents.entries.firstOrNull { (key, fold) -> key == id || fold.inner.owns(id) }
+        val key = holder?.key ?: id
+        val fold = holder?.value ?: subAgent(id)
+        fold.inner.accept(event)
+        publish(key, fold, event.at)
+    }
+
+    /** True when [id] names a sub-agent this fold, or one of its own, started. */
+    private fun owns(id: String): Boolean =
+        subAgents.containsKey(id) || subAgents.values.any { it.inner.owns(id) }
+
+    private fun subAgent(id: String): SubAgentFold =
+        subAgents.getOrPut(id) { SubAgentFold("agent:$id", sessionId, id) }
+
+    private fun publish(id: String, fold: SubAgentFold, at: Long) {
+        val existing = items[fold.key]
+        put(
+            TranscriptItem.SubAgent(
+                key = fold.key,
+                // The card keeps the place it first appeared, so a sub-agent that talks for two
+                // minutes does not walk down the transcript while the user is reading it.
+                at = existing?.at ?: at,
+                subAgentId = id,
+                task = fold.task,
+                items = fold.inner.build().items,
+                outcome = fold.outcome,
+            ),
+        )
     }
 
     private fun existingTool(callId: String, at: Long): TranscriptItem.Tool {

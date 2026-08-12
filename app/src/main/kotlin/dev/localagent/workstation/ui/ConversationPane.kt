@@ -74,6 +74,7 @@ fun ConversationPane(
     onBack: (() -> Unit)?,
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
+    onStopSubAgent: (String) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onStartComputer: () -> Unit,
     onOpenComputer: () -> Unit,
@@ -124,6 +125,7 @@ fun ConversationPane(
                     harness = harness,
                     onOpenArtifact = onOpenArtifact,
                     onRetry = onStartComputer,
+                    onStopSubAgent = onStopSubAgent,
                 )
             }
         }
@@ -324,6 +326,7 @@ private fun TranscriptList(
     harness: HarnessDescriptor?,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
+    onStopSubAgent: (String) -> Unit,
 ) {
     val items = transcript?.items.orEmpty()
     val listState = rememberLazyListState()
@@ -347,6 +350,7 @@ private fun TranscriptList(
                             harness = harness,
                             onOpenArtifact = onOpenArtifact,
                             onRetry = onRetry,
+                            onStopSubAgent = onStopSubAgent,
                             modifier = Modifier.widthIn(max = 760.dp),
                         )
                     }

@@ -74,6 +74,50 @@ class HarnessWireTest {
     }
 
     @Test
+    fun `a sub-agent arrives as a task tool call carrying what it was asked to do`() {
+        val event = parse(
+            """{"type":"tool_started","callId":"a1","tool":{"kind":"task",
+               "description":"Audit runtime-api","prompt":"List the public declarations.",
+               "agentType":"Explore"}}""",
+        ) as AgentEvent.ToolCallStarted
+
+        val call = event.call as ToolCall.Task
+        assertEquals("Audit runtime-api", call.description)
+        assertEquals("Explore", call.agentType)
+        // The call id is the sub-agent's name; everything it does comes back stamped with it.
+        assertEquals("a1", event.callId)
+        assertNull(event.subAgentId)
+    }
+
+    @Test
+    fun `what a sub-agent does is attributed to it, and what the agent does is not`() {
+        val delegated = parse(
+            """{"type":"tool_started","callId":"c1","subAgentId":"a1",
+               "tool":{"kind":"shell","command":"rg public"}}""",
+        ) as AgentEvent.ToolCallStarted
+        val said = parse("""{"type":"message","messageId":"m1","text":"hi","subAgentId":"a1"}""")
+            as AgentEvent.AgentMessage
+        val own = parse("""{"type":"message","messageId":"m2","text":"hi"}""") as AgentEvent.AgentMessage
+
+        assertEquals("a1", delegated.subAgentId)
+        assertEquals("a1", said.subAgentId)
+        // Absent means the session's own agent, not "unknown": a harness that has never heard of
+        // sub-agents keeps working, and every line it writes has exactly one author.
+        assertNull(own.subAgentId)
+    }
+
+    @Test
+    fun `a task with nothing to say for itself is still a sub-agent worth showing`() {
+        val event = parse("""{"type":"tool_started","callId":"a1","tool":{"kind":"task"}}""")
+            as AgentEvent.ToolCallStarted
+
+        val call = event.call as ToolCall.Task
+        assertEquals("Sub-agent", call.description)
+        assertNull(call.prompt)
+        assertNull(call.agentType)
+    }
+
+    @Test
     fun `a finish with no readable status still finishes the card`() {
         val event = parse("""{"type":"tool_finished","callId":"c1","outcome":{}}""")
             as AgentEvent.ToolCallFinished
