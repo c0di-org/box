@@ -95,13 +95,9 @@ fun SignInSheet(
                     onCancel = onCancel,
                 )
 
-                GuestAuth.State.Starting -> WaitingBody(
-                    "Asking Claude Code for a sign-in link. On a freshly booted computer this " +
-                        "takes a few seconds.",
-                    onCancel = onCancel,
-                )
+                GuestAuth.State.Starting -> WaitingBody("Getting a sign-in link…", onCancel = onCancel)
 
-                GuestAuth.State.Checking -> WaitingBody("Checking whether you're already signed in.", null)
+                GuestAuth.State.Checking -> WaitingBody("Checking…", null)
 
                 is GuestAuth.State.SignedIn -> SignedInBody(state.account, onDismiss)
 
@@ -142,7 +138,7 @@ private fun SignInHeader(state: GuestAuth.State) {
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
-                "Your credential stays on this phone, inside the computer.",
+                "Stays on this phone, inside your box.",
                 style = MaterialTheme.typography.bodyMedium,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -154,25 +150,10 @@ private fun SignInHeader(state: GuestAuth.State) {
 @Composable
 private fun StartBody(computerReady: Boolean, onBegin: () -> Unit) {
     Column {
-        Text(
-            "Box will open Claude's sign-in page in your browser. Approve it there, then bring the " +
-                "code back here.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(18.dp))
+        // The steps below say what happens. Saying it twice, once in prose first, is how a sheet
+        // with two buttons in it turns into something to read.
         Button(onClick = onBegin, enabled = computerReady, modifier = Modifier.fillMaxWidth()) {
-            Text(if (computerReady) "Start sign-in" else "Waiting for the computer…")
-        }
-        if (!computerReady) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "Claude Code runs inside the computer, so it has to be up before it can log in. " +
-                    "Box is starting it now.",
-                style = MaterialTheme.typography.bodyMedium,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(if (computerReady) "Start sign-in" else "Waiting for your box…")
         }
     }
 }

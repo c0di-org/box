@@ -80,7 +80,7 @@ fun ConversationPane(
     onCloseSession: (String) -> Unit,
     modifier: Modifier = Modifier,
     onReviewPermission: (() -> Unit)? = null,
-    showComputerAction: Boolean = false,
+    showComputerAction: Boolean = true,
     onSignIn: () -> Unit = {},
 ) {
     val session = state.selectedSession
@@ -128,15 +128,15 @@ fun ConversationPane(
         Composer(
             enabled = state.harnesses.isNotEmpty(),
             blockedReason = when {
-                state.transcript?.pendingPermission != null -> "Answer the request above to continue."
+                state.transcript?.pendingPermission != null -> "Answer the request above."
                 // A booting computer is not a lost connection, and typing into one is supported:
                 // the message waits. Only a session that dropped while the computer was up is a
                 // reason to stop the user mid-thought.
                 state.computerReady && state.connection is SessionConnection.Disconnected ->
-                    "Box lost the connection to this session."
+                    "Connection lost."
                 else -> null
             },
-            placeholder = if (session == null) "Start a conversation…" else "Ask Box anything…",
+            placeholder = "Ask Box anything…",
             onSend = onSend,
             onReview = onReviewPermission,
         )
@@ -193,9 +193,11 @@ private fun ConversationHeader(
                 Text("Stop")
             }
         }
+        // Always, at every size. This used to be true only on a tablet-width window, which left the
+        // one route to the machine on a phone buried in the menu below.
         if (showComputerAction) {
             IconButton(onClick = onOpenComputer) {
-                Icon(Icons.Outlined.Computer, contentDescription = "Open the agent's computer")
+                Icon(Icons.Outlined.Computer, contentDescription = "Open the computer")
             }
         }
         Box {
@@ -203,14 +205,6 @@ private fun ConversationHeader(
                 Icon(Icons.Outlined.MoreVert, contentDescription = "Session options")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(
-                    text = { Text("Open computer") },
-                    leadingIcon = { Icon(Icons.Outlined.Computer, contentDescription = null) },
-                    onClick = {
-                        menuOpen = false
-                        onOpenComputer()
-                    },
-                )
                 if (onCloseSession != null) {
                     DropdownMenuItem(
                         text = { Text("Close session") },
@@ -236,13 +230,13 @@ private fun ConnectionBanner(connection: SessionConnection) {
             tint = MaterialTheme.colorScheme.error,
             icon = { Icon(Icons.Outlined.CloudOff, null, Modifier.size(17.dp)) },
             title = connection.reason,
-            body = if (connection.retrying) "Reconnecting…" else "This transcript is the last thing Box saw.",
+            body = if (connection.retrying) "Reconnecting…" else null,
         )
 
         SessionConnection.Connecting -> Banner(
             tint = MaterialTheme.colorScheme.primary,
             icon = { CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp) },
-            title = "Connecting to the session",
+            title = "Connecting",
             body = null,
         )
 
@@ -256,15 +250,16 @@ private fun ComputerBanner(runtimeState: RuntimeState, onStart: () -> Unit) {
         RuntimeState.Ready -> return
         // Measured on the Fold 7, not estimated: the guest is fully emulated under TCG.
         RuntimeState.Starting -> Triple(
-            "The computer is booting",
-            "About three minutes. You can keep typing — Box will send when it's ready.",
+            "Booting Debian",
+            // The only banner that earns a second line: it is telling the user their message is
+            // not lost, which is the question a three-minute wait raises.
+            "Keep typing — Box sends when it’s ready.",
             null,
         )
-        RuntimeState.Connecting -> Triple("Almost ready", "Waiting for the private control channel.", null)
-        is RuntimeState.Provisioning -> Triple("Setting up the computer", "Preparing the Linux workspace.", null)
-        RuntimeState.NotProvisioned -> Triple("No computer yet", "Agents need a Linux box to work in.", "Set up")
-        RuntimeState.Stopped, RuntimeState.Suspended ->
-            Triple("The computer is off", "Start it before an agent runs anything.", "Start")
+        RuntimeState.Connecting -> Triple("Almost ready", null, null)
+        is RuntimeState.Provisioning -> Triple("Setting up your box", null, null)
+        RuntimeState.NotProvisioned -> Triple("No box yet", null, "Open")
+        RuntimeState.Stopped, RuntimeState.Suspended -> Triple("Your box is closed", null, "Open")
         RuntimeState.Stopping, RuntimeState.Suspending -> Triple("Shutting down", null, null)
         is RuntimeState.Failed -> Triple("The computer couldn’t start", runtimeState.reason.message, "Try again")
     }
@@ -413,48 +408,34 @@ private fun SignInBanner(onSignIn: () -> Unit) {
         tint = MaterialTheme.colorScheme.primary,
         icon = { Icon(Icons.Outlined.Lock, null, Modifier.size(17.dp)) },
         title = "Sign in to Claude",
-        body = "The agent needs your account before it can start work.",
+        body = null,
         action = "Sign in" to onSignIn,
     )
 }
 
 @Composable
 private fun TranscriptLoading() {
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
+    // A spinner says "loading". Writing it underneath as well was the app reading itself aloud.
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        Spacer(Modifier.height(14.dp))
-        Text(
-            "Loading the transcript",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
 @Composable
-private fun NoSessionState() {
-    EmptyState(
-        title = "Pick a conversation",
-        body = "Every agent you run gets its own thread. Choose one on the left, or start a new " +
-            "conversation and Box will spin up a fresh session for it.",
-    )
-}
+private fun NoSessionState() = EmptyState("Pick a task")
 
 @Composable
-private fun EmptyTranscriptState(harness: HarnessDescriptor?) {
-    EmptyState(
-        title = harness?.let { "Nothing yet with ${it.name}" } ?: "Nothing yet",
-        body = "Tell the agent what you want done. It has a real Linux computer to work in, and " +
-            "Box will ask you before it changes anything.",
-    )
-}
+private fun EmptyTranscriptState(harness: HarnessDescriptor?) =
+    EmptyState(harness?.let { "Nothing yet with ${it.name}" } ?: "Nothing yet")
 
+/**
+ * A symbol and a statement.
+ *
+ * The paragraphs that used to sit under these titles explained the product to someone already
+ * inside it, next to a composer that explains itself.
+ */
 @Composable
-private fun EmptyState(title: String, body: String) {
+private fun EmptyState(title: String) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -470,14 +451,6 @@ private fun EmptyState(title: String, body: String) {
         }
         Spacer(Modifier.height(16.dp))
         Text(title, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            body,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.widthIn(max = 380.dp),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
     }
 }
 
@@ -485,13 +458,22 @@ private fun EmptyState(title: String, body: String) {
 // Composer
 // ---------------------------------------------------------------------------
 
+/**
+ * Where anything is said to an agent.
+ *
+ * Shared with the opening hero rather than copied into it: the first thing typed on a phone whose
+ * box is still booting goes through exactly the same path as the thousandth, queue and all, and a
+ * second text field would have been a second set of rules about when sending is allowed.
+ */
 @Composable
-private fun Composer(
+internal fun Composer(
     enabled: Boolean,
     blockedReason: String?,
     placeholder: String,
     onSend: (String) -> Unit,
     onReview: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    footer: Boolean = true,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val canSend = enabled && blockedReason == null && draft.isNotBlank()
@@ -502,7 +484,7 @@ private fun Composer(
     }
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .padding(top = 8.dp, bottom = 10.dp),
@@ -574,12 +556,14 @@ private fun Composer(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Box can make mistakes. Review all work.",
-            style = MaterialTheme.typography.bodyMedium,
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-        )
+        if (footer) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Box can make mistakes. Review all work.",
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+            )
+        }
     }
 }

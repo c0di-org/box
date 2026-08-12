@@ -178,8 +178,7 @@ private fun PermissionEvidence(ask: PermissionAsk) {
             ask.purpose?.let { Rationale(it) }
             DetailRow("Host", ask.host)
             Spacer(Modifier.height(8.dp))
-            Footnote("The guest reaches the network through Box's private NAT. No port on this " +
-                "phone is exposed.")
+            Footnote("Through Box's private NAT. No port on this phone is exposed.")
         }
 
         is PermissionAsk.Generic -> {

@@ -28,9 +28,22 @@ class OpeningHistory(context: Context) {
         preferences.edit().putLong(KEY, millis).apply()
     }
 
+    /**
+     * Whether this device has ever seen the box finish opening.
+     *
+     * Only the first one gets the full-window welcome, so this is written the moment that welcome
+     * is shown rather than when it is dismissed — an app killed mid-greeting has still had it.
+     */
+    fun hasBeenGreeted(): Boolean = preferences.getBoolean(GREETED, false)
+
+    fun rememberGreeting() {
+        preferences.edit().putBoolean(GREETED, true).apply()
+    }
+
     private companion object {
         /** Shared with the notification-permission flag in `MainActivity`. */
         const val PREFERENCES = "box_product"
         const val KEY = "expected_open_millis"
+        const val GREETED = "first_open_greeted"
     }
 }

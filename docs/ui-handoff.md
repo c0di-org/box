@@ -10,9 +10,17 @@ Box was a **VM manager**: bottom nav was Home | Terminal | Files, and Home was a
 stopping a virtual machine. That inverted the product. The VM is substrate; the product is a
 conversation with an agent that happens to have a real computer.
 
-So: nav is now **Conversations | Computer**, the app opens on the session list, and the terminal
-and file browser stopped being top-level destinations — they are secondary tools inside Computer,
-reached when you want to poke at something the agent did.
+So: the destinations became **Tasks | Computer**, the app opens on the task list, and the terminal
+and file browser stopped being top-level destinations — they are tools you reach through the
+computer, when you want to poke at something the agent did.
+
+**Since then, the computer got the window back.** Demoting the VM was right; drawing it as a small
+non-interactive picture in the third column of a wide layout was not, and it made "use the machine
+yourself" a sub-feature two taps inside a tab. The Computer destination now *is* the machine —
+full window at every size, live, driven by the pointer and keyboard — with the agent, terminal and
+files floating over it one panel at a time. Someone who never speaks to an agent can install Box,
+press Computer, and use Debian. The bottom nav bar went with that change: the computer is the
+first row of the task list, carrying its own live screen, and a button in the conversation header.
 
 The visual language did not change. `BoxTheme.kt` / `BoxTypography.kt` are as they were, plus two
 constants (`BoxUserBubble` / `BoxUserBubbleLight`) — the user's own turns are the one non-green
@@ -33,20 +41,21 @@ app/src/main/kotlin/dev/localagent/workstation/
 │   ├── Transcript.kt          TranscriptBuilder: folds the event log into what gets drawn
 │   └── FakeAgentBackend.kt    scripted session, no VM. The whole UI is built against this.
 ├── computer/
-│   └── DesktopTransport.kt    interfaces the runtime layer still owes us. Nothing implements them.
+│   └── DesktopTransport.kt    the guest screen over RFB, plus the preview port forwarder (unbuilt)
 ├── ui/
-│   ├── BoxApp.kt              the shell: 3 layouts, both sheets, the nav bar
-│   ├── BoxWindowSize.kt       BoxLayout {Single, Dual, Triple} from window size class
-│   ├── SessionsPane.kt        harness-grouped session list + New conversation
+│   ├── BoxApp.kt              the shell: two destinations, two layouts, the sheets
+│   ├── BoxWindowSize.kt       BoxLayout {Single, Wide} from window size class
+│   ├── SessionsPane.kt        home: the box panel over one flat task list
 │   ├── ConversationPane.kt    header, banners, transcript list, composer
 │   ├── TranscriptItems.kt     one renderer per TranscriptItem variant
 │   ├── PermissionSheet.kt     the important one
 │   ├── CodeView.kt            syntax highlighter + DiffView + CodeBlock
-│   ├── ComputerPane.kt        computer destination, desktop slot, runtime status card
+│   ├── ComputerPane.kt        the machine, full window, with floating panels on it
+│   ├── YourBox.kt             the box: closed, opening, the one greeting, the row
 │   ├── WorkspaceTools.kt      terminal + files, moved out of the old BoxApp.kt
 │   ├── RuntimeStatus.kt       statePresentation, StatusPill, RuntimeGate, DiagnosticsSheet
 │   └── BoxMarks.kt            the Box cube + per-harness geometric marks
-├── BoxUiState.kt              one state object; `groups` derives the grouped session list
+├── BoxUiState.kt              one state object; `boxStage` and `boxOwnsWindow` drive home
 ├── BoxViewModel.kt            two independent sources: AgentBackend and RuntimeService
 └── MainActivity.kt            wiring only
 
@@ -76,20 +85,17 @@ still pass, you probably did not break a transcript.
 
 Working, against the fake:
 
-- Session list grouped by harness, collapsible, live Active / Needs you / Finished status
+- One flat task list under the box, live Active / Needs you / Finished status
 - Conversation: streamed prose, tool cards (collapsed to a one-line summary, expandable to
   output), checklists, diffs, permission records, artifact offers, error cards, session-ended rule
 - Permission sheet with a syntax-highlighted diff and Allow / Deny / Always-allow
-- Three layouts, verified live on an emulator by changing `wm density` with the app running
+- Both task layouts, verified live on an emulator by changing `wm density` with the app running
 - Empty / loading / disconnected / VM-not-ready states throughout
 
 Deliberately inert:
 
-- The live desktop — `DesktopSlot` renders a placeholder at the real 16:10 aspect ratio, so the
-  three-pane layout is measured against what will fill it rather than a stand-in that shrinks
-- "Open computer" / "Open preview" — wired to `BoxViewModel.openArtifact`, which switches to the
-  Computer destination and posts a snackbar saying the transport is still being built
-- "Take over" — same; `ControlHolder` is modelled but nothing enforces it yet
+- "Open preview" — wired, and posts a snackbar saying the port-forwarding transport is still
+  being built
 
 Not built:
 

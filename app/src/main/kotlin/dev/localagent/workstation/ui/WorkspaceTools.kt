@@ -81,11 +81,7 @@ fun TerminalTool(
     onRunCommand: (String) -> Unit,
 ) {
     if (state.runtimeState != RuntimeState.Ready) {
-        RuntimeGate(
-            destination = "the terminal",
-            state = state.runtimeState,
-            onOpenBox = onOpenBox,
-        )
+        RuntimeGate(state.runtimeState, onOpenBox)
         return
     }
 
@@ -123,22 +119,15 @@ fun TerminalTool(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 item {
-                    Column {
-                        Text(
-                            "BOX / DEBIAN ARM64",
-                            color = BoxGreenLight,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                        )
-                        Spacer(Modifier.height(5.dp))
-                        Text(
-                            "Commands run in ${state.currentPath} using the guest shell.",
-                            color = CodeColors.muted,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                        )
-                    }
+                    // A shell banner, which is what a shell opens with. The sentence that used to
+                    // follow it explained a terminal to someone who had just opened a terminal.
+                    Text(
+                        "box:${state.currentPath}",
+                        color = BoxGreenLight,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                    )
                 }
                 if (state.commandHistory.isEmpty() && state.runningCommand == null) {
                     item {
@@ -285,11 +274,7 @@ fun FilesTool(
     onCloseFile: () -> Unit,
 ) {
     if (state.runtimeState != RuntimeState.Ready) {
-        RuntimeGate(
-            destination = "files",
-            state = state.runtimeState,
-            onOpenBox = onOpenBox,
-        )
+        RuntimeGate(state.runtimeState, onOpenBox)
         return
     }
 
@@ -334,13 +319,7 @@ fun FilesTool(
                             Icon(Icons.Outlined.FolderOpen, null, Modifier.padding(18.dp).size(30.dp))
                         }
                         Spacer(Modifier.height(14.dp))
-                        Text("This folder is empty", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(5.dp))
-                        Text(
-                            "Anything an agent creates in here shows up as it works.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Text("Empty", style = MaterialTheme.typography.titleMedium)
                     }
                 }
             } else {
@@ -459,7 +438,7 @@ private fun FilePreview(file: OpenedFile, onClose: () -> Unit) {
         if (file.truncated) {
             Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(12.dp)) {
                 Text(
-                    "Preview shortened to keep Box responsive.",
+                    "Preview shortened.",
                     Modifier.fillMaxWidth().padding(12.dp),
                     color = MaterialTheme.colorScheme.onTertiaryContainer,
                     style = MaterialTheme.typography.bodyMedium,

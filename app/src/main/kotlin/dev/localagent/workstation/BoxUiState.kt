@@ -5,18 +5,28 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
+import dev.localagent.workstation.agent.SessionStatus
 import dev.localagent.workstation.agent.SessionSummary
 import dev.localagent.workstation.agent.Transcript
 import dev.localagent.workstation.computer.ControlHolder
 
 /**
- * Box's two top-level surfaces. The VM is substrate, so it gets one destination; the conversation
- * with the agent gets the other, and it is where the app opens.
+ * Box's two top-level surfaces, and they are peers.
+ *
+ * Tasks is where the app opens, because most people arrive with something to ask for. Computer is
+ * the machine itself — the whole window, driven directly — and it is a place someone can live in
+ * without ever talking to an agent. Neither is a detail of the other.
  */
-enum class BoxDestination { Conversations, Computer }
+enum class BoxDestination { Tasks, Computer }
 
-/** Secondary tools inside Computer. Not top-level destinations any more. */
-enum class ComputerTool { Overview, Terminal, Files }
+/**
+ * What is floating over the computer.
+ *
+ * Not tabs, and not a second navigation level: the desktop is always the surface, and these are
+ * panels drawn on top of it — the agent, a shell, the workspace — one at a time, dismissable back
+ * to nothing. A tab bar would have made the desktop one of four equal things instead of the thing.
+ */
+enum class ComputerPanel { None, Chat, Terminal, Files }
 
 data class CommandRecord(
     val id: Long,
@@ -54,7 +64,7 @@ enum class BoxStage { Closed, Working, Open }
 
 data class BoxUiState(
     val runtimeState: RuntimeState = RuntimeState.NotProvisioned,
-    val destination: BoxDestination = BoxDestination.Conversations,
+    val destination: BoxDestination = BoxDestination.Tasks,
 
     // ---- opening the box ----
     /**
@@ -68,6 +78,15 @@ data class BoxUiState(
     val openingSince: Long? = null,
     /** What opening is expected to cost on this phone, learned from the last few. */
     val expectedOpenMillis: Long = BoxProgress.ASSUMED_MILLIS,
+    /**
+     * The box has just opened for the very first time on this device and nobody has been told yet.
+     *
+     * Exactly once in the life of an install. The first time is the only time the arrival is worth
+     * the whole window — it is also the moment the two things Box can do have to be shown, because
+     * afterwards they are a row and a tab that people find by looking. Every later opening gets a
+     * line in the corner and the row filling with the machine's own screen.
+     */
+    val readyGreeting: Boolean = false,
 
     // ---- conversations ----
     val harnesses: List<HarnessDescriptor> = emptyList(),
@@ -90,14 +109,13 @@ data class BoxUiState(
     val signInVisible: Boolean = false,
 
     // ---- computer ----
-    /** Whether the guest's screen is filling the window. */
-    val desktopVisible: Boolean = false,
     /**
-     * Who the guest's input belongs to. Defaults to the agent, and going back to the conversation
-     * returns it, so a session cannot be left with the keyboard pointed somewhere the user forgot.
+     * Who the guest's input belongs to. Walking into the computer takes it, unless an agent is
+     * mid-task; leaving gives it back, so a session cannot be left with the keyboard pointed
+     * somewhere the user forgot.
      */
     val desktopControl: ControlHolder = ControlHolder.Agent,
-    val computerTool: ComputerTool = ComputerTool.Overview,
+    val computerPanel: ComputerPanel = ComputerPanel.None,
     val commandHistory: List<CommandRecord> = emptyList(),
     val runningCommand: String? = null,
     val currentPath: String = "/workspace",
@@ -163,4 +181,29 @@ data class BoxUiState(
         get() = runtimeState == RuntimeState.Starting ||
             runtimeState == RuntimeState.Connecting ||
             runtimeState is RuntimeState.Provisioning
+
+    /**
+     * Whether the box itself is worth the whole home surface.
+     *
+     * It is, whenever there is nothing else on that surface: a closed box, a first opening with no
+     * tasks under it yet, and the one arrival an install ever gets. It is not, the moment there is
+     * real work to look at — reopening the box after a restart must not hide a list of tasks behind
+     * a progress screen for three minutes, so that opening is a row instead.
+     */
+    val boxOwnsWindow: Boolean
+        get() = when (boxStage) {
+            BoxStage.Closed -> true
+            BoxStage.Working -> tasks.isEmpty()
+            BoxStage.Open -> readyGreeting
+        }
+
+    /**
+     * Whether an agent is in the middle of something.
+     *
+     * The one question that decides who gets the keyboard when the user opens the computer: an
+     * idle box is theirs to drive, and a box with an agent typing in it is not something to take
+     * out from under it by accident.
+     */
+    val agentAtWork: Boolean
+        get() = sessions.any { it.status == SessionStatus.Active }
 }

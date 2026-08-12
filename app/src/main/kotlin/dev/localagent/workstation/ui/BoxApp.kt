@@ -22,17 +22,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -47,6 +41,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -57,7 +53,7 @@ import dev.localagent.workstation.BoxDestination
 import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
-import dev.localagent.workstation.ComputerTool
+import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
@@ -66,13 +62,16 @@ import dev.localagent.workstation.computer.DesktopTransport
 /**
  * Box's shell.
  *
- * Two destinations — the conversation and the computer — and three layouts derived from window
- * size. The layout decision is made once, here, and every pane below is written to be dropped
- * into any of the three without knowing which it landed in.
+ * Two destinations, and they are peers rather than a surface and its footnote:
+ *
+ * - **Tasks** — the box, everything being done inside it, and the conversation. One pane on a
+ *   phone, list beside transcript on anything wider.
+ * - **Computer** — the machine, taking the whole window at every size, with the agent floating
+ *   over it. Not a pane, not a tab with a photograph of Linux on it, and not three taps deep.
  *
  * One thing overrides all of that: until the box is open there is nothing worth showing beside it,
- * so the home surface takes the whole window at every size and gives the rest of the shell back as
- * it settles. That is not a separate screen or a gate to dismiss — see [YourBox].
+ * so the home surface takes the whole window and gives the rest of the shell back as it settles.
+ * That is not a separate screen or a gate to dismiss — see [YourBox].
  */
 @Composable
 fun BoxApp(
@@ -85,7 +84,7 @@ fun BoxApp(
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onCloseSession: (String) -> Unit,
-    onSelectComputerTool: (ComputerTool) -> Unit,
+    onSelectComputerPanel: (ComputerPanel) -> Unit,
     onOpenBox: () -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String) -> Unit,
@@ -95,6 +94,7 @@ fun BoxApp(
     onOpenFile: (FileEntry) -> Unit,
     onCloseFile: () -> Unit,
     onNoticeShown: () -> Unit,
+    onDismissGreeting: () -> Unit = {},
     onShowSignIn: () -> Unit = {},
     onDismissSignIn: () -> Unit = {},
     onBeginSignIn: () -> Unit = {},
@@ -102,8 +102,6 @@ fun BoxApp(
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
     desktop: DesktopTransport? = null,
-    onOpenDesktop: () -> Unit = {},
-    onCloseDesktop: () -> Unit = {},
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -112,11 +110,20 @@ fun BoxApp(
     val progress = rememberBoxProgress(state)
     // The app is handed back on press. Only the closed box is allowed to hold the window.
     val revealed = state.boxStage != BoxStage.Closed
+    val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(state.notice?.id) {
         val notice = state.notice ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(notice.message)
         onNoticeShown()
+    }
+
+    // Three minutes of waiting deserve to end with something the hand can feel. The words are the
+    // snackbar's job, or the greeting's on the first open ever; this is just the arrival landing.
+    LaunchedEffect(state.boxStage) {
+        if (state.boxStage == BoxStage.Open) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
     }
 
     val pending = state.transcript?.pendingPermission
@@ -134,6 +141,7 @@ fun BoxApp(
                 .safeDrawingPadding(),
         ) {
             val layout = rememberBoxLayout(maxWidth, maxHeight)
+            val compact = layout == BoxLayout.Single
 
             val home: @Composable (Modifier, Boolean) -> Unit = { modifier, showSelection ->
                 SessionsPane(
@@ -143,7 +151,9 @@ fun BoxApp(
                     onSelectSession = { onSelectSession(it) },
                     onNewConversation = onNewConversation,
                     onOpenBox = onOpenBox,
-                    onOpenDesktop = onOpenDesktop,
+                    onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
+                    onSendFirstTask = onSend,
+                    onDismissGreeting = onDismissGreeting,
                     onShowDetails = { showDiagnostics = true },
                     modifier = modifier,
                     showSelection = showSelection,
@@ -152,90 +162,89 @@ fun BoxApp(
 
             val conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit =
                 { modifier, onBack, showComputerAction ->
-                    ConversationPane(
+                ConversationPane(
+                    state = state,
+                    onBack = onBack,
+                    onSend = onSend,
+                    onInterrupt = onInterrupt,
+                    onOpenArtifact = onOpenArtifact,
+                    onStartComputer = onOpenBox,
+                    onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
+                    onCloseSession = onCloseSession,
+                    onReviewPermission = if (pending != null && !sheetVisible) {
+                        { dismissedRequestId = null }
+                    } else {
+                        null
+                    },
+                    modifier = modifier,
+                    showComputerAction = showComputerAction,
+                    onSignIn = onShowSignIn,
+                )
+            }
+
+            when (state.destination) {
+                // The genuine thing: the machine is the window, and the agent is a panel on it.
+                BoxDestination.Computer -> {
+                    BackHandler(enabled = true) { onDestinationSelected(BoxDestination.Tasks) }
+                    ComputerPane(
                         state = state,
-                        onBack = onBack,
-                        onSend = onSend,
-                        onInterrupt = onInterrupt,
-                        onOpenArtifact = onOpenArtifact,
-                        onStartComputer = onOpenBox,
-                        onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
-                        onCloseSession = onCloseSession,
-                        onReviewPermission = if (pending != null && !sheetVisible) {
-                            { dismissedRequestId = null }
-                        } else {
-                            null
-                        },
-                        modifier = modifier,
-                        showComputerAction = showComputerAction,
-                        onSignIn = onShowSignIn,
+                        progress = progress,
+                        desktop = desktop,
+                        onBack = { onDestinationSelected(BoxDestination.Tasks) },
+                        onSelectPanel = onSelectComputerPanel,
+                        onSetControl = onSetDesktopControl,
+                        onOpenBox = onOpenBox,
+                        onStop = onStop,
+                        onShowDiagnostics = { showDiagnostics = true },
+                        onRunCommand = onRunCommand,
+                        onOpenDirectory = onOpenDirectory,
+                        onNavigateUp = onNavigateUp,
+                        onRefreshFiles = onRefreshFiles,
+                        onOpenFile = onOpenFile,
+                        onCloseFile = onCloseFile,
+                        // No "open the computer" button on a panel that is already on it.
+                        chat = { modifier -> conversation(modifier, null, false) },
+                        modifier = Modifier.fillMaxSize(),
+                        compact = compact,
                     )
                 }
 
-            val computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit = { modifier, onBack, compact ->
-                ComputerPane(
-                    state = state,
-                    onBack = onBack,
-                    onSelectTool = onSelectComputerTool,
-                    onOpenBox = onOpenBox,
-                    onStop = onStop,
-                    onShowDiagnostics = { showDiagnostics = true },
-                    onRunCommand = onRunCommand,
-                    onOpenDirectory = onOpenDirectory,
-                    onNavigateUp = onNavigateUp,
-                    onRefreshFiles = onRefreshFiles,
-                    onOpenFile = onOpenFile,
-                    onCloseFile = onCloseFile,
-                    onTakeControl = onOpenDesktop,
-                    modifier = modifier,
-                    compact = compact,
-                    desktop = desktop,
-                )
+                BoxDestination.Tasks -> when (layout) {
+                    BoxLayout.Single -> SinglePaneLayout(
+                        state = state,
+                        revealed = revealed,
+                        progress = progress,
+                        onSelectSession = onSelectSession,
+                        onShowDiagnostics = { showDiagnostics = true },
+                        home = home,
+                        conversation = conversation,
+                    )
+
+                    BoxLayout.Wide -> WidePaneLayout(
+                        state = state,
+                        revealed = revealed,
+                        progress = progress,
+                        windowWidth = maxWidth,
+                        onShowDiagnostics = { showDiagnostics = true },
+                        home = home,
+                        conversation = conversation,
+                    )
+                }
             }
 
-            when (layout) {
-                BoxLayout.Single -> SinglePaneLayout(
-                    state = state,
-                    revealed = revealed,
-                    progress = progress,
-                    onDestinationSelected = onDestinationSelected,
-                    onSelectSession = onSelectSession,
-                    onShowDiagnostics = { showDiagnostics = true },
-                    home = home,
-                    conversation = conversation,
-                    computer = computer,
-                )
-
-                BoxLayout.Dual -> DualPaneLayout(
-                    state = state,
-                    revealed = revealed,
-                    progress = progress,
-                    windowWidth = maxWidth,
-                    onDestinationSelected = onDestinationSelected,
-                    onShowDiagnostics = { showDiagnostics = true },
-                    home = home,
-                    conversation = conversation,
-                    computer = computer,
-                )
-
-                BoxLayout.Triple -> TriplePaneLayout(
-                    state = state,
-                    revealed = revealed,
-                    progress = progress,
-                    windowWidth = maxWidth,
-                    onShowDiagnostics = { showDiagnostics = true },
-                    home = home,
-                    conversation = conversation,
-                    computer = computer,
-                )
-            }
-
-            // In every multi-pane layout the conversation is always on screen, so it needs a
-            // session even before the user picks one. Not while the box is still opening: there is
-            // no room for a conversation then, and selecting one behind the hero would mean the
-            // list arrives with a choice already made for the user.
-            LaunchedEffect(layout, revealed, state.sessions.firstOrNull()?.id, state.selectedSessionId) {
-                if (layout != BoxLayout.Single && revealed && state.selectedSessionId == null) {
+            // Beside a permanent task list the conversation is always on screen, so it needs a
+            // session even before the user picks one. Not while the box is still opening or the
+            // first-open greeting is up: there is no room for a conversation then, and selecting
+            // one behind the hero would mean the list arrives with a choice already made.
+            LaunchedEffect(
+                layout,
+                state.boxStage,
+                state.readyGreeting,
+                state.sessions.firstOrNull()?.id,
+                state.selectedSessionId,
+            ) {
+                val settled = state.boxStage == BoxStage.Open && !state.readyGreeting
+                if (layout != BoxLayout.Single && settled && state.selectedSessionId == null) {
                     state.sessions.firstOrNull()?.let { onSelectSession(it.id) }
                 }
             }
@@ -254,17 +263,6 @@ fun BoxApp(
                 onPermissionDecision(pending.requestId, decision)
             },
             onDismiss = { dismissedRequestId = pending.requestId },
-        )
-    }
-
-    // Above every pane and both sheets: this is a window mode, not a pane. Drawn last so a
-    // permission sheet raised while the desktop is open cannot appear behind the picture.
-    if (state.desktopVisible && desktop != null) {
-        DesktopFullWindow(
-            transport = desktop,
-            control = state.desktopControl,
-            onSetControl = onSetDesktopControl,
-            onClose = onCloseDesktop,
         )
     }
 
@@ -300,34 +298,34 @@ fun BoxApp(
 // Layouts
 // ---------------------------------------------------------------------------
 
-/** Phone, folded. One pane, bottom nav, and the conversation pushes over the list. */
+/**
+ * Phone, folded. One pane, and the conversation pushes over the list.
+ *
+ * There is no bottom navigation bar. Two destinations do not need a permanent five percent of a
+ * phone screen when one of them is the first row of the other and the second is a button in the
+ * conversation's own header — and the bar it replaces was hidden inside conversations anyway,
+ * which is exactly where someone would reach for it.
+ */
 @Composable
 private fun SinglePaneLayout(
     state: BoxUiState,
     revealed: Boolean,
     progress: BoxProgress,
-    onDestinationSelected: (BoxDestination) -> Unit,
     onSelectSession: (String?) -> Unit,
     onShowDiagnostics: () -> Unit,
     home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
-    computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
-    val inConversation = state.destination == BoxDestination.Conversations &&
-        state.selectedSessionId != null
+    val inConversation = state.selectedSessionId != null
 
     BackHandler(enabled = inConversation) { onSelectSession(null) }
-    BackHandler(enabled = state.destination == BoxDestination.Computer) {
-        onDestinationSelected(BoxDestination.Conversations)
-    }
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
-            when {
-                inConversation -> conversation(Modifier.fillMaxSize(), { onSelectSession(null) }, false)
-                state.destination == BoxDestination.Computer ->
-                    computer(Modifier.fillMaxSize(), null, true)
-                else -> Column(Modifier.fillMaxSize()) {
+            if (inConversation) {
+                conversation(Modifier.fillMaxSize(), { onSelectSession(null) }, true)
+            } else {
+                Column(Modifier.fillMaxSize()) {
                     // The hero is the window while the box is closed, so the chrome above it
                     // arrives the moment the box is asked for — carrying the opening on its mark.
                     BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
@@ -335,48 +333,12 @@ private fun SinglePaneLayout(
                 }
             }
         }
-        // Same reason: a Computer tab is a second door to a box nobody has asked for yet.
-        BoxChrome(visible = revealed && !inConversation) {
-            BoxNavigationBar(state.destination, onDestinationSelected)
-        }
     }
 }
 
-/** Unfolded or tablet. The task list earns a permanent home beside the conversation. */
+/** Unfolded, tablet, or a DeX window. The task list earns a permanent home beside the transcript. */
 @Composable
-private fun DualPaneLayout(
-    state: BoxUiState,
-    revealed: Boolean,
-    progress: BoxProgress,
-    windowWidth: Dp,
-    onDestinationSelected: (BoxDestination) -> Unit,
-    onShowDiagnostics: () -> Unit,
-    home: @Composable (Modifier, Boolean) -> Unit,
-    conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
-    computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
-) {
-    Row(Modifier.fillMaxSize()) {
-        Column(Modifier.width(homeWidth(revealed, windowWidth))) {
-            BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
-            home(Modifier.fillMaxSize(), true)
-        }
-        PaneDivider()
-        Box(Modifier.weight(1f)) {
-            when (state.destination) {
-                BoxDestination.Conversations -> conversation(Modifier.fillMaxSize(), null, true)
-                BoxDestination.Computer -> computer(
-                    Modifier.fillMaxSize(),
-                    { onDestinationSelected(BoxDestination.Conversations) },
-                    false,
-                )
-            }
-        }
-    }
-}
-
-/** DeX with a keyboard and mouse. Everything at once: tasks, conversation, the computer. */
-@Composable
-private fun TriplePaneLayout(
+private fun WidePaneLayout(
     state: BoxUiState,
     revealed: Boolean,
     progress: BoxProgress,
@@ -384,7 +346,6 @@ private fun TriplePaneLayout(
     onShowDiagnostics: () -> Unit,
     home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
-    computer: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.width(homeWidth(revealed, windowWidth))) {
@@ -392,11 +353,7 @@ private fun TriplePaneLayout(
             home(Modifier.fillMaxSize(), true)
         }
         PaneDivider()
-        Box(Modifier.weight(1f)) { conversation(Modifier.fillMaxSize(), null, false) }
-        PaneDivider()
-        Box(Modifier.weight(0.9f).widthIn(min = COMPUTER_PANE_MIN_WIDTH)) {
-            computer(Modifier.fillMaxSize(), null, false)
-        }
+        Box(Modifier.weight(1f)) { conversation(Modifier.fillMaxSize(), null, true) }
     }
 }
 
@@ -404,9 +361,8 @@ private fun TriplePaneLayout(
  * How wide the home column is: the whole window until the box has settled, then its rail width.
  *
  * A big screen deserves the same treatment as the phone. Showing a 320dp column with an "Open your
- * box" button in it, next to two panes that have nothing to show until the box is open, would be
- * three quarters of a desktop's worth of empty and one small button — exactly the thing this
- * change is getting rid of.
+ * box" button in it, next to a pane that has nothing to show until the box is open, would be three
+ * quarters of a desktop's worth of empty and one small button.
  */
 @Composable
 private fun homeWidth(revealed: Boolean, windowWidth: Dp) =
@@ -446,7 +402,7 @@ private fun BoxTopBar(state: BoxUiState, progress: BoxProgress, onShowDiagnostic
         Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 12.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The whole of the opening lives here now.
+        // The whole of the opening lives here too, for whenever the panel below is a row.
         OpeningMark(progress, opening = state.boxStage == BoxStage.Working)
         Spacer(Modifier.width(10.dp))
         Text(
@@ -457,33 +413,6 @@ private fun BoxTopBar(state: BoxUiState, progress: BoxProgress, onShowDiagnostic
         )
         IconButton(onClick = onShowDiagnostics) {
             Icon(Icons.Outlined.MoreVert, contentDescription = "Computer details")
-        }
-    }
-}
-
-@Composable
-private fun BoxNavigationBar(
-    selected: BoxDestination,
-    onSelected: (BoxDestination) -> Unit,
-) {
-    Column {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
-        NavigationBar(
-            containerColor = MaterialTheme.colorScheme.background,
-            windowInsets = WindowInsets(0, 0, 0, 0),
-        ) {
-            NavigationBarItem(
-                selected = selected == BoxDestination.Conversations,
-                onClick = { onSelected(BoxDestination.Conversations) },
-                icon = { Icon(Icons.Outlined.Forum, contentDescription = null) },
-                label = { Text("Tasks") },
-            )
-            NavigationBarItem(
-                selected = selected == BoxDestination.Computer,
-                onClick = { onSelected(BoxDestination.Computer) },
-                icon = { Icon(Icons.Outlined.Computer, contentDescription = null) },
-                label = { Text("Computer") },
-            )
         }
     }
 }
@@ -505,7 +434,7 @@ private fun PreviewBox(state: BoxUiState) {
             onPermissionDecision = { _, _ -> },
             onOpenArtifact = {},
             onCloseSession = {},
-            onSelectComputerTool = {},
+            onSelectComputerPanel = {},
             onOpenBox = {},
             onStop = {},
             onRunCommand = {},
@@ -532,6 +461,12 @@ private fun PhoneOpeningPreview() = PreviewBox(
     ),
 )
 
+@Preview(name = "Phone — first open ever", widthDp = 411, heightDp = 891)
+@Composable
+private fun PhoneGreetingPreview() = PreviewBox(
+    BoxUiState(runtimeState = RuntimeState.Ready, readyGreeting = true),
+)
+
 @Preview(name = "Phone — open", widthDp = 411, heightDp = 891)
 @Composable
 private fun PhoneOpenPreview() = PreviewBox(BoxUiState(runtimeState = RuntimeState.Ready))
@@ -540,6 +475,8 @@ private fun PhoneOpenPreview() = PreviewBox(BoxUiState(runtimeState = RuntimeSta
 @Composable
 private fun UnfoldedPreview() = PreviewBox(BoxUiState(runtimeState = RuntimeState.Ready))
 
-@Preview(name = "DeX — three pane", widthDp = 1440, heightDp = 900)
+@Preview(name = "DeX — the computer", widthDp = 1440, heightDp = 900)
 @Composable
-private fun DexPreview() = PreviewBox(BoxUiState(runtimeState = RuntimeState.Ready))
+private fun DexComputerPreview() = PreviewBox(
+    BoxUiState(runtimeState = RuntimeState.Ready, destination = BoxDestination.Computer),
+)
