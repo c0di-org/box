@@ -50,6 +50,13 @@ class FakeAgentBackend(
     )
     override val harnesses: StateFlow<List<HarnessDescriptor>> = harnessList.asStateFlow()
 
+    private val modeState = MutableStateFlow(AgentPermissionMode.Ask)
+    override val permissionMode: StateFlow<AgentPermissionMode> = modeState.asStateFlow()
+
+    override suspend fun setPermissionMode(mode: AgentPermissionMode) {
+        modeState.value = mode
+    }
+
     private val sessionList = MutableStateFlow(seedSessions())
     override val sessions: StateFlow<List<SessionSummary>> = sessionList.asStateFlow()
 
@@ -366,6 +373,10 @@ class FakeAgentBackend(
     }
 
     private suspend fun ask(sessionId: String, ask: PermissionAsk): PermissionDecision {
+        // The demo has to be able to lie about nothing that matters. With auto-approve on, the
+        // scripted flow stops stopping — otherwise the setting looks broken in the one build a
+        // person is most likely to try it in.
+        if (modeState.value.approves(ask)) return PermissionDecision.Allow
         val requestId = "p-${ids.incrementAndGet()}"
         val gate = CompletableDeferred<PermissionDecision>()
         awaitingDecision[requestId] = gate

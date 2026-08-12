@@ -168,9 +168,13 @@ private fun AgentProse(
         }
         Spacer(Modifier.height(7.dp))
         SelectionContainer {
-            Text(
-                if (item.streaming) item.text + "▍" else item.text,
-                style = MaterialTheme.typography.bodyLarge,
+            // The caret is appended to the source rather than drawn beside the text, because the
+            // last thing on screen mid-stream is whatever markdown was mid-sentence — a list item,
+            // a heading, a line inside an unclosed fence — and the caret belongs at the end of
+            // that, not floating under the block it was written into.
+            MarkdownText(
+                text = if (item.streaming) item.text + "▍" else item.text,
+                modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }

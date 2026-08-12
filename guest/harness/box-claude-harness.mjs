@@ -105,6 +105,16 @@ function nextAuthCode() {
 
 let activeQuery = null;
 
+/**
+ * How permission is answered, in the SDK's own vocabulary.
+ *
+ * Owned by the app: Box has one setting for the whole box, and the app tells every harness what it
+ * is on attach, ahead of the first prompt. Starting at 'default' matters — a harness that came up
+ * before the app could speak to it asks, which is the state a user can always recover from.
+ */
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
+let permissionMode = 'default';
+
 function handleCommand(line) {
   let command;
   try {
@@ -139,6 +149,28 @@ function handleCommand(line) {
       // Never echoed. This is the one command whose payload is credential material, so unlike
       // `prompt` it does not get mirrored into the event log.
       pushAuthCode(String(command.code ?? ''));
+      break;
+    }
+    case 'permission_mode': {
+      const mode = String(command.mode ?? '');
+      if (!PERMISSION_MODES.has(mode)) {
+        diagnostic(`ignoring unknown permission mode ${mode}`);
+        return;
+      }
+      permissionMode = mode;
+      // Two paths on purpose. A query that has not been created yet reads the variable when it is;
+      // one already running is told, because the SDK will not consult `canUseTool` again for a
+      // mode it has already resolved against. `setPermissionMode` exists on the query object at
+      // runtime but not in the published types, so its absence is a diagnostic rather than a crash
+      // — the next session opens in the right mode either way.
+      if (activeQuery && typeof activeQuery.setPermissionMode === 'function') {
+        activeQuery.setPermissionMode(mode).catch((error) => {
+          diagnostic(`could not change permission mode: ${error?.message ?? error}`);
+        });
+      }
+      // Into the log as well as into the SDK. The transcript is the record of what happened, and
+      // "nothing asked for the next hour" is only honest if the log says why.
+      emit({ type: 'permission_mode', mode });
       break;
     }
     case 'interrupt':
@@ -286,6 +318,25 @@ function describeAsk(name, input = {}) {
         rationale: input.description ?? null,
         // No always-allow for shell: a blanket yes to arbitrary commands is not a promise Box
         // should let someone make in one tap.
+        alwaysAllowScope: null,
+      };
+    case 'Task':
+    case 'Agent':
+      // Reached only if the guest's settings make spawning one an ask — which is what Box's own
+      // conventions tell the agent to do anyway. Without this case the sheet said "a tool Box does
+      // not model yet" about the one decision here that costs a second model its own run.
+      return {
+        kind: 'generic',
+        title: 'Send a sub-agent?',
+        description: input.description
+          ? `It wants to hand this off: ${clip(input.description, 200)}`
+          : 'It wants to hand a piece of work to a sub-agent.',
+        details: [
+          ...(input.subagent_type ? [['Kind', String(input.subagent_type)]] : []),
+          ...(input.prompt ? [['Asked to', clip(input.prompt, 400)]] : []),
+        ],
+        // Never a blanket yes. Each sub-agent is its own cost in tokens and in a phone's time, and
+        // "always allow" would answer for the ones nobody has thought of yet.
         alwaysAllowScope: null,
       };
     case 'WebFetch': {
@@ -732,8 +783,11 @@ async function main() {
     prompt: prompts(),
     options: {
       cwd,
+      // Kept even under a mode that never calls it: the SDK only reaches `canUseTool` when the
+      // permission flow falls through to a prompt, so this is the ask path rather than a gate, and
+      // dropping it when the mode is permissive would mean rebuilding the query to get it back.
       canUseTool,
-      permissionMode: 'default',
+      permissionMode,
       includePartialMessages: false,
     },
   });

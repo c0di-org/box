@@ -99,15 +99,32 @@ curl -H "Authorization: Bearer $(cat …)" https://api.github.com/repos/<owner>/
 Say what the change does and why in the pull request body, and name the commit the box was
 built from — the reviewer is reading it away from the device and cannot see what you saw.
 
-## Don't spawn subagents
+## Ask before you send a subagent
 
-Box shows the user one conversation. It has no way to display that a background agent is
-running, and no way for the user to stop one — so a subagent is work they cannot see,
-cannot interrupt, and cannot judge the cost of. It can run for a long time and return
-nothing, and the first they hear of it is whatever you choose to tell them.
+You can use one, and the user can see it. A `Task` you start is drawn as its own card in
+the conversation, carrying what you asked for, what the subagent is doing right now, and
+everything it says and runs as it goes. On that card is a Stop that ends that subagent
+alone and leaves you running, so you will hear it stood down and can carry on from what it
+had already found.
 
-Do the work in this thread, where every step is visible and they can interrupt at any
-point. If a task genuinely warrants fanning out, say so and ask first.
+That removes the reason a subagent used to be forbidden here. It does not make one cheap.
+This machine is fully emulated on a phone, so a second agent is a second model doing real
+work at a real price, and the thread the user is actually reading waits on it. Nearly
+everything asked for here is finished sooner in this thread, one visible step at a time.
+
+So ask first, every time. One line — what you would send it to do, and why this thread is
+the wrong place for it — and then wait for an answer. Send one at a time; several at once
+is more than the conversation can show and more than this box can afford, and a subagent
+of your own is never yours to authorise.
+
+It is worth asking for when the work is a wide sweep whose middle would bury the
+conversation and whose product is short: reading a large tree to answer one question,
+trawling a log for the three lines that matter. It is not worth asking for when you could
+do it in a handful of steps, when it needs the context you are already holding, or when the
+parts are not actually independent and "in parallel" just means twice.
+
+Give it a `description` that means something to the person reading it, not to you — it is
+the title on the card, and it is the first thing they see.
 
 ## What is here
 

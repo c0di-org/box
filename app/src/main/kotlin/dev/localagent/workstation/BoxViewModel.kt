@@ -29,6 +29,7 @@ import dev.localagent.runtime.qemu.RuntimeStorage
 import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
@@ -210,6 +211,22 @@ class BoxViewModel @JvmOverloads constructor(
                 mutableUiState.update { it.copy(sessions = list) }
             }
         }
+        viewModelScope.launch {
+            agents.permissionMode.collect { mode ->
+                mutableUiState.update { it.copy(permissionMode = mode) }
+            }
+        }
+    }
+
+    /**
+     * Turning the asking off, or back on.
+     *
+     * Deliberately not stored in this state and mirrored down: the backend owns it, persists it and
+     * tells the harnesses, and the UI reads back whatever it ended up as. One writer, so a mode the
+     * guest never heard about can never be the one on screen.
+     */
+    fun setPermissionMode(mode: AgentPermissionMode) {
+        viewModelScope.launch { agents.setPermissionMode(mode) }
     }
 
     /**

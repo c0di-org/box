@@ -129,6 +129,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onOpenSignInUrl = { url -> openInBrowser(context, url) },
             onSubmitSignInCode = boxViewModel::submitSignInCode,
             onCancelSignIn = boxViewModel::cancelSignIn,
+            onSetPermissionMode = boxViewModel::setPermissionMode,
         )
     }
 }

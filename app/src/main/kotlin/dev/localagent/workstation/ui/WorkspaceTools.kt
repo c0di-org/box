@@ -95,9 +95,12 @@ fun TerminalTool(
         draft = ""
     }
     val listState = rememberLazyListState()
+    // The transcript's rule, for the same reason: output follows the end only while the user is
+    // at the end of it. A command that prints two hundred lines while someone is reading line
+    // four used to take the screen off them.
     LaunchedEffect(state.commandHistory.size, state.runningCommand) {
         val extra = if (state.runningCommand != null) 1 else 0
-        if (state.commandHistory.isNotEmpty() || extra > 0) {
+        if ((state.commandHistory.isNotEmpty() || extra > 0) && listState.isNearEnd()) {
             listState.animateScrollToItem(state.commandHistory.size + extra)
         }
     }

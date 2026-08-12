@@ -55,6 +55,7 @@ import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
@@ -105,6 +106,7 @@ fun BoxApp(
     onOpenSignInUrl: (String) -> Unit = {},
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
+    onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     desktop: DesktopTransport? = null,
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
@@ -184,6 +186,7 @@ fun BoxApp(
                     modifier = modifier,
                     showComputerAction = showComputerAction,
                     onSignIn = onShowSignIn,
+                    onSetPermissionMode = onSetPermissionMode,
                 )
             }
 

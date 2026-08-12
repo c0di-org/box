@@ -82,6 +82,8 @@ dismissed sheet produces — dismissing never approves.
 interface AgentBackend {
     val harnesses: StateFlow<List<HarnessDescriptor>>
     val sessions: StateFlow<List<SessionSummary>>
+    val permissionMode: StateFlow<AgentPermissionMode>
+    suspend fun setPermissionMode(mode: AgentPermissionMode)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
     suspend fun startSession(harnessId: String, prompt: String?): String
@@ -100,6 +102,16 @@ Two requirements that are easy to miss:
 - `connection()` is **orthogonal** to whether the agent is busy. A finished session can be
   disconnected and a running one can survive a reconnect. `Disconnected` is a normal state, not an
   error: the VM takes ~90s to boot and Android reclaims it whenever it likes.
+
+`permissionMode` is one setting for the whole box — `Ask`, `AcceptEdits`, `Everything` — and not a
+per-session one: it says how far the user currently trusts the agents they are running, and a
+conversation quietly keeping its own answer is how someone ends up approving everything in a session
+they had forgotten was set that way. The values are the Claude Agent SDK's own permission modes, so
+a backend passes them through rather than implementing them; on the wire it is one more stdin
+command, `{"type": "permission_mode", "mode": "bypassPermissions"}`, told to a session before its
+first prompt and again whenever it changes. Anything but `Ask` is drawn as a banner above every
+conversation for as long as it is in force — a box that is silently approving everything looks
+exactly like a box with nothing to approve, and that is the one confusion this must never cause.
 
 `interruptSubAgent` is not `interrupt` with an argument. Stopping the session throws away
 everything in flight; stopping a sub-agent asks one delegate to stand down and lets the agent that

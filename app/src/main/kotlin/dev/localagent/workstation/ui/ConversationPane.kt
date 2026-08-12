@@ -1,5 +1,8 @@
 package dev.localagent.workstation.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,11 +28,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,9 +50,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,10 +68,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.Transcript
+import kotlinx.coroutines.launch
 
 /**
  * The primary surface. A user should be able to live here and never open the computer view, so
@@ -83,6 +94,7 @@ fun ConversationPane(
     onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = true,
     onSignIn: () -> Unit = {},
+    onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
 ) {
     val session = state.selectedSession
     val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
@@ -98,8 +110,15 @@ fun ConversationPane(
             onOpenComputer = onOpenComputer,
             onCloseSession = session?.let { { onCloseSession(it.id) } },
             showComputerAction = showComputerAction,
+            permissionMode = state.permissionMode,
+            onSetPermissionMode = onSetPermissionMode,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // Above the rest, and not dismissable: everything else here is about whether Box can work,
+        // and this is about what it is allowed to do without asking. A user scrolling past a
+        // booting-computer banner must not scroll past this one.
+        PermissionModeBanner(state.permissionMode, onSetPermissionMode)
 
         // While the computer is down, its own banner is the true and actionable one. Showing the
         // transport's view as well says the same thing twice, in red, about a normal state.
@@ -158,6 +177,8 @@ private fun ConversationHeader(
     onOpenComputer: () -> Unit,
     onCloseSession: (() -> Unit)?,
     showComputerAction: Boolean,
+    permissionMode: AgentPermissionMode,
+    onSetPermissionMode: (AgentPermissionMode) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -210,7 +231,36 @@ private fun ConversationHeader(
                 Icon(Icons.Outlined.MoreVert, contentDescription = "Session options")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                // Box has no settings screen, and this is the only setting worth one. It lives
+                // here because this is where the permission sheets it silences come from — a
+                // person tired of answering them is already looking at this conversation.
+                Text(
+                    "Permission",
+                    Modifier.padding(start = 14.dp, top = 8.dp, bottom = 4.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                AgentPermissionMode.entries.forEach { mode ->
+                    DropdownMenuItem(
+                        text = { Text(permissionModeLabel(mode)) },
+                        // A check on the one in force rather than a switch per row: these are
+                        // three answers to one question, and only one of them can be true.
+                        leadingIcon = {
+                            if (mode == permissionMode) {
+                                Icon(Icons.Outlined.Check, contentDescription = "in use", Modifier.size(18.dp))
+                            } else {
+                                Spacer(Modifier.size(18.dp))
+                            }
+                        },
+                        onClick = {
+                            menuOpen = false
+                            onSetPermissionMode(mode)
+                        },
+                    )
+                }
                 if (onCloseSession != null) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     DropdownMenuItem(
                         text = { Text("Close session") },
                         onClick = {
@@ -247,6 +297,39 @@ private fun ConnectionBanner(connection: SessionConnection) {
 
         SessionConnection.Live, SessionConnection.Ended -> Unit
     }
+}
+
+/** The words for each mode, in one place: the menu names it and the banner reports it. */
+private fun permissionModeLabel(mode: AgentPermissionMode): String = when (mode) {
+    AgentPermissionMode.Ask -> "Ask every time"
+    AgentPermissionMode.AcceptEdits -> "Accept file edits"
+    AgentPermissionMode.Everything -> "Approve everything"
+}
+
+/**
+ * What is being skipped, while it is being skipped.
+ *
+ * Not a chip in the corner and not a line in a menu nobody opens: an agent working unsupervised
+ * looks identical to an agent with nothing to ask about, so the only honest place for this is the
+ * same strip that says the computer is booting — present in every conversation, carrying the way
+ * out, and coloured like the risk it describes.
+ */
+@Composable
+private fun PermissionModeBanner(mode: AgentPermissionMode, onSet: (AgentPermissionMode) -> Unit) {
+    if (mode == AgentPermissionMode.Ask) return
+    Banner(
+        tint = when (mode) {
+            AgentPermissionMode.Everything -> MaterialTheme.colorScheme.error
+            else -> MaterialTheme.colorScheme.tertiary
+        },
+        icon = { Icon(Icons.Outlined.LockOpen, null, Modifier.size(17.dp)) },
+        title = when (mode) {
+            AgentPermissionMode.Everything -> "Approving everything"
+            else -> "Accepting file edits"
+        },
+        body = "Box is not asking before the agent acts.",
+        action = "Ask again" to { onSet(AgentPermissionMode.Ask) },
+    )
 }
 
 @Composable
@@ -331,9 +414,13 @@ private fun TranscriptList(
     val items = transcript?.items.orEmpty()
     val listState = rememberLazyListState()
     val lastKey = items.lastOrNull()?.key
+    val total = items.size + queued.size
+    val scope = rememberCoroutineScope()
+    // Following the agent is the default, but only while the user is actually down here. Reading
+    // something ten cards back and being dragged to the bottom by an event they were not watching
+    // is the transcript taking the conversation away from them mid-sentence.
     LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity) {
-        val total = items.size + queued.size
-        if (total > 0) listState.animateScrollToItem(total)
+        if (total > 0 && listState.isNearEnd()) listState.animateScrollToItem(total)
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -371,7 +458,59 @@ private fun TranscriptList(
                 }
             }
         }
+        JumpToLatest(
+            // Tighter than the auto-scroll's own slack, so the affordance is gone by the time
+            // following resumes rather than sitting there offering to do what already happens.
+            visible = remember(listState) { derivedStateOf { !listState.isNearEnd(slack = 1) } }.value,
+            onClick = { scope.launch { listState.animateScrollToItem(total) } },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+        )
     }
+}
+
+/**
+ * The way back down, and nothing more.
+ *
+ * It only exists while the user has scrolled away from the end, which is exactly when the
+ * transcript stops following on its own — the pair is one behaviour. Quiet by design: the same
+ * surface and outline as a tool card, because it is a way to move, not a thing that happened.
+ */
+@Composable
+private fun JumpToLatest(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible, modifier, enter = fadeIn(), exit = fadeOut()) {
+        Surface(
+            onClick = onClick,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 3.dp,
+        ) {
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.ArrowDownward, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("Latest", style = MaterialTheme.typography.bodyMedium, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/**
+ * Whether the list is close enough to its end that new arrivals should still pull it along.
+ *
+ * Measured in items with slack, not in pixels, because the answer is needed *after* the arrival
+ * that prompted the question: at the bottom of a live transcript the last laid-out row is
+ * routinely one or two behind the newest one. Anything further back than that was a deliberate
+ * scroll by a person, and is left alone.
+ */
+internal fun LazyListState.isNearEnd(slack: Int = 2): Boolean {
+    val info = layoutInfo
+    if (info.totalItemsCount == 0) return true
+    val last = info.visibleItemsInfo.lastOrNull()?.index ?: return true
+    return last >= info.totalItemsCount - 1 - slack
 }
 
 /**
