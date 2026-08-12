@@ -2,6 +2,7 @@ package dev.localagent.workstation
 
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
@@ -97,6 +98,11 @@ data class BoxUiState(
     val connection: SessionConnection = SessionConnection.Live,
     /** Scopes the user granted with "Always allow". Suppresses matching sheets. */
     val alwaysAllowed: Set<String> = emptySet(),
+    /**
+     * Whether Box still asks. One value for the whole box, held here rather than per conversation
+     * because it is a statement about the user's trust, not about a session.
+     */
+    val permissionMode: AgentPermissionMode = AgentPermissionMode.Ask,
     val startingSession: Boolean = false,
     /**
      * What the user typed before the guest could take it. Shown in the transcript's place so a

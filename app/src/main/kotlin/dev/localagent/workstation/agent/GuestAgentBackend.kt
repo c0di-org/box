@@ -59,6 +59,33 @@ class GuestAgentBackend(
     private val records = ConcurrentHashMap<String, Record>()
     private val store = SessionStore(appContext)
 
+    // The same file MainActivity and OpeningHistory use. Box has no settings screen and one
+    // setting; a store of its own would be more machinery than the thing being stored.
+    private val preferences =
+        appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+
+    private val modeState = MutableStateFlow(
+        runCatching { AgentPermissionMode.valueOf(preferences.getString(MODE_KEY, null) ?: "") }
+            .getOrDefault(AgentPermissionMode.Ask),
+    )
+    override val permissionMode: StateFlow<AgentPermissionMode> = modeState.asStateFlow()
+
+    /**
+     * Told to every harness that is already running, and to every one that starts afterwards.
+     *
+     * Written to disk before it is sent, because the guest process is the volatile half of this
+     * pair: `:computer` can be killed at any moment and the mode has to survive that, while a
+     * harness that never hears the change will be told again the moment it re-attaches.
+     */
+    override suspend fun setPermissionMode(mode: AgentPermissionMode) {
+        modeState.value = mode
+        preferences.edit().putString(MODE_KEY, mode.name).apply()
+        records.values.forEach { it.write(permissionModeCommand(mode)) }
+    }
+
+    private fun permissionModeCommand(mode: AgentPermissionMode) =
+        mapOf("type" to "permission_mode", "mode" to mode.wire)
+
     /** One attached session: its live chunks, its handle, and how the transcript reached it. */
     private class Record(
         val id: String,
@@ -365,8 +392,12 @@ class GuestAgentBackend(
                 if (session == null) SessionConnection.Ended else SessionConnection.Live
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
             if (session != null) {
-                // Whatever the user asked for while the computer was still starting.
-                record.flushOutbox()
+                // Whatever the user asked for while the computer was still starting — with the
+                // permission mode ahead of it. Every harness process starts out asking, including
+                // one that came back after `:computer` died, so a prompt delivered before the mode
+                // would run its first turn under a setting the user had already changed. This is
+                // the one place both orders meet, so it is the only place that can promise it.
+                record.flushOutbox(first = permissionModeCommand(modeState.value))
                 // A session that failed to open earlier is no longer failed, and the list has to
                 // stop saying so.
                 scope.launch { publish(record, SessionStatus.Active) }
@@ -428,9 +459,7 @@ class GuestAgentBackend(
      * `IAgentSession.write` is `oneway`, so nothing waits on the guest while the lock is held.
      */
     private fun Record.write(command: Map<String, String>) {
-        val json = command.entries.joinToString(",", "{", "}") { (key, value) ->
-            "${JsonString(key)}:${JsonString(value)}"
-        }
+        val json = encode(command)
         synchronized(outbox) {
             val live = handle
             if (live == null || outbox.isNotEmpty()) {
@@ -445,12 +474,21 @@ class GuestAgentBackend(
         }
     }
 
-    /** Everything written while the guest process was still starting, in the order it was written. */
-    private fun Record.flushOutbox() {
+    private fun encode(command: Map<String, String>): String =
+        command.entries.joinToString(",", "{", "}") { (key, value) ->
+            "${JsonString(key)}:${JsonString(value)}"
+        }
+
+    /**
+     * Everything written while the guest process was still starting, in the order it was written,
+     * behind [first] — which exists so a session's standing settings can be stated to a brand new
+     * process before the work it was queued to do.
+     */
+    private fun Record.flushOutbox(first: Map<String, String>? = null) {
         synchronized(outbox) {
             val live = handle ?: return
             val undelivered = mutableListOf<String>()
-            for (json in outbox) {
+            for (json in listOfNotNull(first?.let(::encode)) + outbox) {
                 runCatching { live.write((json + "\n").toByteArray()) }
                     .onFailure {
                         Log.e(TAG, "could not deliver a queued command", it)
@@ -492,6 +530,8 @@ class GuestAgentBackend(
         // make the user sign in again after every Box update.
         const val CREDENTIAL_PATH = "/workspace/.config/box/credentials.json"
         const val BIND_TIMEOUT_MILLIS = 4_000L
+        const val PREFERENCES = "box_product"
+        const val MODE_KEY = "agent_permission_mode"
 
         val HARNESS_COMMAND = arrayOf(
             "/usr/bin/node",

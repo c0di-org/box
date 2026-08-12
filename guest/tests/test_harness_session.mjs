@@ -17,10 +17,17 @@ import { createInterface } from 'node:readline';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** A stub SDK that asks permission once, then reports what it was told. */
+/**
+ * A stub SDK that asks permission once, then reports what it was told — and under which mode.
+ *
+ * `setPermissionMode` is on the query object at runtime but not in the published types, so the
+ * stub carries it for the same reason the harness feature-detects it: this is the surface Box
+ * actually leans on, and a stub without it would pin the wrong contract.
+ */
 const STUB_SDK = `
 export function query({ prompt, options }) {
-  return (async function* () {
+  let mode = options.permissionMode;
+  const stream = (async function* () {
     yield { type: 'system', subtype: 'init', session_id: 's1', cwd: options.cwd, tools: [] };
 
     // Drain the first prompt so streaming-input mode behaves like the real thing.
@@ -39,7 +46,7 @@ export function query({ prompt, options }) {
       message: {
         role: 'assistant',
         content: [
-          { type: 'text', text: 'You said ' + decision.behavior + ' to ' + first.value.message.content },
+          { type: 'text', text: 'You said ' + decision.behavior + ' to ' + first.value.message.content + ' in ' + mode },
           { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm install' } },
         ],
       },
@@ -51,6 +58,8 @@ export function query({ prompt, options }) {
     };
     yield { type: 'result', subtype: 'success', result: 'done', num_turns: 1 };
   })();
+  stream.setPermissionMode = async (next) => { mode = next; };
+  return stream;
 }
 `;
 
@@ -71,8 +80,13 @@ function stubbedHarness() {
   return { root, harness };
 }
 
-/** Runs the harness, answering the first permission request with `decision`. */
-function runSession(decision) {
+/**
+ * Runs the harness, answering the first permission request with `decision`.
+ *
+ * [mode] is written before the prompt, which is how the app does it: the permission mode is told
+ * to a session on attach, so it is settled before the first turn can start.
+ */
+function runSession(decision, { mode } = {}) {
   const { root, harness } = stubbedHarness();
   const child = spawn(process.execPath, [harness], {
     cwd: root,
@@ -87,6 +101,7 @@ function runSession(decision) {
 
   const events = [];
   return new Promise((resolve, reject) => {
+    if (mode) child.stdin.write(JSON.stringify({ type: 'permission_mode', mode }) + '\n');
     child.stdin.write(JSON.stringify({ type: 'prompt', text: 'clone it' }) + '\n');
     const reader = createInterface({ input: child.stdout });
     reader.on('line', (line) => {
@@ -155,4 +170,24 @@ test('every event is a complete line of JSON carrying a protocol version', async
     assert.equal(typeof event.at, 'number');
     assert.equal(typeof event.type, 'string');
   }
+});
+
+test('the mode the app chose is the mode the SDK runs under', async () => {
+  const events = await runSession('allow', { mode: 'bypassPermissions' });
+
+  const said = events.find((event) => event.type === 'message');
+  assert.match(said.text, /in bypassPermissions/);
+  // And it is in the log, so a transcript where nothing was ever asked says why.
+  const echo = events.find((event) => event.type === 'permission_mode');
+  assert.equal(echo.mode, 'bypassPermissions');
+});
+
+test('a mode this harness does not know leaves it asking', async () => {
+  const events = await runSession('allow', { mode: 'yolo' });
+
+  assert.equal(events.find((event) => event.type === 'permission_mode'), undefined);
+  const said = events.find((event) => event.type === 'message');
+  assert.match(said.text, /in default/);
+  // The failure mode that matters: an unreadable setting must never widen what is allowed.
+  assert.ok(events.some((event) => event.type === 'permission_requested'));
 });

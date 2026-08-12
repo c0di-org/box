@@ -371,13 +371,20 @@ private fun GutterNumber(number: Int?) {
     )
 }
 
-/** Monospace output block used by tool cards and the file preview. */
+/**
+ * Monospace output block used by tool cards, the file preview and fenced code in agent prose.
+ *
+ * [selectable] exists for that last caller: a code fence inside a message is already inside the
+ * bubble's own `SelectionContainer`, and nesting a second one there would give one drag two
+ * managers to answer to.
+ */
 @Composable
 fun CodeBlock(
     text: String,
     modifier: Modifier = Modifier,
     language: CodeLanguage = CodeLanguage.Plain,
     maxLines: Int = Int.MAX_VALUE,
+    selectable: Boolean = true,
 ) {
     val horizontal = rememberScrollState()
     val lines = remember(text, maxLines) {
@@ -385,7 +392,7 @@ fun CodeBlock(
         if (all.size > maxLines) all.takeLast(maxLines) else all
     }
     Surface(modifier = modifier, color = BoxTerminal, shape = RoundedCornerShape(14.dp)) {
-        SelectionContainer {
+        MaybeSelectable(selectable) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -408,6 +415,11 @@ fun CodeBlock(
             }
         }
     }
+}
+
+@Composable
+private fun MaybeSelectable(selectable: Boolean, content: @Composable () -> Unit) {
+    if (selectable) SelectionContainer { content() } else content()
 }
 
 @Composable

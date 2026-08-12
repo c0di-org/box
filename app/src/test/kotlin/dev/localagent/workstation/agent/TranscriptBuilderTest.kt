@@ -99,6 +99,27 @@ class TranscriptBuilderTest {
         assertEquals(2, artifacts.artifacts.size)
     }
 
+    /**
+     * A crash, an interrupt or a truncated replay all end a session with calls still open, and
+     * nothing can ever arrive for them afterwards.
+     */
+    @Test
+    fun `a session that ends closes the calls that never reported back`() {
+        val transcript = listOf(
+            AgentEvent.ToolCallStarted("e1", SESSION, 1, "c1", ToolCall.Shell("npm test")),
+            AgentEvent.ToolCallStarted("e2", SESSION, 2, "c2", ToolCall.Shell("npm run build")),
+            AgentEvent.ToolCallFinished("e3", SESSION, 3, "c2", ToolOutcome.Success(summary = "built")),
+            AgentEvent.SessionEnded("e4", SESSION, 4, SessionOutcome.Interrupted),
+        ).toTranscript(SESSION)
+
+        val tools = transcript.items.filterIsInstance<TranscriptItem.Tool>()
+        assertEquals(2, tools.size)
+        assertTrue(tools.none { it.running })
+        assertEquals(ToolOutcome.Cancelled, tools.first { it.callId == "c1" }.outcome)
+        // The one that did report keeps what it said; only the orphan is settled.
+        assertTrue(tools.first { it.callId == "c2" }.outcome is ToolOutcome.Success)
+    }
+
     private fun message(id: String, messageId: String, text: String, complete: Boolean = true) =
         AgentEvent.AgentMessage(id, SESSION, 1, messageId, text, complete)
 

@@ -134,6 +134,16 @@ class TranscriptBuilder(private val sessionId: String) {
                 outcome = event.outcome
                 activity = AgentActivity.Ended
                 pending = null
+                // Nothing can arrive for a call once the session that owned it has ended, so a
+                // card still spinning at this point spins forever — after a crash, an interrupt,
+                // or a log that was truncated mid-run. `HarnessWire.toolOutcome` settles the same
+                // argument for a finish it cannot read: a call that admits it does not know how it
+                // went beats one that pretends to still be working. Cancelled rather than failed,
+                // because what stopped it was the session ending, not the tool.
+                items.entries.forEach { entry ->
+                    val tool = entry.value as? TranscriptItem.Tool ?: return@forEach
+                    if (tool.running) entry.setValue(tool.copy(outcome = ToolOutcome.Cancelled))
+                }
                 put(TranscriptItem.Ended("end:${event.eventId}", event.at, event.outcome))
             }
 
