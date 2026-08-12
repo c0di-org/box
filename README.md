@@ -31,6 +31,21 @@ failure. The files are still there tomorrow.
 
 You never see a terminal, and you never need to know it's Linux.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/phone-progress-dark.png">
+    <img alt="A Box conversation: a checklist ticking off cloned repo, installed dependencies, starting dev server, with the commands it ran folded up underneath." src="docs/assets/screenshots/phone-progress-light.png" width="300">
+  </picture>
+  &nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/phone-permission-dark.png">
+    <img alt="Box asking permission to edit vite.config.js, showing the exact diff above Deny and Allow buttons." src="docs/assets/screenshots/phone-permission-light.png" width="300">
+  </picture>
+</p>
+
+The commands are there if you want them — every card opens. And nothing is edited
+without the diff being put in front of you first.
+
 ## Until you want to
 
 Tap **Open computer** and there it is: the desktop the agent is working on, live. Watch
@@ -43,11 +58,33 @@ The computer belongs to Box, not to any one agent. So one of them builds it, ano
 reviews it, a third fixes the one thing that's broken — same machine, same files, same
 `/workspace` that survives every conversation.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/phone-tasks-dark.png">
+    <img alt="Box's home screen: one Computer row above a flat list of tasks, each labelled with the agent running it." src="docs/assets/screenshots/phone-tasks-light.png" width="300">
+  </picture>
+  &nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/phone-opening-dark.png">
+    <img alt="Box opening its box: a progress ring reading Opening your box, about a minute left, with tasks already waiting underneath." src="docs/assets/screenshots/phone-opening-light.png" width="300">
+  </picture>
+</p>
+
+One box at the top, whoever is using it underneath. Opening it takes a couple of minutes
+the first time, and Box says so rather than spinning.
+
 ## The screen you happen to have
 
 On a phone Box is a chat app, and the computer stays out of the way. On a Fold, a tablet
 or Samsung DeX it opens out: conversation on one side, the agent's live desktop on the
 other. Plug in a keyboard and you're using a small Linux PC that was in your pocket.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/tablet-progress-dark.png">
+    <img alt="Box on a tablet: the task list keeps a permanent column on the left while the conversation fills the rest of the window." src="docs/assets/screenshots/tablet-progress-light.png" width="820">
+  </picture>
+</p>
 
 ## Nothing to set up
 
@@ -76,6 +113,13 @@ code, not the roadmap.
 The honest cost: it's a fully emulated ARM64 VM, so first light takes a couple of minutes
 on a Galaxy Z Fold 7 and most of that is the guest waiting on emulated udev. See
 [docs/development.md](docs/development.md) for the measurements.
+
+And the pictures above, on the same terms: they are screenshots, taken by
+[`tools/screenshots.sh`](tools/screenshots.sh) on a phone and a tablet emulator, of the
+app in this repository. What is in them is Box's built-in demo conversation — an emulator
+has no VM, so there is no agent in there to have really run `npm install`. Every pixel
+around it is the shipping UI, and the one thing Box cannot honestly photograph yet, the
+guest's own desktop, is the one screen you will not find here.
 
 ## Build it
 

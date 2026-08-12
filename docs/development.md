@@ -73,6 +73,45 @@ python3 -m unittest discover -s guest/tests
 
 There is no CI, and no instrumented or UI tests.
 
+## The screenshots
+
+The pictures in the README are taken, not drawn. Retake all of them after any UI change:
+
+```bash
+./tools/screenshots.sh
+```
+
+That boots a phone emulator and a tablet emulator, walks a list of scenes on each in both
+themes, and writes `docs/assets/screenshots/<device>-<name>-<theme>.png`. Roughly ten
+minutes cold, three or four with `--keep` from a previous run. While iterating, narrow it:
+
+```bash
+./tools/screenshots.sh --phone --dark --scene permission --keep
+```
+
+What it photographs is `UiGalleryActivity`, a debug-only entry point that runs the shell
+against canned state. It exists because the interesting screens all need a Linux machine
+and an emulator has none. It does *not* hand-write the conversation: it plays the app's
+own `FakeAgentBackend` at zero pace and folds the events through the real
+`TranscriptBuilder`, so a scene is a position in that script — change the script and the
+screenshots change with it. The gallery is also usable by hand, which is often the fastest
+way to look at a state:
+
+```bash
+adb shell am start -n dev.localagent.workstation.avf/dev.localagent.workstation.UiGalleryActivity --es scene permission
+```
+
+Three things about the setup are worth knowing before changing it. It builds the **avf**
+flavor, whose only relevance here is that it carries no guest image — `stock` will not
+build without a 500 MB qcow2 that an emulator could not run anyway. The tablet is a real
+second AVD rather than a resized phone, because the layout being proven is chosen from the
+window. And the guest's desktop is deliberately left blank: the RFB path is the one part
+of Box never confirmed on hardware, and a gallery that painted a convincing Linux desktop
+would put a picture of an unfinished feature in the README.
+
+Adding a scene means three edits: `SCENES` and `GalleryModel.enter` in
+`UiGalleryActivity.kt`, and a line in `SHOTS` in the script.
+
 ## Starting the VM on a device
 
 Normally: tap **Set up** on a fresh install, then **Start**. There is no plain adb route
