@@ -589,6 +589,35 @@ class FakeAgentBackend(
         )
         beat(300)
 
+        // Two asks at once, neither blocking the script — the shape a parallel turn actually has,
+        // and the one that used to lose a request. The run carries on while both wait, so the demo
+        // has two answerable cards on screen at the same time.
+        val checks = listOf(
+            "git -C /workspace/src/box status --porcelain" to "See what is already modified",
+            "./gradlew :runtime-api:dependencies" to "Check what the module exposes",
+        )
+        checks.forEach { (command, why) ->
+            scope.launch {
+                val decision = ask(
+                    sessionId,
+                    PermissionAsk.RunCommand(
+                        command = command,
+                        workingDirectory = "/workspace/src/box",
+                        rationale = why,
+                    ),
+                )
+                if (decision is PermissionDecision.Deny || decision is PermissionDecision.Abandoned) return@launch
+                tool(
+                    sessionId = sessionId,
+                    call = ToolCall.Shell(command, "/workspace/src/box"),
+                    output = listOf("(nothing to report)"),
+                    outcome = ToolOutcome.Success(summary = "clean"),
+                    stepMillis = 300,
+                )
+            }
+        }
+        beat(400)
+
         val subAgentId = "a-${ids.incrementAndGet()}"
         emit(
             AgentEvent.ToolCallStarted(

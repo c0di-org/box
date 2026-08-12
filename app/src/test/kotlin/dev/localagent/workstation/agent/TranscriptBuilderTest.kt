@@ -121,6 +121,93 @@ class TranscriptBuilderTest {
         assertTrue(tools.first { it.callId == "c2" }.outcome is ToolOutcome.Success)
     }
 
+    // ---- several requests at once ------------------------------------------
+
+    /**
+     * The bug this pins was reported from a phone: an agent asked to run two commands, one was
+     * approved, and the other could not be answered by anything — the sheet would not come back
+     * because the transcript no longer knew the request existed.
+     */
+    @Test
+    fun `two requests wait together, and answering one leaves the other waiting`() {
+        val first = PermissionAsk.RunCommand(command = "npm install")
+        val second = PermissionAsk.RunCommand(command = "npm run build")
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", first),
+            AgentEvent.PermissionRequested("e2", SESSION, 2, "p2", second),
+            AgentEvent.PermissionResolved("e3", SESSION, 3, "p2", PermissionDecision.Allow),
+        ).toTranscript(SESSION)
+
+        assertEquals(listOf("p1"), transcript.pendingPermissions.map { it.requestId })
+        // And the agent is still blocked, which is what keeps the composer honest.
+        assertEquals(AgentActivity.AwaitingPermission("p1"), transcript.activity)
+        val answered = transcript.items
+            .filterIsInstance<TranscriptItem.Permission>()
+            .single { it.requestId == "p2" }
+        assertEquals(PermissionDecision.Allow, answered.decision)
+    }
+
+    /** Oldest first: the sheet works through them in the order the agent asked. */
+    @Test
+    fun `the sheet is offered the request that has waited longest`() {
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", PermissionAsk.RunCommand("one")),
+            AgentEvent.PermissionRequested("e2", SESSION, 2, "p2", PermissionAsk.RunCommand("two")),
+        ).toTranscript(SESSION)
+
+        assertEquals("p1", transcript.pendingPermission?.requestId)
+        assertEquals(2, transcript.pendingPermissions.size)
+    }
+
+    /**
+     * A parallel turn narrates itself while it is blocked. That narration used to wipe every
+     * outstanding request, so a live question vanished from the UI while the agent kept waiting.
+     */
+    @Test
+    fun `an activity line does not lose a request the agent is still blocked on`() {
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", PermissionAsk.RunCommand("one")),
+            AgentEvent.ActivityChanged("e2", SESSION, 2, AgentActivity.Working("Installing")),
+        ).toTranscript(SESSION)
+
+        assertEquals("p1", transcript.pendingPermission?.requestId)
+    }
+
+    /** A run cannot be idle while it owes the user an answer, whatever else it has finished. */
+    @Test
+    fun `going idle with a request outstanding still reads as waiting on you`() {
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", PermissionAsk.RunCommand("one")),
+            AgentEvent.ActivityChanged("e2", SESSION, 2, AgentActivity.Idle),
+        ).toTranscript(SESSION)
+
+        assertEquals(AgentActivity.AwaitingPermission("p1"), transcript.activity)
+    }
+
+    @Test
+    fun `answering everything clears the block`() {
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", PermissionAsk.RunCommand("one")),
+            AgentEvent.PermissionRequested("e2", SESSION, 2, "p2", PermissionAsk.RunCommand("two")),
+            AgentEvent.PermissionResolved("e3", SESSION, 3, "p1", PermissionDecision.Allow),
+            AgentEvent.PermissionResolved("e4", SESSION, 4, "p2", PermissionDecision.Deny),
+        ).toTranscript(SESSION)
+
+        assertTrue(transcript.pendingPermissions.isEmpty())
+        assertEquals(AgentActivity.Idle, transcript.activity)
+    }
+
+    /** A session that ends with a question outstanding stops waiting for an answer to it. */
+    @Test
+    fun `ending the session drops what was still being asked`() {
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", PermissionAsk.RunCommand("one")),
+            AgentEvent.SessionEnded("e2", SESSION, 2, SessionOutcome.Interrupted),
+        ).toTranscript(SESSION)
+
+        assertTrue(transcript.pendingPermissions.isEmpty())
+    }
+
     // ---- sub-agents --------------------------------------------------------
 
     @Test

@@ -48,12 +48,47 @@ class FakeSubAgentTest {
             // The delegate stops; the session it belonged to does not, and says what it will do now.
             val after = withTimeout(TIMEOUT) {
                 backend.transcripts(session).first { transcript ->
-                    transcript.subAgent()?.stopped == true && transcript.activity == AgentActivity.Idle
+                    transcript.subAgent()?.stopped == true &&
+                        transcript.items.filterIsInstance<TranscriptItem.Agent>()
+                            .any { it.text.contains("Stopped the audit") }
                 }
             }
             assertNull(after.outcome)
-            val closing = after.items.filterIsInstance<TranscriptItem.Agent>().last()
-            assertTrue(closing.text.contains("Stopped the audit"))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /**
+     * The same script asks for two commands at once, which is the shape that broke on a phone: one
+     * was approved and the other could no longer be answered by anything. Answering them out of
+     * order here is the demo proving it can be done at all.
+     */
+    @Test
+    fun `two requests wait together and are answered in any order`() = runBlocking {
+        val scope = CoroutineScope(Dispatchers.Default + Job())
+        try {
+            val backend = FakeAgentBackend(scope, pace = 0f)
+            val session = backend.sessions.value.first { it.title == "Audit the public API" }.id
+
+            val both = withTimeout(TIMEOUT) {
+                backend.transcripts(session).first { it.pendingPermissions.size == 2 }
+            }.pendingPermissions
+            assertTrue(both.all { it.ask is PermissionAsk.RunCommand })
+
+            backend.resolvePermission(session, both[1].requestId, PermissionDecision.Deny)
+            val one = withTimeout(TIMEOUT) {
+                backend.transcripts(session).first { it.pendingPermissions.size == 1 }
+            }
+            // The survivor is the one nobody answered, and the run still says it is waiting on it.
+            assertEquals(both[0].requestId, one.pendingPermissions.single().requestId)
+            assertEquals(AgentActivity.AwaitingPermission(both[0].requestId), one.activity)
+
+            backend.resolvePermission(session, both[0].requestId, PermissionDecision.Allow)
+            val cleared = withTimeout(TIMEOUT) {
+                backend.transcripts(session).first { it.pendingPermissions.isEmpty() }
+            }
+            assertTrue(cleared.pendingPermissions.isEmpty())
         } finally {
             scope.cancel()
         }

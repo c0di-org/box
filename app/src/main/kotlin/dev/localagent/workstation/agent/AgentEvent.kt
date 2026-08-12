@@ -142,8 +142,12 @@ sealed interface AgentEvent {
     // ---- permission --------------------------------------------------------
 
     /**
-     * The agent is blocked until the user answers. Exactly one request is outstanding at a time;
-     * the UI raises [PermissionSheet] and refuses to send new input until it resolves.
+     * The agent is blocked on this one until the user answers.
+     *
+     * **Several can be outstanding at once.** An agent that asks for two commands in one turn
+     * blocks on both, and they are answered independently and in any order. Box used to assume one
+     * — the transcript kept a single slot — so a second request evicted the first, and answering
+     * the one on screen left the other blocked forever with nothing left that could raise it.
      */
     data class PermissionRequested(
         override val eventId: String,

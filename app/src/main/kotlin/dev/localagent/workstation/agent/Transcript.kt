@@ -15,12 +15,22 @@ data class Transcript(
     val sessionId: String,
     val items: List<TranscriptItem> = emptyList(),
     val activity: AgentActivity = AgentActivity.Idle,
-    val pendingPermission: PendingPermission? = null,
+    /**
+     * Every request still waiting on the user, oldest first.
+     *
+     * A list, not a slot. One turn can ask for two commands and block on both, and each is answered
+     * on its own — so the sheet works through them in order and the inline cards can be answered in
+     * any order at all.
+     */
+    val pendingPermissions: List<PendingPermission> = emptyList(),
     val outcome: SessionOutcome? = null,
     val workingDirectory: String = "/workspace",
 ) {
     val isBusy: Boolean
         get() = activity is AgentActivity.Thinking || activity is AgentActivity.Working
+
+    /** The one the sheet raises: whatever has been waiting longest. */
+    val pendingPermission: PendingPermission? get() = pendingPermissions.firstOrNull()
 }
 
 @Immutable
@@ -175,7 +185,9 @@ class TranscriptBuilder(
     /** One nested fold per sub-agent, keyed by the [ToolCall.Task] call that spawned it. */
     private val subAgents = LinkedHashMap<String, SubAgentFold>()
     private var activity: AgentActivity = AgentActivity.Idle
-    private var pending: PendingPermission? = null
+
+    /** Keyed by request id and insertion-ordered: several can be outstanding, answered in any order. */
+    private val pending = LinkedHashMap<String, PendingPermission>()
     private var outcome: SessionOutcome? = null
     private var workingDirectory: String = "/workspace"
     private var lastArtifactKey: String? = null
@@ -198,7 +210,7 @@ class TranscriptBuilder(
             is AgentEvent.SessionEnded -> {
                 outcome = event.outcome
                 activity = AgentActivity.Ended
-                pending = null
+                pending.clear()
                 settleOpenCalls(event.at)
                 put(TranscriptItem.Ended("end:${event.eventId}", event.at, event.outcome))
             }
@@ -261,8 +273,8 @@ class TranscriptBuilder(
 
             is AgentEvent.PermissionRequested -> {
                 val key = permissionKeys.getOrPut(event.requestId) { "perm:${event.requestId}" }
-                pending = PendingPermission(event.requestId, event.ask, event.at)
-                activity = AgentActivity.AwaitingPermission(event.requestId)
+                pending[event.requestId] = PendingPermission(event.requestId, event.ask, event.at)
+                activity = AgentActivity.AwaitingPermission(waitingOn())
                 put(TranscriptItem.Permission(key, event.at, event.requestId, event.ask, decision = null))
             }
 
@@ -272,9 +284,15 @@ class TranscriptBuilder(
                 if (existing != null) {
                     put(existing.copy(decision = event.decision))
                 }
-                if (pending?.requestId == event.requestId) {
-                    pending = null
-                    if (activity is AgentActivity.AwaitingPermission) activity = AgentActivity.Idle
+                pending.remove(event.requestId)
+                if (activity is AgentActivity.AwaitingPermission) {
+                    // Still blocked if anything else is waiting. Going idle here is what made a
+                    // second request look answered the moment the first one was.
+                    activity = if (pending.isEmpty()) {
+                        AgentActivity.Idle
+                    } else {
+                        AgentActivity.AwaitingPermission(waitingOn())
+                    }
                 }
             }
 
@@ -285,8 +303,19 @@ class TranscriptBuilder(
             }
 
             is AgentEvent.ActivityChanged -> {
-                activity = event.activity
-                if (event.activity !is AgentActivity.AwaitingPermission) pending = null
+                // Whatever the harness says it is doing, and nothing else. This used to drop every
+                // outstanding request unless the line happened to be about a permission — so one
+                // "working" line, which a parallel turn emits freely while blocked on something
+                // else, silently threw away a request the agent was still waiting on. A request is
+                // outstanding until it is *resolved*, or until the session ends.
+                //
+                // Idle is the exception, and only because it cannot be true: a run that still owes
+                // the user an answer is waiting on them, whatever else it has finished doing.
+                activity = if (event.activity == AgentActivity.Idle && pending.isNotEmpty()) {
+                    AgentActivity.AwaitingPermission(waitingOn())
+                } else {
+                    event.activity
+                }
             }
 
             is AgentEvent.ArtifactOffered -> {
@@ -397,11 +426,14 @@ class TranscriptBuilder(
         items[item.key] = item
     }
 
+    /** The oldest unanswered request — the one the activity line and the sheet are about. */
+    private fun waitingOn(): String = pending.keys.first()
+
     fun build(): Transcript = Transcript(
         sessionId = sessionId,
         items = items.values.toList(),
         activity = activity,
-        pendingPermission = pending,
+        pendingPermissions = pending.values.toList(),
         outcome = outcome,
         workingDirectory = workingDirectory,
     )

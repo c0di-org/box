@@ -81,6 +81,11 @@ import dev.localagent.workstation.agent.PermissionDecision
  *  - The evidence is scrollable but the decision buttons are pinned, so a long diff can never
  *    push the choice off screen or invite a blind tap.
  *
+ * It is about one request at a time, which is not the same as there being only one: a turn can block
+ * on two tools at once. The sheet takes the oldest and says how many are behind it, and each request
+ * also carries its own inline decision in the transcript, so nothing depends on this modal being the
+ * only way to answer.
+ *
  * ## The keyboard, and why Enter does not simply mean Allow
  *
  * On a Fold or in DeX there is a hardware keyboard, and reaching for the screen to answer every
@@ -98,6 +103,7 @@ import dev.localagent.workstation.agent.PermissionDecision
  * Esc dismisses. Not "deny" — dismissing is the gesture that already exists here (swipe the sheet
  * away), it produces `Abandoned`, and it must keep meaning exactly that: the agent is left
  * waiting, nothing is approved, and no refusal the user never made is put in their mouth.
+
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,6 +112,8 @@ fun PermissionSheet(
     harnessName: String?,
     onDecision: (PermissionDecision) -> Unit,
     onDismiss: () -> Unit,
+    /** How many other requests are blocked behind this one. */
+    alsoWaiting: Int = 0,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sheetFocus = remember { FocusRequester() }
@@ -137,6 +145,22 @@ fun PermissionSheet(
                 },
         ) {
             PermissionHeader(pending.ask, harnessName)
+            if (alsoWaiting > 0) {
+                // One turn can block on several tools at once. Saying so is the difference between
+                // "answer this" and "answer this, then the next one arrives" — and it stops the
+                // sheet reappearing from looking like a bug.
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (alsoWaiting == 1) {
+                        "One more request is waiting behind this one."
+                    } else {
+                        "$alsoWaiting more requests are waiting behind this one."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
             Spacer(Modifier.height(16.dp))
 
             Box(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {

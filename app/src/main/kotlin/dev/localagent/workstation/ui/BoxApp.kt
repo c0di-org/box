@@ -112,7 +112,12 @@ fun BoxApp(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
-    var dismissedRequestId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Not saved across process death on purpose: a request the user swiped away and then lost the
+    // process on is one the agent is still blocked on, and raising it again is the safe way to be
+    // wrong. Several can be waiting at once, so this is a set and not the id of "the" sheet.
+    var dismissedRequests by remember { mutableStateOf(emptySet<String>()) }
+    /** Set when a specific card asks to be reviewed, so the sheet opens on that one, not the first. */
+    var reviewingRequestId by remember { mutableStateOf<String?>(null) }
     val progress = rememberBoxProgress(state)
     // The app is handed back on press. Only the closed box is allowed to hold the window.
     val revealed = state.boxStage != BoxStage.Closed
@@ -132,8 +137,11 @@ fun BoxApp(
         }
     }
 
-    val pending = state.transcript?.pendingPermission
-    val sheetVisible = pending != null && pending.requestId != dismissedRequestId
+    val waiting = state.transcript?.pendingPermissions.orEmpty()
+    // The sheet is about one request at a time: whichever was asked to be reviewed, or else the
+    // oldest one nobody has waved away. The rest stay answerable on their own cards.
+    val sheetTarget = waiting.firstOrNull { it.requestId == reviewingRequestId }
+        ?: waiting.firstOrNull { it.requestId !in dismissedRequests }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -178,8 +186,13 @@ fun BoxApp(
                     onStartComputer = onOpenBox,
                     onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                     onCloseSession = onCloseSession,
-                    onReviewPermission = if (pending != null && !sheetVisible) {
-                        { dismissedRequestId = null }
+                    onPermissionDecision = onPermissionDecision,
+                    onReviewRequest = { requestId ->
+                        dismissedRequests = dismissedRequests - requestId
+                        reviewingRequestId = requestId
+                    },
+                    onReviewPermission = if (waiting.isNotEmpty() && sheetTarget == null) {
+                        { dismissedRequests = emptySet() }
                     } else {
                         null
                     },
@@ -261,18 +274,25 @@ fun BoxApp(
         }
     }
 
-    if (pending != null && sheetVisible) {
+    if (sheetTarget != null) {
         val harnessName = state.harnesses
             .firstOrNull { it.id == state.selectedSession?.harnessId }
             ?.name
         PermissionSheet(
-            pending = pending,
+            pending = sheetTarget,
             harnessName = harnessName,
+            // How many others are blocked behind this one, so answering does not feel like the end
+            // of it when it is not.
+            alsoWaiting = waiting.count { it.requestId != sheetTarget.requestId },
             onDecision = { decision ->
-                dismissedRequestId = null
-                onPermissionDecision(pending.requestId, decision)
+                reviewingRequestId = null
+                dismissedRequests = dismissedRequests - sheetTarget.requestId
+                onPermissionDecision(sheetTarget.requestId, decision)
             },
-            onDismiss = { dismissedRequestId = pending.requestId },
+            onDismiss = {
+                reviewingRequestId = null
+                dismissedRequests = dismissedRequests + sheetTarget.requestId
+            },
         )
     }
 

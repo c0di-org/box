@@ -420,10 +420,19 @@ class BoxViewModel @JvmOverloads constructor(
 
     fun resolvePermission(requestId: String, decision: PermissionDecision) {
         val sessionId = mutableUiState.value.selectedSessionId ?: return
-        if (decision is PermissionDecision.AllowAlways) {
-            mutableUiState.update { it.copy(alwaysAllowed = it.alwaysAllowed + decision.scope) }
-        }
         viewModelScope.launch { agents.resolvePermission(sessionId, requestId, decision) }
+        if (decision !is PermissionDecision.AllowAlways) return
+
+        mutableUiState.update { it.copy(alwaysAllowed = it.alwaysAllowed + decision.scope) }
+        // "Always" has to mean the ones already on screen too. A turn that asks twice about the same
+        // scope raises both before either is answered, so widening the rule and then only checking
+        // asks that arrive *later* leaves its own sibling sitting there blocked — which reads exactly
+        // like the button having done nothing.
+        val alsoCovered = mutableUiState.value.transcript?.pendingPermissions.orEmpty()
+            .filter { it.requestId != requestId && it.ask.alwaysAllowScope == decision.scope }
+        viewModelScope.launch {
+            alsoCovered.forEach { agents.resolvePermission(sessionId, it.requestId, decision) }
+        }
     }
 
     fun interruptSession() {

@@ -43,7 +43,7 @@ time, on behalf of the session, so attributing an ask would offer a choice the s
 The `Task` call finishes like any other tool call, and its outcome is how the card ends:
 `Success` when the sub-agent reported back, `Cancelled` when the user stopped it.
 
-On the wire this is one optional field. A harness line gains `"subAgentId": "toolu_7"`, and a
+On the wire sub-agent attribution is one optional field. A harness line gains `"subAgentId": "toolu_7"`, and a
 harness that has never heard of sub-agents omits it and keeps working — one author, as before.
 `ToolCall.Task` is the tool kind `"task"`. Stopping one is a **new stdin command**, deliberately not
 a field on `interrupt`:
@@ -75,6 +75,21 @@ parsed diff, a command line plus working directory, a hostname. `alwaysAllowScop
 human-readable string ("edits in this project"); `null` hides the always-allow button entirely.
 Decisions are `Allow` / `AllowAlways(scope)` / `Deny` / `Abandoned`, and `Abandoned` is what a
 dismissed sheet produces — dismissing never approves.
+
+**Several requests can be outstanding at once.** One turn can ask for two commands and block on
+both. `Transcript.pendingPermissions` is therefore a list, oldest first — `pendingPermission` is
+just its head, the one the sheet raises — and each request is answered by id, in any order. Two
+rules fall out of that and both were once broken:
+
+- Only a `PermissionResolved` for *that* id, or the session ending, stops a request from being
+  outstanding. Nothing else may clear one. An `ActivityChanged` used to, so a parallel turn
+  narrating itself while blocked silently discarded a live question, and no surface could raise it
+  again.
+- Every unanswered request renders its own inline decision in the transcript. A modal can only ever
+  be about one of them, so the modal cannot be the only way to answer.
+
+`AllowAlways` widens a rule, so it also answers any request already outstanding under the same
+scope. Otherwise "always allow" visibly does nothing to the sibling ask that raised it.
 
 ## 2. What the UI needs from a harness driver — `agent/AgentBackend.kt`
 
@@ -112,6 +127,11 @@ command, `{"type": "permission_mode", "mode": "bypassPermissions"}`, told to a s
 first prompt and again whenever it changes. Anything but `Ask` is drawn as a banner above every
 conversation for as long as it is in force — a box that is silently approving everything looks
 exactly like a box with nothing to approve, and that is the one confusion this must never cause.
+
+The control for it sits on the composer, next to send, with the same menu on a long-press of send
+itself. It started in the header's overflow menu and moved because of where it is wanted: "stop
+asking me about this" is a thought someone has *while* being asked, and a setting nobody finds is
+one that turns into fatigue at the sheet instead.
 
 `interruptSubAgent` is not `interrupt` with an argument. Stopping the session throws away
 everything in flight; stopping a sub-agent asks one delegate to stand down and lets the agent that
