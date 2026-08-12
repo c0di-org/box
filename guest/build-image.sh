@@ -136,6 +136,12 @@ install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-desktop.service" "$ROOTFS/e
 install -d -m 0755 "$ROOTFS/etc/modules-load.d"
 printf 'virtio_console\nvirtio_gpu\n' > "$ROOTFS/etc/modules-load.d/local-agent.conf"
 
+# The guest's cursor has to be drawn into the framebuffer or it is never transmitted at all; the
+# file explains why at length.
+install -d -m 0755 "$ROOTFS/etc/X11/xorg.conf.d"
+install -m 0644 "$ROOT_DIR/guest/xorg.conf.d/10-virtio-cursor.conf" \
+  "$ROOTFS/etc/X11/xorg.conf.d/10-virtio-cursor.conf"
+
 # Networking. The guest had none: the interface was never brought up, and the only resolver it had
 # was the build container's, baked in by accident.
 #

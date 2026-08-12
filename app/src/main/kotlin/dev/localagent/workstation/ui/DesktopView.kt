@@ -67,8 +67,17 @@ class DesktopView(context: Context) : SurfaceView(context) {
                 onSurfaceGone?.invoke(holder.surface)
             }
         })
-        // One cursor on screen, drawn by the guest.
-        pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
+        // Keep Android's own pointer. This used to be TYPE_NULL, on the reasoning that the guest
+        // draws the only cursor worth showing -- but the guest's cursor never arrived, so hiding
+        // this one left the user with none at all, and no way to tell that the machine was even
+        // receiving them. See guest/xorg.conf.d/10-virtio-cursor.conf for that half.
+        //
+        // Two pointers once both halves work, and that is the right answer rather than a
+        // compromise. This one tracks the hand with no latency; the guest's is however far behind
+        // the VM currently is. The gap between them is the only honest feedback available about
+        // how far behind the machine is running, and a single remote cursor hides exactly that --
+        // input that lands late reads as input that was dropped.
+        pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_ARROW)
     }
 
     // ---- pointer -----------------------------------------------------------
