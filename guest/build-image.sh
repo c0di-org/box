@@ -51,6 +51,75 @@ test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent
 # A harness that installed for the wrong architecture would fail only once it reached the phone.
 test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64" \
   || { echo 'the harness installed without its linux-arm64 runtime' >&2; exit 1; }
+# Box's own source, so the agent in the box can read the app the user is running.
+#
+# The point is not convenience -- it is that this copy and the running app are the same
+# commit, by construction. Cloning the remote at first boot could not promise that: it
+# would fetch whatever HEAD happens to be, on a device that may be several releases behind,
+# and it would need network on a first run that is otherwise designed to work without any.
+# Baking it means a user can open Box, ask why a button behaves the way it does, and the
+# agent is reading the code that drew it.
+#
+# The QEMU shared objects are excluded. They are 25 MB of the 26 MB worktree, they are
+# already in the APK as the app's native libraries, and nothing the agent does with source
+# needs them -- so shipping them here would double them on the device to no benefit. What
+# remains is 1.5 MB of text, which is roughly 0.3 MB once the qcow2 is compressed.
+#
+# History is deliberately not included: a shallow clone would drag those same binaries in
+# through the object store. The commit is recorded instead, which is what provenance
+# actually needs, and anything wanting real history can clone the remote once there is
+# network -- which any push would require regardless.
+command -v git >/dev/null || { echo 'git is required (rebuild the builder image)' >&2; exit 1; }
+# The repository is bind-mounted from the host, so it is owned by a different uid than the
+# builder runs as; without this git refuses to read it at all.
+git config --global --add safe.directory "$ROOT_DIR"
+test -d "$ROOT_DIR/.git" || { echo 'guest image must be built from a git checkout' >&2; exit 1; }
+BOX_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+BOX_REMOTE="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || echo unknown)"
+install -d -m 0755 "$ROOTFS/usr/src/box"
+git -C "$ROOT_DIR" archive HEAD \
+  | tar -x -C "$ROOTFS/usr/src/box" --exclude='runtime-qemu/src/main/jniLibs/*'
+# No build timestamp: this file is read by the agent for provenance, and a clock reading
+# would make two builds of the same commit produce different images.
+cat > "$ROOTFS/usr/src/box/BUILD-INFO" <<EOF
+commit=$BOX_COMMIT
+remote=$BOX_REMOTE
+note=Source of the Box app running on this device, at the commit it was built from.
+      Excludes runtime-qemu/src/main/jniLibs (shipped in the APK as native libraries).
+EOF
+chroot "$ROOTFS" chown -R agent:agent /usr/src/box
+
+# What the agent knows about the machine before it is told anything.
+#
+# The harness starts Claude Code without setting `settingSources`, and the Agent SDK's
+# default for that is to load user, project and local settings — so a CLAUDE.md in the
+# agent's home is read at the start of every session, with no harness change needed.
+#
+# It goes on the system disk rather than in /workspace, which is the opposite of where
+# durable things usually belong here, and the reason is the update story. This disk is
+# replaced by every image build, so the conventions a Box ships with always match the tree
+# they were built from — fix a wrong statement here and every device gets the fix on its
+# next update. /workspace survives updates precisely so the user's box is never wiped,
+# which also means a machine fact written there would strand a stale copy on every device
+# already in the field, with nothing able to correct it.
+#
+# So this file is what is true of every Box; /workspace/CLAUDE.md is what is true of one.
+# The source is not itself named CLAUDE.md, because a file by that name inside the
+# repository would be picked up as project memory by anyone working on Box and silently
+# describe the phone to someone sitting at a laptop.
+# The master copy, which local-agent-workspace-prepare installs into the agent's config
+# directory on every boot. It cannot simply be baked into that directory: the config
+# directory is on the workspace disk, which the image build creates empty and then never
+# touches again, so anything baked would only ever reach a device that installed Box after
+# the change. Copying at boot means a Box update corrects the conventions everywhere.
+install -d -m 0755 "$ROOTFS/usr/share/box"
+install -m 0644 "$ROOT_DIR/guest/agent-conventions.md" "$ROOTFS/usr/share/box/agent-conventions.md"
+# Also at the default location, which is what gets read if anything ever runs Claude Code
+# in here without CLAUDE_CONFIG_DIR set. Same file, so the two cannot disagree.
+install -d -m 0755 "$ROOTFS/home/agent/.claude"
+install -m 0644 "$ROOT_DIR/guest/agent-conventions.md" "$ROOTFS/home/agent/.claude/CLAUDE.md"
+chroot "$ROOTFS" chown -R agent:agent /home/agent/.claude
+
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agentd.service" "$ROOTFS/etc/systemd/system/local-agentd.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-workspace-prepare.service" "$ROOTFS/etc/systemd/system/local-agent-workspace-prepare.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-desktop.service" "$ROOTFS/etc/systemd/system/local-agent-desktop.service"

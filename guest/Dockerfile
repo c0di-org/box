@@ -4,6 +4,7 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         e2fsprogs \
+        git \
         mmdebstrap \
         npm \
         qemu-utils \
