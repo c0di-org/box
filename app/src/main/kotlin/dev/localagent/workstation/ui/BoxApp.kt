@@ -134,11 +134,17 @@ fun BoxApp(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
-    // Not saved across process death on purpose: a request the user swiped away and then lost the
-    // process on is one the agent is still blocked on, and raising it again is the safe way to be
-    // wrong. Several can be waiting at once, so this is a set and not the id of "the" sheet.
-    var dismissedRequests by remember { mutableStateOf(emptySet<String>()) }
-    /** Set when a specific card asks to be reviewed, so the sheet opens on that one, not the first. */
+    /**
+     * The one request the user asked to look at properly, or null — which is almost always.
+     *
+     * The sheet is opened, never raised. Box used to put it up by itself the moment anything was
+     * asked, on a phone, over whatever the user was doing: the keyboard went down as it arrived
+     * and came back up after the answer, so a request that landed mid-sentence cost them their
+     * place twice, and a request they had already decided about from the card still had to be
+     * dismissed. Every unanswered request draws its own decision in the transcript, next to the
+     * work it is about, so nothing needs a modal to be answerable — the sheet is for the one thing
+     * a card cannot hold, which is a whole diff, and a person asks for it by tapping the card.
+     */
     var reviewingRequestId by remember { mutableStateOf<String?>(null) }
     val progress = rememberBoxProgress(state)
     // The app is handed back on press. Only a box holding the whole window keeps the chrome off,
@@ -175,9 +181,21 @@ fun BoxApp(
     }
 
     val waiting = state.transcript?.pendingPermissions.orEmpty()
-    // The request the user asked to look at properly, whatever the layout. Tapping "Review" is an
-    // explicit request for the sheet and is honoured everywhere.
-    val reviewing = waiting.firstOrNull { it.requestId == reviewingRequestId }
+    /*
+     * What the sheet is about, if anything: only ever the one the user tapped.
+     *
+     * Answered elsewhere in the meantime — from the card, or by an "always allow" that covered it
+     * — is the same as never having been asked for, so the sheet closes with it.
+     *
+     * Never a question. A question stops the work by design, so its card is already the
+     * interruption; a modal over that interrupts the same person twice about the same thing, and
+     * everything a question needs — the options, what each one means, the free-text answer — is on
+     * the card. Filtered here rather than trusted not to happen, so [PermissionSheet] can say
+     * plainly that it never draws one.
+     */
+    val sheetTarget = waiting.firstOrNull {
+        it.requestId == reviewingRequestId && it.ask !is PermissionAsk.Questions
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -192,36 +210,6 @@ fun BoxApp(
         ) {
             val layout = rememberBoxLayout(maxWidth, maxHeight)
             val compact = layout == BoxLayout.Single
-
-            /**
-             * One owner per request, decided by the layout.
-             *
-             * `Single` gives it to the sheet: the transcript card is somewhere up the scrollback,
-             * and the sheet is reachable with a thumb and follows you. `Wide` gives it to the card
-             * in the transcript, which is already on screen and next to the work it is about — and
-             * the sheet there was drawing a second live copy of the same Deny/Allow *on top of the
-             * hint pointing at the first one*.
-             *
-             * Both layouts still open the sheet on request; see [reviewing]. It is the automatic
-             * one that was wrong, not the sheet.
-             *
-             * Inside the constraints rather than beside them because that is where the layout is
-             * known. It costs nothing: a `ModalBottomSheet` is its own window and is positioned
-             * against the screen, not against whatever composable happens to contain it.
-             */
-            val sheetTarget = when (layout) {
-                BoxLayout.Single -> reviewing
-                    ?: waiting.firstOrNull { it.requestId !in dismissedRequests }
-
-                // A question is the exception the reasoning above does not cover. The objection to
-                // opening automatically here was duplication — a second live Allow/Deny drawn on
-                // top of the first — and a question card carries no answer to duplicate. It sends
-                // you to the sheet either way, so opening it is the same trip with one tap fewer.
-                BoxLayout.Wide -> reviewing ?: waiting.firstOrNull {
-                    it.ask is PermissionAsk.Questions && it.requestId !in dismissedRequests
-                }
-            }
-
 
             // The one place in Box that knows how much room there is. Reported rather than stored:
             // this is the same measurement the layout above is drawn from, so an agent writing for
@@ -261,15 +249,7 @@ fun BoxApp(
                     onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                     onCloseSession = onCloseSession,
                     onPermissionDecision = onPermissionDecision,
-                    onReviewRequest = { requestId ->
-                        dismissedRequests = dismissedRequests - requestId
-                        reviewingRequestId = requestId
-                    },
-                    onReviewPermission = if (waiting.isNotEmpty() && sheetTarget == null) {
-                        { dismissedRequests = emptySet() }
-                    } else {
-                        null
-                    },
+                    onReviewRequest = { requestId -> reviewingRequestId = requestId },
                     modifier = modifier,
                     showComputerAction = showComputerAction,
                     // In `Wide` the task list is beside this, and the box's own state is the
@@ -370,13 +350,11 @@ fun BoxApp(
                     alsoWaiting = waiting.count { it.requestId != sheetTarget.requestId },
                     onDecision = { decision ->
                         reviewingRequestId = null
-                        dismissedRequests = dismissedRequests - sheetTarget.requestId
                         onPermissionDecision(sheetTarget.requestId, decision)
                     },
-                    onDismiss = {
-                        reviewingRequestId = null
-                        dismissedRequests = dismissedRequests + sheetTarget.requestId
-                    },
+                    // Closing answers nothing, and costs nothing: the request is still standing in
+                    // the transcript with its buttons on it.
+                    onDismiss = { reviewingRequestId = null },
                 )
             }
         }

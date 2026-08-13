@@ -12,3 +12,4 @@ guest/image/out
 .idea/
 *.iml
 .DS_Store
+.kotlin/

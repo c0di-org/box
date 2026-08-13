@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Psychology
@@ -111,6 +112,8 @@ fun TranscriptRow(
     onStopSubAgent: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onReviewPermission: (String) -> Unit,
+    /** Half-finished question answers, held above the list. See [AnswerStore]. */
+    answers: AnswerStore,
     modifier: Modifier = Modifier,
 ) {
     when (item) {
@@ -120,12 +123,12 @@ fun TranscriptRow(
         is TranscriptItem.Tool -> ToolCard(item, modifier)
         is TranscriptItem.SubAgent -> SubAgentCard(
             item, onOpenArtifact, onRetry, onStopSubAgent,
-            onPermissionDecision, onReviewPermission, modifier,
+            onPermissionDecision, onReviewPermission, answers, modifier,
         )
         is TranscriptItem.Diff -> DiffCard(item, modifier)
         is TranscriptItem.Checklist -> ChecklistCard(item, modifier)
         is TranscriptItem.Permission ->
-            PermissionRecord(item, onPermissionDecision, onReviewPermission, modifier)
+            PermissionRecord(item, onPermissionDecision, onReviewPermission, answers, modifier)
         is TranscriptItem.Artifacts -> ArtifactRow(item, onOpenArtifact, modifier)
         is TranscriptItem.Error -> ErrorCard(item, onRetry, modifier)
         is TranscriptItem.Ended -> EndedRow(item, modifier)
@@ -472,6 +475,7 @@ private fun SubAgentCard(
     onStop: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onReviewPermission: (String) -> Unit,
+    answers: AnswerStore,
     modifier: Modifier = Modifier,
 ) {
     // Open while it is working, because a card that hides live work is a spinner with a chevron.
@@ -586,6 +590,7 @@ private fun SubAgentCard(
                             onStopSubAgent = onStop,
                             onPermissionDecision = onPermissionDecision,
                             onReviewPermission = onReviewPermission,
+                            answers = answers,
                         )
                     }
                 }
@@ -736,18 +741,20 @@ private fun ChecklistRow(task: TaskItem) {
  * once. A turn that asks for two commands blocks on both, and one modal can only ever be about one
  * of them; the second sat in the transcript as a line of text saying it was waiting, with nothing
  * anywhere that could answer it. Each card now carries its own decision, so they can be answered in
- * any order, and the row itself opens the sheet for whoever wants the full diff first.
+ * any order, and a permission's row opens the sheet for whoever wants the full diff first. A
+ * question's does not: all of it is already on the card.
  */
 @Composable
 private fun PermissionRecord(
     item: TranscriptItem.Permission,
     onDecision: (String, PermissionDecision) -> Unit,
     onReview: (String) -> Unit,
+    answers: AnswerStore,
     modifier: Modifier = Modifier,
 ) {
     val decision = item.decision
     if (decision == null) {
-        PendingPermissionCard(item, onDecision, onReview, modifier)
+        PendingPermissionCard(item, onDecision, onReview, answers, modifier)
         return
     }
     val (label, tint) = when (decision) {
@@ -755,8 +762,8 @@ private fun PermissionRecord(
         is PermissionDecision.AllowAlways ->
             "You allowed ${decision.scope}" to MaterialTheme.colorScheme.primary
         // One question gets its answer said back, because that is the whole record of it: the
-        // headline above is what was asked and this is what you told it. Several would not fit
-        // on the line, and the sheet is a tap away for the rest.
+        // headline is what was asked and this is what you told it. Several do not fit on a line,
+        // and the answer went to the agent rather than into the transcript's furniture.
         is PermissionDecision.Answered -> {
             val only = decision.answers.values.singleOrNull()
             val said = if (only != null) "You chose $only" else "You answered"
@@ -786,8 +793,10 @@ private fun PendingPermissionCard(
     item: TranscriptItem.Permission,
     onDecision: (String, PermissionDecision) -> Unit,
     onReview: (String) -> Unit,
+    answers: AnswerStore,
     modifier: Modifier = Modifier,
 ) {
+    val question = item.ask as? PermissionAsk.Questions
     val tint = MaterialTheme.colorScheme.tertiary
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -797,10 +806,21 @@ private fun PendingPermissionCard(
     ) {
         Column(Modifier.padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 8.dp)) {
             Row(
-                Modifier.fillMaxWidth().clickable { onReview(item.requestId) },
+                // A question has nowhere further to go — all of it is already here — so the row is
+                // not a way in to anything. Only a permission keeps more of itself in the sheet.
+                Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (question == null) Modifier.clickable { onReview(item.requestId) } else Modifier,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Outlined.Lock, null, Modifier.size(16.dp), tint = tint)
+                Icon(
+                    if (question != null) Icons.Outlined.HelpOutline else Icons.Outlined.Lock,
+                    null,
+                    Modifier.size(16.dp),
+                    tint = tint,
+                )
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -822,33 +842,96 @@ private fun PendingPermissionCard(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             // A command gets room to be read whole. This card is not a summary of
-                            // the decision in the wide layout -- it *is* the decision, now that the
-                            // sheet no longer opens over it -- and "allow this command" with the
-                            // command ellipsized is not a question anyone can answer. Still
-                            // bounded, so one pathological line cannot take the pane.
+                            // the decision -- it *is* the decision, since the sheet no longer opens
+                            // over it -- and "allow this command" with the command ellipsized is
+                            // not a question anyone can answer. Still bounded, so one pathological
+                            // line cannot take the pane.
                             maxLines = if (item.ask is PermissionAsk.RunCommand) 6 else 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
-                RowChevron()
+                if (question == null) RowChevron()
+            }
+            /*
+             * The diff, in the card, before anything is decided.
+             *
+             * The promise is that nothing is edited without the change being put in front of the
+             * person first, and the sheet used to keep it by arriving uninvited. It no longer
+             * does, so the card keeps it instead -- the same renderer, capped at the same fourteen
+             * lines the transcript's own diff card shows, with the rest a tap away on the card.
+             * That is most real edits whole and enough of a large one to recognise; "+N more
+             * lines" says when it is not.
+             */
+            (item.ask as? PermissionAsk.EditFile)?.let { edit ->
+                DiffView(
+                    diff = edit.diff,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp),
+                    maxLines = 14,
+                )
+            }
+            /*
+             * The whole question, answerable where it was asked.
+             *
+             * A question stops the work either way -- that is what it is for -- so the card is
+             * already the interruption, and the modal that used to open over it interrupted the
+             * same person a second time about the same thing. Options with their descriptions, the
+             * multi-select rule and the free-text answer all live here now; there is nothing left
+             * behind a tap.
+             *
+             * The ticks themselves are held above the list, because this row is inside a
+             * `LazyColumn` and would otherwise lose them the moment someone scrolled up to re-read
+             * the paragraph the question is about. See [AnswerStore].
+             */
+            question?.let { asked ->
+                val form = answers.of(item.requestId)
+                Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    asked.questions.forEachIndexed { index, one ->
+                        QuestionBlock(
+                            question = one,
+                            answers = form,
+                            // The headline is already a lone question, word for word, so drawing
+                            // it again as the first line would ask it twice an inch apart.
+                            showText = asked.questions.size > 1,
+                            last = index == asked.questions.lastIndex,
+                        )
+                    }
+                }
             }
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (item.ask is PermissionAsk.Questions) {
-                    // A question has no answer this card can hold. Options need room to be read
-                    // and compared, and picking one out of a row of buttons at the end of a card
-                    // is how you get a tap that meant "the shorter word", so the card hands the
-                    // whole thing to the sheet rather than pretending to be it.
+                if (question != null) {
+                    val form = answers.of(item.requestId)
+                    val answered = form.answeredCount(question.questions)
+                    if (question.questions.size > 1 && !form.complete(question.questions)) {
+                        Text(
+                            "$answered of ${question.questions.size} answered",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    // A denial, not a dismissal, and the difference is the point: this tells the
+                    // agent now that no answer is coming, where walking away leaves it waiting on
+                    // one that might still arrive. Neither invents a preference.
                     TextButton(onClick = { onDecision(item.requestId, PermissionDecision.Deny) }) {
-                        Text("Rather not", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                        Text("Rather not say", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
                     }
                     Spacer(Modifier.width(2.dp))
                     Button(
-                        onClick = { onReview(item.requestId) },
+                        onClick = {
+                            onDecision(
+                                item.requestId,
+                                PermissionDecision.Answered(form.collected(question.questions)),
+                            )
+                        },
+                        // Off until every question has something in it. A live Answer that sent a
+                        // blank map would hand the agent the same non-answer it used to invent.
+                        enabled = form.complete(question.questions),
                         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
                     ) {
                         Text("Answer", fontSize = 13.sp)
@@ -879,16 +962,16 @@ private fun PendingPermissionCard(
     }
 }
 
-/** Enough of the ask to answer a familiar one without opening the sheet for the whole story. */
+/** Enough of a permission to answer a familiar one without opening the sheet for the whole story. */
 private fun askOneLiner(ask: PermissionAsk): String? = when (ask) {
     is PermissionAsk.RunCommand -> ask.command
-    is PermissionAsk.EditFile -> ask.diff.path
+    // Nothing: the diff drawn underneath carries the path and the counts in its own header, and
+    // saying it here as well is the file named twice, an inch apart.
+    is PermissionAsk.EditFile -> null
     is PermissionAsk.NetworkAccess -> ask.purpose ?: ask.host
-    // The headline is already the question when there is only one, so the line under it is better
-    // spent on what the answers are than on repeating it.
-    is PermissionAsk.Questions -> ask.questions.singleOrNull()
-        ?.options?.joinToString(" · ") { it.label }
-        ?: ask.questions.joinToString(" · ") { it.header.ifBlank { it.text } }
+    // Nothing: the options are drawn underneath in full, with what each one means. This used to
+    // list their labels, back when the card was a trailer for a sheet.
+    is PermissionAsk.Questions -> null
     is PermissionAsk.Generic -> ask.description
 }
 
@@ -991,6 +1074,14 @@ private fun EndedRow(item: TranscriptItem.Ended, modifier: Modifier = Modifier) 
             style = MaterialTheme.typography.bodyMedium,
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // One line, hard. This is a rule across the conversation, and a summary is a caption
+            // on it — never a second copy of the answer. Box's own harness sends none at all now,
+            // for exactly that reason: it used to pass the SDK's `result`, which *is* the final
+            // message, and printed the agent's whole reply again underneath itself in small grey
+            // type. A harness that says something short still gets to; one that says too much is
+            // cut here rather than allowed to become a second transcript.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Box(
             Modifier
@@ -1005,13 +1096,24 @@ private fun EndedRow(item: TranscriptItem.Ended, modifier: Modifier = Modifier) 
 // Live activity
 // ---------------------------------------------------------------------------
 
-/** The "agent is doing something" line that trails the transcript. */
+/**
+ * The "agent is doing something" line that trails the transcript.
+ *
+ * [waitingOn] is the ask the agent has stopped for, where it has stopped for one. Only the kind of
+ * it matters here: an agent parked on a question is not waiting for approval, and saying so put a
+ * word in the user's mouth — "approve" — for a card whose buttons read Answer and Rather not say.
+ */
 @Composable
-fun ActivityRow(activity: AgentActivity, modifier: Modifier = Modifier) {
+fun ActivityRow(
+    activity: AgentActivity,
+    modifier: Modifier = Modifier,
+    waitingOn: PermissionAsk? = null,
+) {
     val label = when (activity) {
         is AgentActivity.Thinking -> activity.label ?: "Thinking"
         is AgentActivity.Working -> activity.label
-        is AgentActivity.AwaitingPermission -> "Waiting for your approval"
+        is AgentActivity.AwaitingPermission ->
+            if (waitingOn is PermissionAsk.Questions) "Waiting for your answer" else "Waiting for your approval"
         AgentActivity.AwaitingInput -> "Waiting for your reply"
         AgentActivity.Idle, AgentActivity.Ended -> return
     }

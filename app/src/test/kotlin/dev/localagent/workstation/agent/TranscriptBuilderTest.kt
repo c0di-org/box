@@ -208,6 +208,63 @@ class TranscriptBuilderTest {
         assertTrue(transcript.pendingPermissions.isEmpty())
     }
 
+    // ---- is anything happening -------------------------------------------
+
+    /**
+     * The transcript is busy from the moment the user speaks, not from the moment the harness
+     * gets round to saying so.
+     *
+     * `isBusy` is what draws the working indicator and puts Stop in the header, and there is a
+     * gap after a turn is handed over where nothing has come back yet — sometimes a long one, on
+     * a phone emulating a computer. Drawing an idle conversation across it is the version that is
+     * actually wrong.
+     */
+    @Test
+    fun `a message sent into a quiet session says the agent is working`() {
+        val transcript = listOf(
+            AgentEvent.ActivityChanged("e1", SESSION, 1, AgentActivity.Idle),
+            AgentEvent.UserMessage("e2", SESSION, 2, "and now the tests"),
+        ).toTranscript(SESSION)
+
+        assertTrue(transcript.isBusy)
+    }
+
+    /** Speaking again reopens a session that had ended; the finished rule must not outlive it. */
+    @Test
+    fun `a message after the session ended puts the conversation back to work`() {
+        val transcript = listOf(
+            AgentEvent.SessionEnded("e1", SESSION, 1, SessionOutcome.Completed()),
+            AgentEvent.UserMessage("e2", SESSION, 2, "one more thing"),
+        ).toTranscript(SESSION)
+
+        assertTrue(transcript.isBusy)
+        assertNull(transcript.outcome)
+    }
+
+    /** What the harness is saying always outranks the guess above. */
+    @Test
+    fun `a message while an agent is mid-task does not flatten what it is doing`() {
+        val transcript = listOf(
+            AgentEvent.ActivityChanged("e1", SESSION, 1, AgentActivity.Working("Installing")),
+            AgentEvent.UserMessage("e2", SESSION, 2, "also check the lockfile"),
+        ).toTranscript(SESSION)
+
+        assertEquals(AgentActivity.Working("Installing"), transcript.activity)
+    }
+
+    /** And it never talks over a question the user is being asked. */
+    @Test
+    fun `a message with a request outstanding still reads as waiting on you`() {
+        val transcript = listOf(
+            AgentEvent.PermissionRequested("e1", SESSION, 1, "p1", PermissionAsk.RunCommand("one")),
+            AgentEvent.ActivityChanged("e2", SESSION, 2, AgentActivity.Idle),
+            AgentEvent.UserMessage("e3", SESSION, 3, "go on then"),
+        ).toTranscript(SESSION)
+
+        assertEquals(AgentActivity.AwaitingPermission("p1"), transcript.activity)
+        assertEquals("p1", transcript.pendingPermission?.requestId)
+    }
+
     // ---- sub-agents --------------------------------------------------------
 
     @Test

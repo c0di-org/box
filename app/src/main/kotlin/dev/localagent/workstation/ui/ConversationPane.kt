@@ -1,10 +1,13 @@
 package dev.localagent.workstation.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -79,6 +82,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
@@ -89,9 +93,11 @@ import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.ConnectRequest
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.HarnessDescriptor
+import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.Transcript
+import dev.localagent.workstation.agent.TranscriptItem
 import kotlinx.coroutines.launch
 
 /**
@@ -112,7 +118,6 @@ fun ConversationPane(
     onOpenComputer: () -> Unit,
     onCloseSession: (String) -> Unit,
     modifier: Modifier = Modifier,
-    onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = true,
     /**
      * Whether this pane is the one that reports the box's own state.
@@ -133,6 +138,13 @@ fun ConversationPane(
     val session = state.selectedSession
     val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
     val queued = state.queuedForSelected
+    // Held here rather than inside the list, because the composer's own way back to an unanswered
+    // request is a scroll and not a modal. See [waitingAction].
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // Ticks on a question that has not been sent yet, kept above the list that draws it. See
+    // [AnswerStore] for why they cannot live in the card.
+    val answers = remember { AnswerStore() }
 
     Column(modifier.fillMaxSize()) {
         ConversationHeader(
@@ -214,21 +226,67 @@ fun ConversationPane(
                     transcript = state.transcript,
                     queued = queued,
                     harness = harness,
+                    listState = listState,
+                    answers = answers,
                     onOpenArtifact = onOpenArtifact,
                     onRetry = onStartComputer,
                     onStopSubAgent = onStopSubAgent,
-                    onPermissionDecision = onPermissionDecision,
+                    onPermissionDecision = { requestId, decision ->
+                        // Answered is answered: the ticks have gone to the agent and holding a copy
+                        // would only wait to be inherited by whatever reuses the id.
+                        answers.forget(requestId)
+                        onPermissionDecision(requestId, decision)
+                    },
                     onReviewPermission = onReviewRequest,
                 )
             }
         }
 
         val waiting = state.transcript?.pendingPermissions.orEmpty()
+        /*
+         * The way to the request from down here, and it is a scroll rather than a modal.
+         *
+         * Box used to raise a sheet over the conversation the moment anything was asked, which
+         * took the keyboard down with it and gave it back afterwards — a request answered in the
+         * middle of typing cost the user their draft's place twice. The card in the transcript is
+         * already a complete decision, so this only has to *go* there. The sheet is still one tap
+         * further in, on a permission's card, for a diff nobody would decide on from one line.
+         */
+        val waitingAction: (() -> Unit)? = waiting.firstOrNull()?.let { oldest ->
+            {
+                val index = state.transcript?.items.orEmpty().indexOfFirst { it.holds(oldest.requestId) }
+                if (index >= 0) {
+                    scope.launch { listState.animateScrollToItem(index) }
+                } else {
+                    // Nothing in the list to scroll to. The sheet is the only surface left, and
+                    // it is the right one: this can only be a permission, since a question with
+                    // no card is a question with no answer either.
+                    onReviewRequest(oldest.requestId)
+                }
+            }
+        }
         Composer(
             enabled = state.harnesses.isNotEmpty(),
+            /*
+             * Not a gate. A pending request used to switch send off, which was the sheet's
+             * urgency left behind after the sheet: the field still took typing, so a thought went
+             * in, send did nothing, and the only sign was a line of small text.
+             *
+             * Box already holds a message through a three-minute boot, and the guest holds this
+             * one the same way — a prompt written while a tool call is blocked sits in the
+             * harness's queue and is picked up the moment the turn moves. So the message goes,
+             * and this says what is still waiting rather than standing in front of it.
+             */
+            // Named for what it is. "Request" is a permission's word, and an agent that stopped
+            // to ask you something has not requested anything.
+            notice = when {
+                waiting.size > 1 -> "${waiting.size} things are waiting on you."
+                waiting.firstOrNull()?.ask is PermissionAsk.Questions -> "A question is waiting on you."
+                waiting.isNotEmpty() -> "A request is waiting on you."
+                else -> null
+            },
+            onNotice = waitingAction,
             blockedReason = when {
-                waiting.size > 1 -> "Answer the ${waiting.size} requests above."
-                waiting.isNotEmpty() -> "Answer the request above."
                 // A booting computer is not a lost connection, and typing into one is supported:
                 // the message waits. Only a session that dropped while the computer was up is a
                 // reason to stop the user mid-thought.
@@ -238,7 +296,6 @@ fun ConversationPane(
             },
             placeholder = "Ask Box anything…",
             onSend = onSend,
-            onReview = onReviewPermission,
             mode = state.permissionMode,
             onModeChange = onSetPermissionMode,
             attachments = state.pendingAttachments,
@@ -292,7 +349,12 @@ private fun ConversationHeader(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // The one place that is on screen whatever the transcript is doing, so it is where "this
+        // agent is working" has to be said. Stop is the same statement with a way out attached:
+        // there is nothing to stop when nothing is running, and its absence is what used to be
+        // read — correctly, given what Box knew — as the agent being finished.
         if (busy) {
+            WorkingDot(modifier = Modifier.padding(end = 2.dp))
             TextButton(onClick = onInterrupt) {
                 Icon(Icons.Outlined.Stop, contentDescription = null, modifier = Modifier.size(17.dp))
                 Spacer(Modifier.width(6.dp))
@@ -469,6 +531,8 @@ private fun TranscriptList(
     transcript: Transcript?,
     queued: List<QueuedPrompt>,
     harness: HarnessDescriptor?,
+    listState: LazyListState,
+    answers: AnswerStore,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
     onStopSubAgent: (String) -> Unit,
@@ -476,7 +540,6 @@ private fun TranscriptList(
     onReviewPermission: (String) -> Unit,
 ) {
     val items = transcript?.items.orEmpty()
-    val listState = rememberLazyListState()
     val lastKey = items.lastOrNull()?.key
     val total = items.size + queued.size
     val scope = rememberCoroutineScope()
@@ -486,23 +549,43 @@ private fun TranscriptList(
     LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity) {
         if (total > 0 && listState.isNearEnd()) listState.animateScrollToItem(total)
     }
+
     /*
-     * A column, not a stack with the pill floating on top of it.
+     * The one exception to leaving a scrolled-back reader alone: the request they have to answer.
      *
-     * Floating put "↓ Latest" across whatever line of the transcript happened to be at that height
-     * — in the shots that prompted this, mid-sentence, hiding several words of the agent's answer,
-     * and worst in the narrow column where a covered line is a bigger fraction of what is there.
-     * Reserving room at the end of the list does not fix that: `contentPadding` only pads the ends,
-     * and the pill sits over the *viewport*, so any line scrolled under it is still covered — and
-     * the pill exists precisely when the user is scrolled somewhere in the middle.
-     *
-     * So it gets its own lane between the transcript and the composer. It costs a strip of height
-     * while it is up, which is the honest price of never hiding what it is offering to scroll to.
+     * It is the whole reason the sheet no longer opens by itself. A modal followed the user
+     * anywhere, at the cost of taking the keyboard down and covering the conversation; this does
+     * the same job by bringing them to the card instead. It fires when the oldest unanswered
+     * request changes, which is both moments that matter — one arriving while the transcript is
+     * scrolled back, and the *next* one coming up as each is answered — and it stays quiet when
+     * the card is already fully on screen, so answering three in a row that happen to be visible
+     * together does not jerk the list once per tap.
      */
-    Column(Modifier.fillMaxSize()) {
+    val nextRequest = transcript?.pendingPermissions?.firstOrNull()?.requestId
+    LaunchedEffect(nextRequest, items.size) {
+        val requestId = nextRequest ?: return@LaunchedEffect
+        val index = items.indexOfFirst { it.holds(requestId) }
+        if (index >= 0 && !listState.isFullyVisible(index)) listState.animateScrollToItem(index)
+    }
+
+    /*
+     * A stack, with the pill floating over the transcript.
+     *
+     * It had its own lane for a while, to be sure it never covered a word of the conversation, and
+     * that cost more than it saved: a strip of the pane appearing and disappearing shoved every
+     * line of the transcript up and back down as the user scrolled, and it read as a piece of
+     * furniture rather than a control.
+     *
+     * Nothing is reserved at the end of the list for it either, which would be paying the same
+     * price in a quieter way — a permanent band of empty pane under the newest message, bought to
+     * protect a spot the pill is never in. It is only up while the transcript is scrolled *away*
+     * from its end, so the line it floats over is always somewhere in the middle: the newest
+     * message is the one thing it cannot land on.
+     */
+    Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -517,6 +600,7 @@ private fun TranscriptList(
                             onStopSubAgent = onStopSubAgent,
                             onPermissionDecision = onPermissionDecision,
                             onReviewPermission = onReviewPermission,
+                            answers = answers,
                             modifier = Modifier.widthIn(max = 760.dp),
                         )
                     }
@@ -532,7 +616,11 @@ private fun TranscriptList(
             transcript?.let { live ->
                 item(key = "activity") {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        ActivityRow(live.activity, Modifier.widthIn(max = 760.dp))
+                        ActivityRow(
+                            live.activity,
+                            Modifier.widthIn(max = 760.dp),
+                            waitingOn = live.pendingPermission?.ask,
+                        )
                     }
                 }
             }
@@ -540,32 +628,49 @@ private fun TranscriptList(
         JumpToLatest(
             // Tighter than the auto-scroll's own slack, so the affordance is gone by the time
             // following resumes rather than sitting there offering to do what already happens.
-            visible = remember(listState) { derivedStateOf { !listState.isNearEnd(slack = 1) } }.value,
+            //
+            // And never while the list is actually moving. Floating is what a pill like this is,
+            // and the price of floating is that it covers a strip of whatever is under it — which
+            // is worst mid-flick, when it sits still in the middle of text that is streaming past
+            // and reads as a smudge on the glass. Gone while the finger is down, back when things
+            // settle, which is also the only moment anyone wants to press it.
+            visible = remember(listState) {
+                derivedStateOf { !listState.isNearEnd(slack = 1) && !listState.isScrollInProgress }
+            }.value,
+            // Scrolled away from the end is exactly when a working agent is invisible: the
+            // activity line trails the transcript, so it is off the bottom of the screen. The
+            // pill is on screen by definition, so it is where that fact can still be told.
+            busy = transcript?.isBusy == true,
             onClick = { scope.launch { listState.animateScrollToItem(total) } },
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
         )
     }
 }
 
 /**
- * The way back down, and nothing more.
+ * The way back down, and — while the agent is working — the only sign of it that is on screen.
  *
- * It only exists while the user has scrolled away from the end, which is exactly when the
- * transcript stops following on its own — the pair is one behaviour. Quiet by design: the same
- * surface and outline as a tool card, because it is a way to move, not a thing that happened.
+ * It exists while the user has scrolled away from the end, which is exactly when the transcript
+ * stops following on its own; the pair is one behaviour. Quiet by design: the same surface and
+ * outline as a tool card, because it is a way to move, not a thing that happened.
  *
- * It expands into its own lane rather than fading in over the transcript. Fading in over it meant
- * landing on a line of the conversation and hiding words; taking the room is the cheaper of the
- * two, and the movement also reads as the control arriving rather than a label appearing.
+ * It floats over the transcript rather than taking a lane of its own. A lane never covers a word,
+ * but it also pushes the whole conversation up and down as it comes and goes, which is a much
+ * larger movement than the thing it was protecting; the list reserves room at its end instead, so
+ * what the pill sits over is the padding under the newest message.
+ *
+ * The dot is the working indicator for a scrolled-back reader. The activity line trails the
+ * transcript and is therefore off screen precisely when this is up, so an agent halfway through a
+ * long job looked identical to one that had finished and gone quiet.
  */
 @Composable
-private fun JumpToLatest(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    AnimatedVisibility(
-        visible,
-        modifier,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically(),
-    ) {
+private fun JumpToLatest(
+    visible: Boolean,
+    busy: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(visible, modifier, enter = fadeIn(), exit = fadeOut()) {
         Surface(
             onClick = onClick,
             shape = CircleShape,
@@ -578,12 +683,55 @@ private fun JumpToLatest(visible: Boolean, onClick: () -> Unit, modifier: Modifi
                 Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Outlined.ArrowDownward, contentDescription = null, modifier = Modifier.size(16.dp))
+                if (busy) {
+                    WorkingDot()
+                } else {
+                    Icon(
+                        Icons.Outlined.ArrowDownward,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
                 Spacer(Modifier.width(7.dp))
-                Text("Latest", style = MaterialTheme.typography.bodyMedium, fontSize = 13.sp)
+                Text(
+                    if (busy) "Working" else "Latest",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = 13.sp,
+                )
             }
         }
     }
+}
+
+/**
+ * "Something is happening in here", in one pulsing dot.
+ *
+ * The same beat as the activity line at the end of the transcript, so the header, the pill and the
+ * line under the conversation are visibly one fact rather than three separate claims.
+ */
+@Composable
+internal fun WorkingDot(size: Dp = 9.dp, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "working")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "pulse",
+    )
+    StatusDot(MaterialTheme.colorScheme.primary.copy(alpha = pulse), size, modifier)
+}
+
+/**
+ * Whether this row is where a given request is answered — including inside a sub-agent's card.
+ *
+ * A delegate's questions and permissions are drawn nested in the card that spawned it, so the row
+ * to bring on screen is the sub-agent's, not one of its own. Recursive because a sub-agent can
+ * send a sub-agent, and the answer is still "whichever top-level row contains it".
+ */
+private fun TranscriptItem.holds(requestId: String): Boolean = when (this) {
+    is TranscriptItem.Permission -> this.requestId == requestId
+    is TranscriptItem.SubAgent -> items.any { it.holds(requestId) }
+    else -> false
 }
 
 /**
@@ -599,6 +747,20 @@ internal fun LazyListState.isNearEnd(slack: Int = 2): Boolean {
     if (info.totalItemsCount == 0) return true
     val last = info.visibleItemsInfo.lastOrNull()?.index ?: return true
     return last >= info.totalItemsCount - 1 - slack
+}
+
+/**
+ * Whether one row is on screen *whole*, which is the question a card with buttons on it raises.
+ *
+ * Deliberately stricter than "visible": a permission card whose Allow and Deny are an inch below
+ * the fold counts as not there, and is worth scrolling to. Unlaid-out rows answer false, so a
+ * request far up the scrollback is brought down rather than assumed to be fine.
+ */
+internal fun LazyListState.isFullyVisible(index: Int): Boolean {
+    val info = layoutInfo
+    val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+    return item.offset >= info.viewportStartOffset &&
+        item.offset + item.size <= info.viewportEndOffset
 }
 
 /**
@@ -753,11 +915,18 @@ private fun EmptyState(title: String) {
 @Composable
 internal fun Composer(
     enabled: Boolean,
+    /** Something that genuinely stops a message going: send is off while this is set. */
     blockedReason: String?,
     placeholder: String,
     onSend: (String) -> Unit,
-    onReview: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    /**
+     * Something waiting that does not stop a message going. Drawn in the same strip and worded
+     * the same way, and deliberately *not* a second kind of block: the difference between the two
+     * is whether tapping send does anything.
+     */
+    notice: String? = null,
+    onNotice: (() -> Unit)? = null,
     footer: Boolean = true,
     mode: AgentPermissionMode = AgentPermissionMode.Ask,
     /** Null where the setting has nowhere to go — the opening hero shares this composer. */
@@ -794,7 +963,7 @@ internal fun Composer(
             .padding(top = 8.dp, bottom = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        blockedReason?.let { reason ->
+        (blockedReason ?: notice)?.let { reason ->
             Row(
                 Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -813,8 +982,12 @@ internal fun Composer(
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.weight(1f),
                 )
-                onReview?.let {
-                    TextButton(onClick = it) { Text("Review") }
+                // "Show me" rather than "Review": it scrolls the transcript to the card, and a
+                // word that promises a closer look would be describing the sheet this replaced.
+                if (blockedReason == null) {
+                    onNotice?.let {
+                        TextButton(onClick = it) { Text("Show me") }
+                    }
                 }
             }
         }

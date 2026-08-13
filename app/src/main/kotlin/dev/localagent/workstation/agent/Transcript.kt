@@ -220,8 +220,28 @@ class TranscriptBuilder(
                 put(TranscriptItem.Ended("end:${event.eventId}", event.at, event.outcome))
             }
 
-            is AgentEvent.UserMessage ->
+            is AgentEvent.UserMessage -> {
                 put(TranscriptItem.User("user:${event.eventId}", event.at, event.text, event.attachments))
+                /*
+                 * Someone said something, so the agent is working — whether or not the harness
+                 * gets around to saying so.
+                 *
+                 * Not a guess dressed up as a fact: between a turn being handed over and the
+                 * first thing that comes back there can be a long silence, and drawing an idle
+                 * conversation across it is the version that is actually wrong. A harness that
+                 * does narrate its turns overwrites this with something better a moment later.
+                 *
+                 * Only from a standstill. `Working`, `Thinking` and `AwaitingPermission` all say
+                 * more than this does, and a message typed while an agent is mid-task -- which
+                 * Box allows, and queues -- must not flatten one of those.
+                 */
+                if (activity == AgentActivity.Idle || activity == AgentActivity.Ended) {
+                    activity = AgentActivity.Thinking()
+                }
+                // A session that has been spoken to again is not a session that ended. Left
+                // behind, the outcome would keep a finished banner over a live conversation.
+                outcome = null
+            }
 
             is AgentEvent.AgentMessage -> {
                 val key = messageKeys.getOrPut(event.messageId) { "msg:${event.messageId}" }
