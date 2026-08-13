@@ -20,8 +20,13 @@ The transcript is an **append-only event log**. Two rules:
 
 Event kinds: `SessionStarted` · `SessionEnded` · `UserMessage` · `AgentMessage` · `AgentThinking` ·
 `ToolCallStarted` · `ToolCallProgress` · `ToolCallFinished` · `FileChanged` ·
-`PermissionRequested` · `PermissionResolved` · `TaskProgress` · `ActivityChanged` ·
-`ArtifactOffered` · `AgentError`.
+`PermissionRequested` · `PermissionResolved` · `ConnectRequested` · `ConnectResolved` ·
+`TaskProgress` · `ActivityChanged` · `ArtifactOffered` · `AgentError` · `CaughtUp`.
+
+`CaughtUp` is the odd one and it is not decoration: a log is replayed from the beginning every
+time somebody opens a task, so a replayed question and a live one are the same bytes. It marks
+the boundary, and only what is still outstanding when the log runs out is put in front of
+anybody. See [github-auth.md](github-auth.md) for the failure it prevents.
 
 ### A turn ending is not the session ending
 
@@ -92,8 +97,8 @@ renders as a completed call rather than disappearing.
 `PermissionAsk` carries everything the card needs to explain the risk without a round trip — a
 parsed diff, a command line plus working directory, a hostname, a question and its options. `alwaysAllowScope` is a
 human-readable string ("edits in this project"); `null` hides the always-allow button entirely.
-Decisions are `Allow` / `AllowAlways(scope)` / `Deny` / `Abandoned`, and `Abandoned` is what a
-dismissed sheet produces — dismissing never approves.
+Decisions are `Allow` / `AllowAlways(scope)` / `Deny` / `Answered(answers)` / `Abandoned`, and
+`Abandoned` is what a dismissed sheet produces — dismissing never approves.
 
 **Several requests can be outstanding at once.** One turn can ask for two commands and block on
 both. `Transcript.pendingPermissions` is therefore a list, oldest first — `pendingPermission` is
@@ -156,9 +161,10 @@ interface AgentBackend {
     suspend fun setViewport(viewport: AgentViewport)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
-    suspend fun startSession(harnessId: String, prompt: String?): String
-    suspend fun send(sessionId: String, text: String)
+    suspend fun startSession(harnessId: String, prompt: String?, attachments: List<Attachment>): String
+    suspend fun send(sessionId: String, text: String, attachments: List<Attachment>)
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
+    suspend fun resolveConnect(sessionId: String, requestId: String, outcome: ConnectOutcome)
     suspend fun interrupt(sessionId: String)
     suspend fun interruptSubAgent(sessionId: String, subAgentId: String)
     suspend fun closeSession(sessionId: String)
@@ -247,7 +253,7 @@ agent chooses and whose target the person cannot see before tapping:
   place to fail is a tool result the agent reads. An unreadable table means an unknowable answer
   and the agent is believed.
 
-`show` is passed in `allowedTools`, so it is the one tool that is never asked about. A sheet
+`show` is passed in `allowedTools`, alongside `connect`, so it is never asked about. A sheet
 reading "allow the agent to show you a file?" has one honest answer, and the artifact is itself a
 button nobody has to press — the consent is the tap, and a prompt in front of it asks the same
 question twice. It draws no tool card either: the artifact row is what happened, and a card beside

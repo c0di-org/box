@@ -187,5 +187,13 @@ guest image can appear to do nothing — is in [docs/development.md](docs/develo
 | `protocol/` | The `agentd` wire protocol — [v2](protocol/agentd-v2.md) is current |
 | `docs/` | [Runtime design](docs/runtime.md), [UI contract](docs/ui-contract.md), [development](docs/development.md) |
 
-Two build flavors: `stock` (QEMU, runs everywhere) and `avf` (experimental, Android
-Virtualization Framework).
+Two build flavors. `stock` is the product: QEMU, carrying the guest image. `avf` is the
+same app without that image, which is what makes it buildable on a machine that has never
+run the guest builder — it is what UI work and the screenshot gallery are built against.
+
+The name is a leftover. It was meant to become an Android Virtualization Framework
+backend, and that road is closed: AVF's APIs are `@SystemApi` behind
+`MANAGE_VIRTUAL_MACHINE`, which AOSP documents as not available to third-party apps, so a
+Play-distributed Box cannot get hardware virtualization. Full emulation is not a stage
+Box is passing through — see [the spike](docs/spike-android-toolchain.md) for the
+evidence.

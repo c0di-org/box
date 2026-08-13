@@ -1618,12 +1618,11 @@ async function main() {
         ],
       },
       includePartialMessages: false,
-      // Showing something is the one tool that is never asked about. A sheet reading "allow the
-      // agent to show you a file?" has one honest answer, and asking is worse than not: the
-      // artifact is *itself* a button nobody has to press, so the consent is the tap, and a
-      // permission prompt in front of it makes the person answer the same question twice.
-      // Neither is ever asked about. A sheet reading "allow the agent to ask you to connect
-      // GitHub?" asks the same question the connect card is about to ask, one screen earlier.
+      // Box's own two tools are never asked about, because in both cases the permission sheet
+      // would ask the question the tool is already about to ask. An artifact is *itself* a button
+      // nobody has to press, so the consent is the tap, and "allow the agent to show you a file?"
+      // in front of it makes the person answer the same thing twice. "Allow the agent to ask you
+      // to connect GitHub?" is the connect card's own question, one screen earlier.
       ...(box ? { mcpServers: { box }, allowedTools: [SHOW_TOOL, CONNECT_TOOL] } : {}),
     },
   });

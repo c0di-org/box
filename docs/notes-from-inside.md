@@ -48,8 +48,8 @@ Stated up front, because it bounds every claim below.
 
 ## 1. `AskUserQuestion` was inert, and failed silently in the worst direction
 
-**Severity: high. Diagnosed, and fixed in this branch — but the fix has not run on a
-device.** Read the last two sub-sections before trusting it.
+**Severity: high. Diagnosed, and fixed — but the fix had not run on a device when this
+was written.** Read the last two sub-sections before trusting it.
 
 ### What the user saw
 
@@ -132,10 +132,13 @@ The round trip runs through the permission channel that was already there, becau
   the questions and their options rather than a risk to weigh.
 - `HarnessWire` parses it into `PermissionAsk.Questions`; a question with no answerable
   options degrades to the ordinary allow/deny ask rather than drawing a dead end.
-- The sheet renders the questions — header chip, options with their descriptions,
-  multi-select where asked for, and a free-text "Something else", which exists because
-  the tool tells the model not to write an "Other" option on the grounds that the host
-  will supply one. "Answer" stays disabled until every question has something in it.
+- The question is drawn inline on its own transcript card — header chip, options with
+  their descriptions, multi-select where asked for, and a free-text "Something else",
+  which exists because the tool tells the model not to write an "Other" option on the
+  grounds that the host will supply one. "Answer" stays disabled until every question has
+  something in it. It briefly lived in the permission sheet, and `BoxApp` now filters
+  questions out of `sheetTarget`: a question already stops the work, so the card *is* the
+  interruption and a modal over it interrupts the same person twice.
 - The answer comes back as `PermissionDecision.Answered`, goes down the wire as a plain
   `allow` **carrying an `answers` field**, and the harness folds it into `updatedInput`.
   A plain allow on the wire is deliberate: a guest image older than this change reads an
@@ -175,8 +178,7 @@ which is the half that rests on the hook.
 
 ## 2. `ToolCall.Generic` rendered raw JSON, contradicting its own contract
 
-**Severity: low — cosmetic, but it was a promise the code did not keep. Fixed in this
-branch.**
+**Severity: low — cosmetic, but it was a promise the code did not keep. Fixed.**
 
 The doc comment says "Renders as a labelled key/value card, **never raw JSON**".
 Arguments are carried as `List<Pair<String, String>>`, so an argument whose *value* was
@@ -246,8 +248,8 @@ on the phone.
   `scrot` is in the image; `scrot /tmp/screen.png` against `:0` works, so GUI work is no
   longer done blind.
 
-Findings 1 and 2 are *not* listed here, and will not be until an image built from this
-branch has been run on a device and their **Re-check** lines have passed. A fix that
+Findings 1 and 2 are *not* listed here, and will not be until an image carrying them has
+been run on a device and their **Re-check** lines have passed. A fix that
 compiles is not a fix that reproduces, and this section is the one place in the document
 that is allowed to mean "verified".
 
