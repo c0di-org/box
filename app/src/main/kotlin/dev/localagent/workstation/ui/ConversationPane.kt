@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.CallMerge
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowDropDown
@@ -83,6 +84,7 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.ConnectRequest
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionDecision
@@ -111,6 +113,8 @@ fun ConversationPane(
     onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = true,
     onSignIn: () -> Unit = {},
+    onConnectGitHub: () -> Unit = {},
+    onDeclineConnection: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     onAttachPhoto: (() -> Unit)? = null,
     onAttachFile: (() -> Unit)? = null,
@@ -143,6 +147,11 @@ fun ConversationPane(
         if (state.computerReady) ConnectionBanner(state.connection)
         ComputerBanner(state.runtimeState, onStartComputer)
         if (state.needsSignIn) SignInBanner(onSignIn)
+        // Only for the conversation that is actually waiting. An agent in another task asking for
+        // an account is that task's business until the user opens it.
+        state.connectRequest
+            ?.takeIf { it.sessionId == state.selectedSessionId }
+            ?.let { ConnectBanner(it, onConnectGitHub, onDeclineConnection) }
 
         val nothingToShow = (state.transcript == null || state.transcript.items.isEmpty()) &&
             queued.isEmpty()
@@ -379,6 +388,8 @@ private fun Banner(
     title: String,
     body: String?,
     action: Pair<String, () -> Unit>? = null,
+    /** A second, quieter answer. Only for banners where declining is a real thing to say. */
+    secondary: Pair<String, () -> Unit>? = null,
 ) {
     Surface(color = tint.copy(alpha = 0.10f), contentColor = tint, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -396,6 +407,11 @@ private fun Banner(
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+            secondary?.let { (label, onClick) ->
+                TextButton(onClick = onClick) {
+                    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             action?.let { (label, onClick) ->
@@ -566,6 +582,33 @@ private fun QueuedMessage(prompt: QueuedPrompt, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
         )
     }
+}
+
+/**
+ * An agent holding its turn open, waiting for an account only the person can grant.
+ *
+ * It stays until it is answered rather than until it is dismissed, because behind it a tool call
+ * is genuinely blocked — the SDK pauses one indefinitely, which is what lets the same turn carry
+ * on with the clone afterwards. So closing the sheet does not answer it, and the only ways out are
+ * the two written here.
+ *
+ * The agent's own reason is the body. It knows what it was in the middle of, and "to clone
+ * garfbargle/box" is a better sentence than anything this file could have written in advance.
+ */
+@Composable
+private fun ConnectBanner(
+    request: ConnectRequest,
+    onConnect: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Banner(
+        tint = MaterialTheme.colorScheme.tertiary,
+        icon = { Icon(Icons.AutoMirrored.Outlined.CallMerge, null, Modifier.size(17.dp)) },
+        title = "Connect GitHub",
+        body = request.reason,
+        action = "Connect" to onConnect,
+        secondary = "Not now" to onDecline,
+    )
 }
 
 /**

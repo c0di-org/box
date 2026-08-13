@@ -65,7 +65,7 @@ class GuestAuth {
                 arrayOf(CLAUDE, "auth", "status", "--json"),
                 WORKSPACE,
                 guestEnvironment(),
-                object : Callback() {
+                object : GuestSessionCallback() {
                     override fun onData(offset: Long, chunk: ByteArray) {
                         output.append(chunk.toString(Charsets.UTF_8))
                     }
@@ -99,7 +99,7 @@ class GuestAuth {
                 AUTH_COMMAND,
                 WORKSPACE,
                 guestEnvironment(),
-                object : Callback() {
+                object : GuestSessionCallback() {
                     override fun onAttached(session: IAgentSession?, logPath: String) {
                         live = session
                     }
@@ -220,35 +220,6 @@ class GuestAuth {
         // own home directory rather than wherever the session happened to start.
         putString("HOME", GUEST_HOME)
         putString("BOX_SESSION_CWD", WORKSPACE)
-    }
-
-    /**
-     * Reassembles whole event lines out of arbitrary chunks.
-     *
-     * The harness writes one event per line, but a pipe splits wherever it likes. Parsing what
-     * arrives would drop an event whose newline landed in the next chunk.
-     */
-    private class LineBuffer {
-        private val pending = StringBuilder()
-
-        fun absorb(text: String, onLine: (String) -> Unit) {
-            pending.append(text)
-            while (true) {
-                val newline = pending.indexOf("\n")
-                if (newline < 0) break
-                val line = pending.substring(0, newline).trim()
-                pending.delete(0, newline + 1)
-                if (line.isNotEmpty()) onLine(line)
-            }
-        }
-    }
-
-    /** Defaults so each use only overrides what it cares about. */
-    private abstract class Callback : IAgentSessionCallback.Stub() {
-        override fun onAttached(session: IAgentSession?, logPath: String) = Unit
-        override fun onData(offset: Long, chunk: ByteArray) = Unit
-        override fun onDiagnostic(text: String) = Unit
-        override fun onClosed(exitCode: Int, error: String?) = Unit
     }
 
     private companion object {

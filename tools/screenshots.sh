@@ -43,6 +43,9 @@ SHOTS=(
   "phone chat 0 chat"            # and how it ended
   "phone permission 0 permission" # the moment before it edits a file
   "phone subagent 0 subagent"    # a sub-agent working, and the one control that stops just it
+  "phone github-ask 0 github-ask"     # an agent mid-clone, asking for the one thing it cannot get
+  "phone github-code 0 github-code"   # eight characters, already on the clipboard
+  "phone github-repos 0 github-repos" # and the step that is actually about trust
   "phone terminal 0 terminal"    # the machine, driven directly
   "tablet chat 3 progress"       # unfolded: the list keeps its place beside the conversation
   "tablet chat 0 chat"

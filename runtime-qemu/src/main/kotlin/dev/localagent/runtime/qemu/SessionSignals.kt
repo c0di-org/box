@@ -43,6 +43,16 @@ internal object SessionSignals {
             }
 
             "permission_requested" -> Signal.NeedsYou(describe(json.optJSONObject("ask")))
+
+            // Also a thing only the user can do, and the one most worth a notification: the agent
+            // is holding its turn open indefinitely waiting for it, so a phone in a pocket is the
+            // difference between a task that finishes and one that is still waiting at bedtime.
+            "connect_requested" -> Signal.NeedsYou(
+                when (json.optString("service")) {
+                    "github" -> "It needs you to connect GitHub"
+                    else -> "It needs you to connect an account"
+                },
+            )
             else -> null
         }
     }

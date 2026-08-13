@@ -136,6 +136,24 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // Box's GitHub App, which is how a box connects to GitHub.
+        //
+        // A client id is public by design — the device flow Box uses has no client secret, which is
+        // precisely why it is the flow a phone app can run at all. It still comes from a property
+        // rather than being written here, so a fork can point at its own app without editing code,
+        // and so a build made without one is a *build* that says so rather than a flow that fails
+        // at GitHub with a message about an unknown client. See docs/github-auth.md.
+        buildConfigField(
+            "String",
+            "GITHUB_CLIENT_ID",
+            "\"${(project.findProperty("box.github.clientId") as String?).orEmpty()}\"",
+        )
+        buildConfigField(
+            "String",
+            "GITHUB_APP_SLUG",
+            "\"${(project.findProperty("box.github.appSlug") as String?) ?: "box"}\"",
+        )
     }
 
     buildFeatures { buildConfig = true }

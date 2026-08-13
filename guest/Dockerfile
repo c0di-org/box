@@ -3,6 +3,7 @@ FROM --platform=linux/arm64 debian:bookworm-slim
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         e2fsprogs \
         git \
         mmdebstrap \

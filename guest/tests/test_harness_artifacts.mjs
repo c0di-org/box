@@ -94,7 +94,7 @@ const chain = () => {
   for (const method of ['optional', 'int', 'describe']) self[method] = () => self;
   return self;
 };
-export const z = { string: chain, number: chain, boolean: chain };
+export const z = { string: chain, number: chain, boolean: chain, enum: chain };
 `;
 
 function module_(root, name, source) {
@@ -214,10 +214,11 @@ test('the tool is offered to the model, and never asked about', async () => {
   });
 
   const asked = options(events);
-  assert.deepEqual(asked.server, { name: 'box', alwaysLoad: true, tools: ['show'] });
+  assert.deepEqual(asked.server, { name: 'box', alwaysLoad: true, tools: ['show', 'connect'] });
   // Pre-allowed on purpose. A sheet reading "allow the agent to show you a file?" has one honest
-  // answer, and the artifact is already a button nobody has to press.
-  assert.deepEqual(asked.allowedTools, ['mcp__box__show']);
+  // answer, and the artifact is already a button nobody has to press. `connect` is pre-allowed for
+  // the same reason: it asks the person a question, and a sheet in front of it asks it twice.
+  assert.deepEqual(asked.allowedTools, ['mcp__box__show', 'mcp__box__connect']);
 });
 
 // ---- a file ------------------------------------------------------------------

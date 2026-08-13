@@ -61,6 +61,34 @@ test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent
 # A harness that installed for the wrong architecture would fail only once it reached the phone.
 test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64" \
   || { echo 'the harness installed without its linux-arm64 runtime' >&2; exit 1; }
+
+# Connecting this box to GitHub, and the one thing that reads the credential afterwards.
+#
+# Both go in a directory of their own rather than beside the harness: they have nothing to do with
+# which agent is installed, and a box running some future harness still has to be able to clone.
+install -d -m 0755 "$ROOTFS/opt/local-agent/bin"
+install -m 0755 "$ROOT_DIR/guest/github/box-github-connect.mjs" "$ROOTFS/opt/local-agent/bin/box-github-connect.mjs"
+install -m 0755 "$ROOT_DIR/guest/github/box-git-credential" "$ROOTFS/opt/local-agent/bin/box-git-credential"
+
+# The GitHub CLI.
+#
+# Not in Debian, so it is fetched from the project's own releases and checked against the checksum
+# file published beside it. Worth the ~40 MB and the extra fetch for one reason: without it the way
+# to open a pull request from here is curl with a hand-built Authorization header, which means the
+# agent reading the token — and a token an agent has read is one turn away from being echoed into a
+# session log that is kept on disk. `gh` is also simply the tool it already knows how to drive.
+GH_VERSION="${GH_VERSION:-2.63.2}"
+GH_DEB="gh_${GH_VERSION}_linux_arm64.deb"
+GH_RELEASE="https://github.com/cli/cli/releases/download/v${GH_VERSION}"
+command -v curl >/dev/null || { echo 'curl is required (rebuild the builder image)' >&2; exit 1; }
+install -d -m 1777 "$ROOTFS/tmp"
+curl -fsSL -o "$ROOTFS/tmp/$GH_DEB" "$GH_RELEASE/$GH_DEB"
+curl -fsSL -o "$ROOTFS/tmp/gh_checksums.txt" "$GH_RELEASE/gh_${GH_VERSION}_checksums.txt"
+( cd "$ROOTFS/tmp" && grep " $GH_DEB\$" gh_checksums.txt | sha256sum -c - ) \
+  || { echo "the gh download did not match its published checksum" >&2; exit 1; }
+chroot "$ROOTFS" dpkg --install "/tmp/$GH_DEB"
+rm -f "$ROOTFS/tmp/$GH_DEB" "$ROOTFS/tmp/gh_checksums.txt"
+chroot "$ROOTFS" gh --version >/dev/null || { echo 'gh did not install' >&2; exit 1; }
 # Box's own source, so the agent in the box can read the app the user is running.
 #
 # The point is not convenience -- it is that this copy and the running app are the same

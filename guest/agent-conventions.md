@@ -121,33 +121,50 @@ every app update and any edit you make here is lost — copy it into `/workspace
 before changing anything. And the QEMU shared objects under `runtime-qemu/.../jniLibs`
 are not included; they ship in the APK instead.
 
+## GitHub
+
+Whether this box can reach GitHub is not something to work out from a file. `git` and `gh` are
+either signed in or they are not, and if they are, everything works the way it does anywhere
+else: clone, commit, push, `gh pr create`. Your commits are already attributed to the user's
+GitHub account — the name and address are configured for you.
+
+**Never look for a token, and never put one in a command.** There is a credential on this box
+when it is connected, and it is deliberately somewhere you have no reason to go: git gets it from
+a credential helper, `gh` reads its own config, and neither of them needs you in the middle. A
+token pasted into a URL, an `Authorization` header, or a shell variable ends up in your context,
+in a command line, and then in the log of this conversation, which is kept on disk. There is no
+version of that which is worth the trouble it saves.
+
+**If it is not connected, ask — with `mcp__box__connect`.** Nothing here can grant an account
+except the person you are talking to, and that tool is how you ask them: it shows them a code,
+they approve it at GitHub, and it returns to you when they are done. It *waits*, so the right
+thing to do is call it and then carry on with what you were doing, in the same turn. Do not end
+your turn to explain that you need GitHub, and do not ask them to paste a token into the chat.
+
+Being connected does not mean everything is reachable. The user chooses which repositories this
+box can see, so a clone can fail because a particular repository was not one of them. Say which
+repository it was and offer to ask again; do not treat it as a broken credential.
+
 ## Proposing changes to Box
 
-A change to Box goes back as a pull request, never as a push to the default branch. The
-reason is specific to this app rather than general good manners: a bad change ships in the
-next image, and the box that would let you fix it is the one that just broke. A review step
-keeps a person between the loop and the device.
+A change to Box goes back as a pull request, never as a push to the default branch. The reason is
+specific to this app rather than general good manners: a bad change ships in the next image, and
+the box that would let you fix it is the one that just broke. A review step keeps a person between
+the loop and the device.
 
-The credential, if the user has set one up, is at `/workspace/.config/box/github-token` —
-on the workspace disk because it belongs to this box and must survive updates, and out of
-every repository so it cannot be committed. If it is not there, say so and stop; do not go
-looking for a token elsewhere, and do not ask the user to paste one into the chat, where it
-would be stored in the transcript. Read it at the moment you need it, never echo it, never
-write it into a file, a URL, a git remote, or a command line the process list could show.
-
-The loop, once there is a token and a network:
+The loop:
 
 ```bash
 cp -r /usr/src/box /workspace/src/box     # never edit the baked copy
-cd /workspace/src/box && git init && git remote add origin <the repo>
+cd /workspace/src/box
+git init && git remote add origin https://github.com/<owner>/<repo>.git
 git checkout -b <branch>                  # make the change, commit it
-git push origin <branch>                  # credential via a git credential helper or an
-                                          # Authorization header — not embedded in the URL
-curl -H "Authorization: Bearer $(cat …)" https://api.github.com/repos/<owner>/<repo>/pulls
+git push -u origin <branch>
+gh pr create --fill                       # or --title/--body
 ```
 
-Say what the change does and why in the pull request body, and name the commit the box was
-built from — the reviewer is reading it away from the device and cannot see what you saw.
+Say what the change does and why in the pull request body, and name the commit the box was built
+from — the reviewer is reading it away from the device and cannot see what you saw.
 
 ## Ask before you send a subagent
 
@@ -178,7 +195,7 @@ the title on the card, and it is the first thing they see.
 
 ## What is here
 
-Debian Bookworm with `git`, `curl`, `python3`, `nodejs`/`npm`, `build-essential`, and an
+Debian Bookworm with `git`, `gh`, `curl`, `python3`, `nodejs`/`npm`, `build-essential`, and an
 X session running openbox — that desktop is what the user sees when they tap **Open
 computer**, and files you leave on it are visible to them.
 

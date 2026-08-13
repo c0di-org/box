@@ -129,6 +129,18 @@ internal object HarnessWire {
                 ask = permissionAsk(json.optJSONObject("ask"), context.workingDirectory),
             )
 
+            // A service this build cannot connect is dropped rather than drawn. The harness in
+            // the guest is upgraded on its own schedule, so it can name one this app has never
+            // heard of — and a button that opens nothing is worse than no button.
+            "connect_requested" -> ConnectService.of(json.optString("service"))?.let { service ->
+                AgentEvent.ConnectRequested(
+                    eventId, session, at,
+                    requestId = json.optString("requestId"),
+                    service = service,
+                    reason = json.optString("reason").ifBlank { null },
+                )
+            }
+
             "permission_resolved" -> AgentEvent.PermissionResolved(
                 eventId, session, at,
                 requestId = json.optString("requestId"),

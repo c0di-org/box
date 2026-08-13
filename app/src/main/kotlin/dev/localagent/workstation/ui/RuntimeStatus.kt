@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BuildConfig
+import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
 
 /**
@@ -180,11 +181,13 @@ fun RuntimeGate(state: RuntimeState, onOpenBox: () -> Unit) {
 fun DiagnosticsSheet(
     state: RuntimeState,
     signIn: GuestAuth.State,
+    github: GitHubAuth.State,
     onDismiss: () -> Unit,
     onOpenBox: () -> Unit,
     onPutAway: () -> Unit,
     onStop: () -> Unit,
     onSignIn: () -> Unit,
+    onGitHub: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -229,6 +232,7 @@ fun DiagnosticsSheet(
                 DiagnosticRow("Connection", "Private, on this phone")
                 DiagnosticRow("Network", "Outgoing only, through your phone")
                 SignedInRow(signIn, onSignIn)
+                GitHubRow(github, onGitHub)
                 Spacer(Modifier.height(20.dp))
                 when (state) {
                     RuntimeState.NotProvisioned, RuntimeState.Stopped ->
@@ -306,6 +310,73 @@ private fun SignedInRow(signIn: GuestAuth.State, onSignIn: () -> Unit) {
                     TextButton(onClick = onSignIn, contentPadding = PaddingValues(horizontal = 8.dp)) {
                         Text("Sign in")
                     }
+                }
+            }
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+}
+
+/**
+ * What this box can reach on GitHub, and the way to change it.
+ *
+ * It sits beside the Claude row because they are the same kind of fact — who the box works as —
+ * but it says a different thing on purpose. An account name answers "who"; the repository count
+ * answers the question people actually have about an agent with a credential, which is "how much
+ * of my code can it touch". So the number is the value, and the name is the caption.
+ */
+@Composable
+private fun GitHubRow(github: GitHubAuth.State, onGitHub: () -> Unit) {
+    val value = when (github) {
+        is GitHubAuth.State.Connected -> when {
+            github.needsRepositories -> "No repositories yet"
+            github.repositories != null ->
+                "${github.repositories} ${if (github.repositories == 1) "repository" else "repositories"}"
+            else -> "@${github.login}"
+        }
+        GitHubAuth.State.Checking -> "Checking…"
+        GitHubAuth.State.Starting,
+        is GitHubAuth.State.AwaitingApproval,
+        is GitHubAuth.State.ChoosingRepositories,
+        -> "Connecting…"
+        is GitHubAuth.State.Failed -> "Didn’t connect"
+        GitHubAuth.State.Unconfigured -> "Not set up in this build"
+        GitHubAuth.State.Disconnected -> "Not connected"
+        GitHubAuth.State.Unknown -> "Not checked yet"
+    }
+    // Held as the state itself rather than a boolean, so the caption below can read the count off
+    // it without a second instance check the compiler can see through.
+    val settled = (github as? GitHubAuth.State.Connected)?.takeIf { !it.needsRepositories }
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "GitHub",
+            Modifier.weight(0.42f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(Modifier.weight(0.58f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f, fill = false)) {
+                    SelectionContainer {
+                        Text(
+                            value,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    // Only when the line above is a count: "3 repositories" is the answer, and
+                    // whose they are is the footnote rather than a second row.
+                    if (settled?.repositories != null) {
+                        Text(
+                            "@${settled.login}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+                TextButton(onClick = onGitHub, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text(if (settled != null) "Manage" else "Connect")
                 }
             }
         }

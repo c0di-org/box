@@ -164,6 +164,19 @@ class FakeAgentBackend(
         awaitingDecision.remove(requestId)?.complete(decision)
     }
 
+    /**
+     * Nothing to answer: the script never asks for an account.
+     *
+     * Kept as an honest no-op rather than a fake success. The fake's job is to exercise the UI
+     * without a VM, and a connection it pretended to make would leave the gallery claiming a box
+     * is connected to a GitHub that was never asked.
+     */
+    override suspend fun resolveConnect(
+        sessionId: String,
+        requestId: String,
+        outcome: ConnectOutcome,
+    ) = Unit
+
     override suspend fun interrupt(sessionId: String) {
         scripts.remove(sessionId)?.cancel()
         // Stopping the session stops everything it delegated. The cards say so rather than being

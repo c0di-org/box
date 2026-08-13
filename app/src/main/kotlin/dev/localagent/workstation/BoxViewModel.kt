@@ -36,6 +36,8 @@ import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
+import dev.localagent.workstation.agent.ConnectOutcome
+import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
@@ -73,6 +75,7 @@ class BoxViewModel @JvmOverloads constructor(
     private val auth = BoxContainer.auth
     private val openings = OpeningHistory(application)
     private val signIns = SignInHistory(application)
+    private val github = GitHubAuth()
     private var transcriptJob: Job? = null
     private var connectionJob: Job? = null
 
@@ -175,6 +178,16 @@ class BoxViewModel @JvmOverloads constructor(
         observeAgents()
         watchSharedFolder()
         mutableUiState.update { it.copy(signedInBefore = signIns.hasSignedIn()) }
+        viewModelScope.launch {
+            github.state.collect { state ->
+                mutableUiState.update { it.copy(github = state) }
+                // An agent asked, a person went and did it: the session that has been holding a
+                // tool call open is told, and carries on with the clone it was in the middle of.
+                if (state is GitHubAuth.State.Connected && !state.needsRepositories) {
+                    answerConnectRequest(ConnectOutcome(true, state.login, state.repositories))
+                }
+            }
+        }
         viewModelScope.launch {
             auth.state.collect { signIn ->
                 mutableUiState.update { it.copy(signIn = signIn) }
@@ -362,6 +375,7 @@ class BoxViewModel @JvmOverloads constructor(
             agents.events(id).collect { event ->
                 builder.accept(event)
                 if (event is AgentEvent.PermissionRequested) autoApprove(id, event)
+                if (event is AgentEvent.ConnectRequested) offerConnection(id, event)
                 // The harness echoing a prompt is the proof it arrived, so the queued copy the UI
                 // was showing in its place can go. One echo clears one copy, so the same message
                 // sent twice stays visible twice.
@@ -666,6 +680,89 @@ class BoxViewModel @JvmOverloads constructor(
             agents.closeSession(sessionId)
             if (mutableUiState.value.selectedSessionId == sessionId) selectSession(null)
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // GitHub
+    // -----------------------------------------------------------------------
+
+    /**
+     * The agent needs an account, so Box asks for it — with the code already on screen.
+     *
+     * The flow is started here rather than waiting for a tap, and that is the whole difference
+     * between this and a banner. The person asked for a private repository to be cloned; the agent
+     * is holding its turn open; opening a sheet that says "press to begin" would spend the one
+     * moment where everything is already in context on a button. So the sheet arrives with eight
+     * characters in it, and the only thing left to do is the part only they can do.
+     *
+     * If they close it, nothing is answered. The agent goes on waiting and the card stays in the
+     * conversation, because "not now" is a thing to be said out loud rather than inferred from a
+     * dismissed sheet.
+     */
+    private fun offerConnection(sessionId: String, event: AgentEvent.ConnectRequested) {
+        mutableUiState.update {
+            it.copy(
+                connectRequest = ConnectRequest(sessionId, event.requestId, event.service, event.reason),
+                // Only for the conversation actually on screen. Raising a sheet over a different
+                // task because a backgrounded one reached this point is somebody else's interruption.
+                githubVisible = it.selectedSessionId == sessionId,
+            )
+        }
+        if (mutableUiState.value.githubVisible) connectGitHub(event.reason)
+    }
+
+    private fun answerConnectRequest(outcome: ConnectOutcome) {
+        val request = mutableUiState.value.connectRequest ?: return
+        mutableUiState.update { it.copy(connectRequest = null) }
+        viewModelScope.launch {
+            agents.resolveConnect(request.sessionId, request.requestId, outcome)
+        }
+    }
+
+    /** "Not now", said out loud, so the agent can work around it rather than wait. */
+    fun declineConnection() {
+        answerConnectRequest(ConnectOutcome(connected = false))
+        mutableUiState.update { it.copy(githubVisible = false) }
+        github.cancel()
+    }
+
+    /**
+     * Coming back to a request that is still waiting.
+     *
+     * Not [showGitHub]: that opens the sheet and asks the box what it knows, which is right when
+     * somebody went looking for the setting and wrong here. An agent is already waiting, the
+     * answer is already known to be "not connected", and a sheet that opens on a Connect button
+     * spends a tap re-establishing what the banner they just tapped had already said.
+     */
+    fun resumeConnection() {
+        mutableUiState.update { it.copy(githubVisible = true) }
+        connectGitHub(mutableUiState.value.connectRequest?.reason)
+    }
+
+    fun showGitHub() {
+        mutableUiState.update { it.copy(githubVisible = true) }
+        wakeComputerIfNeeded()
+        control?.let(github::check)
+    }
+
+    fun dismissGitHub() {
+        mutableUiState.update { it.copy(githubVisible = false) }
+        // Deliberately does not answer an outstanding request: see [offerConnection].
+        github.cancel()
+    }
+
+    fun connectGitHub(reason: String? = null) {
+        val runtime = control ?: return showNotice("Your box is still starting.")
+        github.connect(runtime, reason)
+    }
+
+    fun githubRepositoriesChosen() = github.repositoriesChosen()
+
+    /** A token the user made themselves. Never stored by Box, never logged. */
+    fun submitGitHubToken(token: String) = github.submitToken(token)
+
+    fun disconnectGitHub() {
+        control?.let(github::disconnect) ?: showNotice("Your box is still starting.")
     }
 
     // -----------------------------------------------------------------------
