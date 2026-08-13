@@ -1,9 +1,9 @@
 # Notes from inside
 
 Findings that can only be made from **inside a running Box** — by the agent, on the
-device, against the image the user is actually holding. Everything here was observed
-from the guest at a known image commit, not inferred from reading this repository on a
-laptop.
+device, against the image the user is actually holding. Everything in the observation
+column here was seen from the guest at a known image commit, not inferred from reading
+this repository on a laptop.
 
 The value of the genre is that some defects are invisible from outside. A tool that
 returns a plausible result to the model while showing the user nothing looks healthy in
@@ -19,12 +19,24 @@ the **Re-check** line. A finding that no longer reproduces should be moved to th
 "Resolved" section with the image commit that fixed it, rather than deleted — the
 history of what was once broken is the point.
 
+One distinction the document has to keep making, because getting it wrong is how the
+first version of finding 1 went astray: **observed**, **read from source**, and
+**reasoned from a contract** are three different strengths of claim. Only the first
+needs a device. The other two can be checked from a laptop, and where one has been, this
+says so.
+
 ## What the agent cannot do from in here
 
 Stated up front, because it bounds every claim below.
 
 - **No JDK, no Android SDK, no Docker.** The Box app cannot be built or run from the
   guest. Every claim about Kotlin behaviour is read from source, never executed.
+- **No installed copy of the Agent SDK to read.** The harness's dependencies are not
+  vendored into the image, so the guest can see `guest/harness/package.json` — which
+  pins the version — but not the package it names. Anything about the SDK's own contract
+  therefore has to be checked from somewhere with a network, against that pinned
+  version. Finding 1 is the cautionary tale: guessing at it from the outside produced a
+  confident, wrong mechanism.
 - **Fully emulated ARM64 under QEMU on a phone.** Slow. Reading and reasoning beats
   speculative rebuilds.
 - `/usr/src/box` is the baked source at the running commit — authoritative for *what
@@ -34,132 +46,152 @@ Stated up front, because it bounds every claim below.
 
 ---
 
-## 1. `AskUserQuestion` is inert, and fails silently in the worst direction
+## 1. `AskUserQuestion` was inert, and failed silently in the worst direction
 
-**Severity: high.** The agent cannot put a choice in front of the user. Worse, it does
-not *know* it cannot: the tool returns a normal-looking result, so the agent believes it
-asked and was ignored.
+**Severity: high. Diagnosed, and fixed in this branch — but the fix has not run on a
+device.** Read the last two sub-sections before trusting it.
 
-### What the user sees
+### What the user saw
 
 A tool card titled `AskUserQuestion` showing truncated raw JSON, then a permission line
 — *"Allow AskUserQuestion? · You allowed this"* — and then nothing. No options, no
-prompt. The user approves *the act of asking* and is then never asked.
+prompt. The user approved *the act of asking* and was then never asked.
 
-### What the agent sees
+### What the agent saw
 
 The tool result `The user did not answer the questions.` — indistinguishable from a user
 who saw the question and declined to engage. The agent's reasonable next move is to
 apologise for the non-answer or to proceed on an assumption, both of which are wrong.
 
 This is the part that makes it worth a document rather than a bug report. A tool that
-*failed* would be fine: the agent would see an error and adapt. This one launders a
+*failed* would be fine: the agent would see an error and adapt. This one laundered a
 missing UI into a factual claim about the user's behaviour.
 
-### Why: two independent halves, both required
+### Why: one mechanism, and it was hiding in plain sight
 
-**Half A — Box models no question tool.** `app/.../agent/AgentEvent.kt` defines
-`sealed interface ToolCall` with exactly seven modelled kinds — `Shell`, `ReadFile`,
-`EditFile`, `WriteFile`, `Search`, `Fetch`, and `Task`. Everything else falls to:
+`AskUserQuestion` is an ordinary tool, with an ordinary input and output typed in the
+SDK's `sdk-tools.d.ts`. It does not travel on a separate dialog channel. The answer path
+is a single optional field on its **input**:
 
-```kotlin
-/** Anything Box does not model yet. Renders as a labelled key/value card, never raw JSON. */
-data class Generic(
-    val name: String,
-    val arguments: List<Pair<String, String>> = emptyList(),
-) : ToolCall
+```ts
+export interface AskUserQuestionInput {
+  questions: [ /* … */ ];
+  /**
+   * User answers collected by the permission component
+   */
+  answers?: { [k: string]: string };
+  /* … */
+}
 ```
 
-`AskUserQuestion` lands here. There is no `ToolCall.Question`, nothing in
-`ui/TranscriptItems.kt` that renders selectable options, and no path for a selection to
-travel back. Grepping the whole Kotlin tree for `AskUserQuestion` returns nothing — Box
-has never heard of it.
+"Collected by the permission component" is the whole of it. The host is expected to
+render the questions *in its permission surface* and return the tool's own input with
+`answers` filled in:
 
-**Half B — the guest harness never opts in to dialogs.** This is the half that explains
-the *instant* no-answer rather than a hang, and it is not in this repository's Kotlin at
-all — it is in `guest/harness/box-claude-harness.mjs` and the SDK it drives
-(`@anthropic-ai/claude-agent-sdk` 0.3.226, pinned in `guest/harness/package.json`).
-
-The SDK exposes a dedicated blocking-dialog channel: an `onUserDialog` callback plus a
-`supportedDialogKinds` declaration. Its own type definitions are explicit that the
-declaration is load-bearing, and that the CLI fails closed without it:
-
-> Dialog kinds this consumer's `onUserDialog` can actually render […] Providing
-> `onUserDialog` alone does NOT opt the consumer into receiving dialogs — the CLI only
-> emits a dialog kind declared here.
->
-> The CLI fails closed on absence: a dialog kind not declared here is never emitted to
-> this session — **the flow behind it degrades to its no-dialog behavior**. Omitting the
-> option entirely means no dialogs are emitted, even with `onUserDialog` wired.
-
-The harness passes neither option. So the question is never offered to the host at all,
-and the flow behind it takes its no-dialog path immediately. That matches the observed
-timing exactly: the result comes back at once, not after a wait.
-
-### Confidence, stated honestly
-
-- **Half A is proven.** Read directly from source at the shipped commit.
-- **Half B is strongly supported but not proven.** The fail-closed contract is quoted
-  from the SDK's own `sdk.d.ts`; the instant no-answer is consistent with it. What has
-  *not* been established is the specific `dialogKind` string `AskUserQuestion` uses. The
-  CLI's answer-handling strings are visible in the shipped binary (`The user answered:`,
-  `Your questions have been answered:`, `Before going idle the user had selected:`,
-  alongside `The user did not answer the questions.`), which confirms a real answer path
-  exists and has more than one shape — but the emitting call site was not located.
-
-Anyone implementing the fix should pin that string first rather than trust this document
-for it.
-
-### The good news: the return channel already exists
-
-`app/.../agent/AgentBackend.kt` already carries a request/response round trip keyed by
-request id:
-
-```kotlin
-suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
+```ts
+export declare type PermissionResult = {
+    behavior: 'allow';
+    updatedInput?: Record<string, unknown>;
+    /* … */
+};
 ```
 
-with the guest end in the harness — `emit({ type: 'permission_requested', requestId, ask })`,
-a `pendingPermissions` map, and a resolver that settles the promise when the answer
-arrives. A question round trip is the same shape with a wider answer type: N options
-instead of allow/deny. The plumbing does not need inventing, only widening.
+Box's `canUseTool` resolved `{ behavior: 'allow' }` with no `updatedInput` at all. So the
+tool ran with `answers` undefined and said, accurately from its own point of view, that
+the user had not answered.
 
-Sketch, deliberately not a patch:
+That also explains the shape of what the user saw, which no other theory did: they were
+shown a permission line **because the permission sheet is exactly where the question was
+supposed to be**. Nothing was missing from the screen by accident; the sheet was asked
+the wrong question and answered it correctly.
 
-1. Harness declares `supportedDialogKinds` and implements `onUserDialog`, emitting a
-   `question_requested` line and awaiting a `question_answered` command — mirroring the
-   existing permission pair.
-2. `HarnessWire.parse` grows the matching arm; unknown lines already degrade to silence,
-   so an older APK against a newer guest stays safe.
-3. A `ToolCall.Question` variant, rendered in `TranscriptItems.kt` as tappable options.
-4. `AgentBackend.resolveQuestion(sessionId, requestId, answers)` alongside
-   `resolvePermission`.
+### The wrong turn this document took first, recorded on purpose
 
-**Interim mitigation, costing nothing:** until the round trip exists, the tool should not
-be offered. An agent that knows to ask in prose loses only the buttons. An agent that
-believes it asked loses the answer *and* charges the user a permission tap for nothing.
+The first version of this finding blamed `supportedDialogKinds` — an SDK option the
+harness genuinely does not pass, whose own type definitions genuinely do say the CLI
+fails closed without it. Every quoted fact was accurate. The conclusion was still wrong:
+that option governs a *different* family of blocking dialogs, and the only kind its
+documentation names is `refusal_fallback_prompt`. Declaring it would have changed
+nothing.
+
+The tell was there and was written down as an open question — "the specific `dialogKind`
+string was not established". It was not established because there is no such string for
+this tool. An unresolved detail at the centre of a mechanism is usually not a detail.
+
+It is left in the record because the failure mode is worth more than the fix: a
+plausible mechanism, assembled from true quotations, that sends the next person to
+implement a channel that does not exist. The pinned SDK was one `npm pack` away the
+whole time.
+
+### What changed
+
+The round trip runs through the permission channel that was already there, because that
+*is* the channel:
+
+- The harness describes an `AskUserQuestion` call as a new ask kind, `question`, carrying
+  the questions and their options rather than a risk to weigh.
+- `HarnessWire` parses it into `PermissionAsk.Questions`; a question with no answerable
+  options degrades to the ordinary allow/deny ask rather than drawing a dead end.
+- The sheet renders the questions — header chip, options with their descriptions,
+  multi-select where asked for, and a free-text "Something else", which exists because
+  the tool tells the model not to write an "Other" option on the grounds that the host
+  will supply one. "Answer" stays disabled until every question has something in it.
+- The answer comes back as `PermissionDecision.Answered`, goes down the wire as a plain
+  `allow` **carrying an `answers` field**, and the harness folds it into `updatedInput`.
+  A plain allow on the wire is deliberate: a guest image older than this change reads an
+  allow it already understands and ignores a field it has never heard of, which loses the
+  answer and nothing else. A new decision word would have been read as "not allowed" and
+  failed the call outright.
+- Answers are dropped unless they key a question that call actually asked, on both sides.
+  The app and the guest image are upgraded independently, and an answer to a question
+  nobody asked would otherwise reach the model looking exactly like one somebody gave.
+- A `PreToolUse` hook pins this one tool to `ask` regardless of permission mode. Without
+  it, `bypassPermissions` skips the permission flow entirely — and a question asked in
+  that mode would be put to nobody and then reported as one the user declined to answer,
+  which is this same bug with a setting in front of it.
+
+### What has *not* been established
+
+- **None of it has run.** No guest image was rebuilt and nothing was executed on a
+  device. The Kotlin compiles and its unit tests pass; the harness's node tests pass.
+  That is a long way from a person tapping an option on a phone.
+- **The `PreToolUse` hook is reasoned from the SDK's types, not observed.** That a hook
+  returning `permissionDecision: 'ask'` routes through `canUseTool` under
+  `bypassPermissions` follows from the contract and has not been watched happening. If it
+  turns out not to, the mode is the one case where a question still reaches nobody — and
+  the tool card the harness now draws for `AskUserQuestion` is what keeps that case from
+  being silent.
+- **The SDK evidence above was read on a laptop**, from `@anthropic-ai/claude-agent-sdk`
+  at `0.3.226`, the version `guest/harness/package.json` pins. It is not a guest
+  observation, and the guest could not have made it — see the second bullet under "what
+  the agent cannot do from in here".
 
 **Re-check:** call `AskUserQuestion` with two options. Fixed when the options render and
-the choice returns. Still broken if the result is `The user did not answer the
-questions.`
+the choice comes back in the tool result. Still broken if the result is `The user did not
+answer the questions.` Then do it again with the permission mode set to allow everything,
+which is the half that rests on the hook.
 
 ---
 
-## 2. `ToolCall.Generic` renders raw JSON, contradicting its own contract
+## 2. `ToolCall.Generic` rendered raw JSON, contradicting its own contract
 
-**Severity: low — cosmetic, but it is a promise the code does not keep.**
+**Severity: low — cosmetic, but it was a promise the code did not keep. Fixed in this
+branch.**
 
 The doc comment says "Renders as a labelled key/value card, **never raw JSON**".
-Arguments are carried as `List<Pair<String, String>>`, so an argument whose *value* is
-JSON is stringified straight onto the card. Observed on screen:
+Arguments are carried as `List<Pair<String, String>>`, so an argument whose *value* was
+JSON arrived pre-stringified. Observed on screen:
 
 ```
 questions  [{"question":"Now that the inbound channel works, what's wo…
 ```
 
-Any unmodelled tool taking a structured argument hits this — `AskUserQuestion` is just
-the first one that mattered. Either the comment should be softened or `Generic` should
-pretty-print values that parse as JSON.
+Worth noting where the fault actually was, because the first version of this finding
+filed it against the Kotlin: the `JSON.stringify` was in the **harness**, in the guest.
+The Kotlin comment was a promise broken a layer upstream, by the half of the pair that
+ships in the image. Structure is now written out as words — an object becomes its
+`key: value` pairs, a list becomes its items, and anything nested past that is named by
+its shape — so any unmodelled tool with a structured argument gets a readable card.
 
 **Re-check:** invoke any unmodelled tool with an object- or array-valued argument and
 look at the card.
@@ -213,6 +245,11 @@ on the phone.
 - **Agent could not see its own desktop** *(broken at `9cbeb134`, fixed by `6206ff49`)* —
   `scrot` is in the image; `scrot /tmp/screen.png` against `:0` works, so GUI work is no
   longer done blind.
+
+Findings 1 and 2 are *not* listed here, and will not be until an image built from this
+branch has been run on a device and their **Re-check** lines have passed. A fix that
+compiles is not a fix that reproduces, and this section is the one place in the document
+that is allowed to mean "verified".
 
 ---
 

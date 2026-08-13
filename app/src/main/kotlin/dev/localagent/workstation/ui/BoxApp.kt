@@ -63,6 +63,7 @@ import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.GuestAuth
+import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopTransport
@@ -212,7 +213,13 @@ fun BoxApp(
                 BoxLayout.Single -> reviewing
                     ?: waiting.firstOrNull { it.requestId !in dismissedRequests }
 
-                BoxLayout.Wide -> reviewing
+                // A question is the exception the reasoning above does not cover. The objection to
+                // opening automatically here was duplication — a second live Allow/Deny drawn on
+                // top of the first — and a question card carries no answer to duplicate. It sends
+                // you to the sheet either way, so opening it is the same trip with one tap fewer.
+                BoxLayout.Wide -> reviewing ?: waiting.firstOrNull {
+                    it.ask is PermissionAsk.Questions && it.requestId !in dismissedRequests
+                }
             }
 
 
