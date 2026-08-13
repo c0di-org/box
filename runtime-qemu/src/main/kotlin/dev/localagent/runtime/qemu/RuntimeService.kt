@@ -17,6 +17,8 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.localagent.runtime.api.ExecRequest
+import dev.localagent.runtime.api.PortForward
+import dev.localagent.runtime.api.PortForwardRequest
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.shared.SharedFolderBridge
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +40,14 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class RuntimeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Forwards handed out to the UI process, so a later release can close the right one.
+     *
+     * Held here rather than in the UI because the UI process is the one Android kills: a forward
+     * whose only handle died with a Compose process would stay open until the VM stopped.
+     */
+    private val forwards = java.util.concurrent.ConcurrentHashMap<Int, PortForward>()
 
     /** A process retires once; a second settled state must not queue another kill. */
     private val retiring = AtomicBoolean(false)
@@ -150,6 +160,33 @@ class RuntimeService : Service() {
             }
         }
 
+        override fun forwardPort(guestPort: Int, callback: IPortForwardCallback) {
+            touch()
+            scope.launch {
+                try {
+                    val forward = runtime.forwardPort(
+                        PortForwardRequest(guestPort, purpose = "preview"),
+                    )
+                    forwards[guestPort] = forward
+                    callback.onForwarded(guestPort, "http://127.0.0.1:${forward.localPort}/")
+                } catch (error: Exception) {
+                    Log.w(TAG, "Could not forward guest port $guestPort", error)
+                    runCatching {
+                        callback.onError(error.readableMessage("Could not open a preview"))
+                    }
+                }
+            }
+        }
+
+        override fun releasePort(guestPort: Int) {
+            touch()
+            scope.launch {
+                // Nothing is reported back. The caller is tidying up, and the honest answer to a
+                // failure here is that the forward dies with the VM anyway.
+                runCatching { forwards.remove(guestPort)?.close() }
+            }
+        }
+
         override fun openAgentSession(
             sessionId: String,
             command: Array<out String>,
@@ -245,8 +282,24 @@ class RuntimeService : Service() {
             IntentFilter(ACTION_QUERY_STATE),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
+        // Where the runtime is sitting before anything has been asked of it. Read here, on the
+        // main thread, so it is settled before any `onStartCommand` can move it.
+        val resting = runtime.state().value
         // The VM lives in `:computer`; the Compose process cannot observe this StateFlow directly.
-        scope.launch { runtime.state().collect(::publishState) }
+        scope.launch {
+            var first = true
+            runtime.state().collect { state ->
+                // A process created by a *bind* has done nothing and has nothing to announce — and
+                // the UI binds a stopped computer on purpose, to read a closed box's session logs.
+                // Broadcasting where it happens to be sitting would answer the Open the user
+                // pressed a second ago with "the box is closed", and take the progress they are
+                // watching away with it. A state the runtime actually entered is always published;
+                // only this one resting value, and only once, is kept quiet.
+                val settling = first && state == resting
+                first = false
+                if (!settling) publishState(state)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -364,7 +417,11 @@ class RuntimeService : Service() {
         idleWatch = scope.launch {
             while (isActive) {
                 delay(IDLE_POLL_MILLIS)
-                if (sessions.values.any { it.isRunning }) {
+                // A live forward counts, and it is the one kind of use this timer cannot see any
+                // other way: a preview the user is reading goes straight through QEMU's network
+                // stack to the guest and never touches the binder, so every check below would
+                // report a box nobody wants — while the user watches it close.
+                if (sessions.values.any { it.isRunning } || forwards.isNotEmpty()) {
                     touch()
                     continue
                 }

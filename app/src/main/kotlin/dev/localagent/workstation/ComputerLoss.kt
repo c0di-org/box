@@ -27,7 +27,15 @@ internal object ComputerLoss {
     fun after(last: RuntimeState): RuntimeState? = when (last) {
         // Nothing was running, or the end was already reported. The process going away next is
         // ordinary housekeeping.
+        //
+        // Suspended is here for a sharper reason than the others. Saving a box *is* the process
+        // ending: QEMU writes the guest out and exits, and `:computer` retires behind it, so this
+        // disconnect is not the aftermath of the operation — it is the operation. This branch used
+        // to answer "the computer stopped unexpectedly", which was harmless only for as long as
+        // nothing could reach the state. Now the idle timer reaches it every time it fires, and
+        // the message would land on a box sitting saved and unharmed.
         RuntimeState.Stopped,
+        RuntimeState.Suspended,
         RuntimeState.NotProvisioned,
         is RuntimeState.Failed,
         -> null
@@ -39,8 +47,9 @@ internal object ComputerLoss {
             RuntimeFailure("The computer stopped while it was starting up.", recoverable = true),
         )
 
+        // Suspending stays a failure: the process dying *during* a save means the box may not
+        // have been saved, which is worth saying out loud.
         RuntimeState.Ready,
-        RuntimeState.Suspended,
         RuntimeState.Suspending,
         -> RuntimeState.Failed(
             RuntimeFailure("The computer stopped unexpectedly.", recoverable = true),
@@ -60,13 +69,22 @@ internal object ComputerLoss {
      * Binding only once the computer is [RuntimeState.Ready] is what left the startup path
      * unwatched. Box holds the connection across the whole time the computer is meant to be alive,
      * so a death during boot is heard immediately rather than waited out.
+     *
+     * This is about *watching*, and it is not the only reason Box binds `:computer`. The agent
+     * backend holds a connection of its own to read a closed box's session logs — the process, not
+     * the VM. Answering false here never means "nobody may bind"; it means there is no VM whose
+     * death this connection would be reporting.
      */
     fun shouldWatch(state: RuntimeState): Boolean = when (state) {
         RuntimeState.Starting, RuntimeState.Connecting, RuntimeState.Ready,
-        RuntimeState.Stopping, RuntimeState.Suspending, RuntimeState.Suspended,
+        RuntimeState.Stopping, RuntimeState.Suspending,
         -> true
 
-        RuntimeState.Stopped, RuntimeState.NotProvisioned, is RuntimeState.Failed -> false
+        // A saved box has no VM left for this connection to report the death of, exactly as a
+        // closed one does not.
+        RuntimeState.Stopped, RuntimeState.Suspended,
+        RuntimeState.NotProvisioned, is RuntimeState.Failed,
+        -> false
         is RuntimeState.Provisioning -> true
     }
 }

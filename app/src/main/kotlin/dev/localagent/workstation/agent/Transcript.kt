@@ -42,7 +42,12 @@ sealed interface TranscriptItem {
     val key: String
     val at: Long
 
-    data class User(override val key: String, override val at: Long, val text: String) : TranscriptItem
+    data class User(
+        override val key: String,
+        override val at: Long,
+        val text: String,
+        val attachments: List<Attachment> = emptyList(),
+    ) : TranscriptItem
 
     data class Agent(
         override val key: String,
@@ -216,7 +221,7 @@ class TranscriptBuilder(
             }
 
             is AgentEvent.UserMessage ->
-                put(TranscriptItem.User("user:${event.eventId}", event.at, event.text))
+                put(TranscriptItem.User("user:${event.eventId}", event.at, event.text, event.attachments))
 
             is AgentEvent.AgentMessage -> {
                 val key = messageKeys.getOrPut(event.messageId) { "msg:${event.messageId}" }

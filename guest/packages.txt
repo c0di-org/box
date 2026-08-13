@@ -24,3 +24,4 @@ xfonts-base
 openbox
 xterm
 dbus-x11
+scrot

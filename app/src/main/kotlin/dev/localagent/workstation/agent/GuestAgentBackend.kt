@@ -86,12 +86,43 @@ class GuestAgentBackend(
     private fun permissionModeCommand(mode: AgentPermissionMode) =
         mapOf("type" to "permission_mode", "mode" to mode.wire)
 
+    /**
+     * The last window Box was read in, held only in memory.
+     *
+     * Not persisted, unlike the permission mode, and the asymmetry is deliberate: a mode the user
+     * chose is still their choice after a restart, while a window size restored from disk describes
+     * a window that no longer exists. Null until the UI has measured itself, which is the honest
+     * state — a harness that is told nothing writes the way it always has.
+     */
+    @Volatile private var viewport: AgentViewport? = null
+
+    override suspend fun setViewport(viewport: AgentViewport) {
+        if (this.viewport == viewport) return
+        this.viewport = viewport
+        records.values.forEach { it.write(viewportCommand(viewport)) }
+    }
+
+    private fun viewportCommand(viewport: AgentViewport): Map<String, Any> = mapOf(
+        "type" to "viewport",
+        "layout" to viewport.layout.wire,
+        "widthDp" to viewport.widthDp,
+        "hardwareKeyboard" to viewport.hardwareKeyboard,
+    )
+
     /** One attached session: its live chunks, its handle, and how the transcript reached it. */
     private class Record(
         val id: String,
         val harnessId: String,
         var title: String,
         val workingDirectory: String,
+        /**
+         * Read back from the session index at launch, rather than started in this process.
+         *
+         * Which is the same thing as saying `:computer` has a log for it: a session only reaches
+         * the index once it has been given work. See [attachPlan] — this is what makes a
+         * transcript readable with the box closed.
+         */
+        val restored: Boolean = false,
     ) {
         val chunks = MutableSharedFlow<Pair<Long, ByteArray>>(
             extraBufferCapacity = 256,
@@ -100,6 +131,17 @@ class GuestAgentBackend(
         val connection = MutableStateFlow<SessionConnection>(SessionConnection.Connecting)
         val logPath = CompletableDeferred<String>()
         @Volatile var handle: IAgentSession? = null
+
+        /**
+         * Whether this session has been opened against the guest that is running *now*.
+         *
+         * Not "has a log": those two used to be the same question, answered by whether the log
+         * path had arrived, and they stopped being the same the moment a closed box was allowed to
+         * fetch that path just to read the history. A session whose log has been read but whose
+         * harness has never been started in this guest still needs opening, or the message the
+         * user typed while the box was closed would be delivered to nothing.
+         */
+        @Volatile var opened: Boolean = false
 
         /** Last status published, so a live line only republishes when it changes something. */
         @Volatile var status: SessionStatus = SessionStatus.Idle
@@ -135,6 +177,7 @@ class GuestAgentBackend(
         restored.forEach { summary ->
             records[summary.id] = Record(
                 summary.id, summary.harnessId, summary.title, summary.workingDirectory,
+                restored = true,
             ).apply { status = summary.status }
         }
         sessionsState.value = restored
@@ -173,6 +216,7 @@ class GuestAgentBackend(
                 // The guest is gone or not there yet; anything held for it is held a while longer.
                 records.values.forEach {
                     it.attached.set(false)
+                    it.opened = false
                     it.handle = null
                 }
                 return
@@ -191,6 +235,7 @@ class GuestAgentBackend(
             controlState.value = null
             records.values.forEach {
                 it.attached.set(false)
+                it.opened = false
                 it.handle = null
                 it.connection.value = SessionConnection.Disconnected("The computer stopped", true)
             }
@@ -287,7 +332,11 @@ class GuestAgentBackend(
     override fun connection(sessionId: String): StateFlow<SessionConnection> =
         (records[sessionId]?.connection ?: MutableStateFlow(SessionConnection.Ended)).asStateFlow()
 
-    override suspend fun startSession(harnessId: String, prompt: String?): String {
+    override suspend fun startSession(
+        harnessId: String,
+        prompt: String?,
+        attachments: List<Attachment>,
+    ): String {
         val id = "s-" + System.currentTimeMillis().toString(36)
         val record = Record(
             id = id,
@@ -299,16 +348,44 @@ class GuestAgentBackend(
         publish(record, SessionStatus.Active, prompt)
 
         attach(record)
-        if (prompt != null) send(id, prompt)
+        if (prompt != null) send(id, prompt, attachments)
         return id
     }
 
-    override suspend fun send(sessionId: String, text: String) {
+    override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
         val record = records[sessionId] ?: return
         attach(record)
-        record.write(mapOf("type" to "prompt", "text" to text))
+        record.write(promptCommand(text, attachments))
         publish(record, SessionStatus.Active, text)
     }
+
+    /**
+     * A turn, with anything the user showed alongside it.
+     *
+     * The files are not carried here. They were written into the shared folder before this was
+     * called and reach the guest by the sync that folder already has, so all that crosses is the
+     * path each one will be at. What the guest does *not* get is a promise that they have arrived
+     * yet: the harness waits for them before handing the turn to the model, because the copy is a
+     * second or so behind the keystroke and the alternative is an agent that looks too early and
+     * tells the user it cannot see their picture.
+     */
+    private fun promptCommand(text: String, attachments: List<Attachment>): Map<String, Any> =
+        if (attachments.isEmpty()) {
+            mapOf("type" to "prompt", "text" to text)
+        } else {
+            mapOf(
+                "type" to "prompt",
+                "text" to text,
+                "attachments" to attachments.map {
+                    mapOf(
+                        "guestPath" to it.guestPath,
+                        "name" to it.name,
+                        "mimeType" to it.mimeType,
+                        "bytes" to it.bytes,
+                    )
+                },
+            )
+        }
 
     override suspend fun resolvePermission(
         sessionId: String,
@@ -357,16 +434,30 @@ class GuestAgentBackend(
 
     // ---- attaching ---------------------------------------------------------
 
-    /** Idempotent: opens the session if it is new, re-attaches if `:computer` already has it. */
+    /**
+     * Idempotent, and safe with the box shut: see [attachPlan] for what it can do when.
+     *
+     * The one thing it must never do is start a VM. Binding `:computer` creates the process that
+     * holds the session logs — nothing more — and QEMU is started by `ACTION_START` alone, which
+     * is a thing the user asks for.
+     */
     private suspend fun attach(record: Record) {
         if (record.attached.get()) return
-        if (!runtimeReady) {
+        val plan = attachPlan(
+            runtimeReady = runtimeReady,
+            opened = record.opened,
+            hasHistory = record.restored || record.logPath.isCompleted,
+        )
+        if (plan == AttachPlan.Wait) {
             // Not a failure, and deliberately not an attempt. The broadcast for Ready brings us
             // back here with whatever the user typed still in the outbox.
             record.connection.value =
                 SessionConnection.Disconnected("The computer is still starting", true)
             return
         }
+        // The log has already been handed over, and `events()` reads it from disk itself. There is
+        // nothing left for a closed box to ask.
+        if (plan == AttachPlan.ReadHistory && record.logPath.isCompleted) return
         val control = control() ?: run {
             record.connection.value =
                 SessionConnection.Disconnected("The computer is still starting", true)
@@ -375,9 +466,8 @@ class GuestAgentBackend(
         if (!record.attached.compareAndSet(false, true)) return
         val callback = Listener(record)
         runCatching {
-            if (record.logPath.isCompleted) {
-                control.attachAgentSession(record.id, callback)
-            } else {
+            if (plan == AttachPlan.Open) {
+                record.opened = true
                 control.openAgentSession(
                     record.id,
                     HARNESS_COMMAND,
@@ -391,26 +481,51 @@ class GuestAgentBackend(
                     },
                     callback,
                 )
+            } else {
+                // Both [AttachPlan.Reattach] and [AttachPlan.ReadHistory] are this call. The
+                // service answers a session it is running by streaming it, and one it has never
+                // heard of with the path to its log — which is precisely the read-back.
+                control.attachAgentSession(record.id, callback)
             }
         }.onFailure {
             record.attached.set(false)
+            record.opened = false
             record.connection.value = SessionConnection.Disconnected("Could not reach the computer", true)
         }
     }
 
     private inner class Listener(private val record: Record) : IAgentSessionCallback.Stub() {
+        /**
+         * Whether there was ever a process behind this attachment.
+         *
+         * False for a transcript read back with the box closed. `attachAgentSession` answers a
+         * session nothing is running with `onAttached(null)` and then `onClosed` — the same two
+         * calls a session makes when it really does end, because from the service's side there is
+         * nothing to tell apart. Taking that at face value would stamp a task that has been
+         * waiting on the user since yesterday as Finished, and — since a summary carries the
+         * moment it was published — jump it to the top of the list for having been *looked at*.
+         */
+        @Volatile private var live = false
+
         override fun onAttached(session: IAgentSession?, logPath: String) {
             record.handle = session
+            live = session != null
             record.connection.value =
                 if (session == null) SessionConnection.Ended else SessionConnection.Live
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
             if (session != null) {
                 // Whatever the user asked for while the computer was still starting — with the
-                // permission mode ahead of it. Every harness process starts out asking, including
-                // one that came back after `:computer` died, so a prompt delivered before the mode
-                // would run its first turn under a setting the user had already changed. This is
-                // the one place both orders meet, so it is the only place that can promise it.
-                record.flushOutbox(first = permissionModeCommand(modeState.value))
+                // standing settings ahead of it. Every harness process starts out asking and knowing
+                // nothing about the window, including one that came back after `:computer` died, so
+                // a prompt delivered before them would run its first turn under a setting the user
+                // had already changed, or write for a screen it cannot see. This is the one place
+                // all of those orders meet, so it is the only place that can promise them.
+                record.flushOutbox(
+                    first = listOfNotNull(
+                        permissionModeCommand(modeState.value),
+                        viewport?.let(::viewportCommand),
+                    ),
+                )
                 // A session that failed to open earlier is no longer failed, and the list has to
                 // stop saying so.
                 scope.launch { publish(record, SessionStatus.Active) }
@@ -432,7 +547,10 @@ class GuestAgentBackend(
         override fun onClosed(exitCode: Int, error: String?) {
             record.handle = null
             record.attached.set(false)
+            // Honest either way: a session with no process is over, whether it ended a second ago
+            // or last week. The conversation shows it under the box's own "closed · Open" banner.
             record.connection.value = SessionConnection.Ended
+            if (!live) return
             scope.launch {
                 publish(record, if (error == null) SessionStatus.Finished else SessionStatus.Failed(error))
             }
@@ -471,8 +589,8 @@ class GuestAgentBackend(
      * queued since before the boot, and the agent would read the user's turns out of order.
      * `IAgentSession.write` is `oneway`, so nothing waits on the guest while the lock is held.
      */
-    private fun Record.write(command: Map<String, String>) {
-        val json = encode(command)
+    private fun Record.write(command: Map<String, Any>) {
+        val json = HarnessWire.encode(command)
         synchronized(outbox) {
             val live = handle
             if (live == null || outbox.isNotEmpty()) {
@@ -487,21 +605,17 @@ class GuestAgentBackend(
         }
     }
 
-    private fun encode(command: Map<String, String>): String =
-        command.entries.joinToString(",", "{", "}") { (key, value) ->
-            "${JsonString(key)}:${JsonString(value)}"
-        }
 
     /**
      * Everything written while the guest process was still starting, in the order it was written,
      * behind [first] — which exists so a session's standing settings can be stated to a brand new
-     * process before the work it was queued to do.
+     * process before the work it was queued to do, in the order given.
      */
-    private fun Record.flushOutbox(first: Map<String, String>? = null) {
+    private fun Record.flushOutbox(first: List<Map<String, Any>> = emptyList()) {
         synchronized(outbox) {
             val live = handle ?: return
             val undelivered = mutableListOf<String>()
-            for (json in listOfNotNull(first?.let(::encode)) + outbox) {
+            for (json in first.map(HarnessWire::encode) + outbox) {
                 runCatching { live.write((json + "\n").toByteArray()) }
                     .onFailure {
                         Log.e(TAG, "could not deliver a queued command", it)
@@ -561,6 +675,42 @@ class GuestAgentBackend(
 }
 
 /**
+ * What attaching to a session can do, given what is running.
+ *
+ * The row worth reading is [AttachPlan.ReadHistory]. A transcript is a log file in `:computer`'s
+ * private storage, appended to as the agent worked and left there when it stopped — so a task from
+ * last week can be read back with the box shut, and "shut, with a week of work behind it" is the
+ * ordinary state of someone coming back to Box. Reading it needs the `:computer` *process*, which
+ * binding creates; it does not need a booted VM, and must not cause one. This used to be refused
+ * outright, and a task with a hundred messages in it opened onto "Nothing yet".
+ *
+ * [opened] is asked before [hasHistory] because a running computer beats a readable log: the
+ * session the user is looking at should be one they can talk to.
+ */
+internal fun attachPlan(runtimeReady: Boolean, opened: Boolean, hasHistory: Boolean): AttachPlan =
+    when {
+        runtimeReady && opened -> AttachPlan.Reattach
+        runtimeReady -> AttachPlan.Open
+        hasHistory -> AttachPlan.ReadHistory
+        else -> AttachPlan.Wait
+    }
+
+/** See [attachPlan]. */
+internal enum class AttachPlan {
+    /** Start the harness. Nothing is running this session in the guest that is up now. */
+    Open,
+
+    /** `:computer` is already running it; pick the stream up from where the log leaves off. */
+    Reattach,
+
+    /** Nothing is running, but something happened here once. Read it back from the log. */
+    ReadHistory,
+
+    /** A session with no history and no computer to run it. Nothing to show, nothing to fetch. */
+    Wait,
+}
+
+/**
  * The session list's reading of one harness line, or null when the line says nothing about it.
  *
  * This is the one fact a summary cannot get from the session's own lifecycle. Everything else in
@@ -603,20 +753,4 @@ private fun reasonFor(ask: PermissionAsk): String = when (ask) {
     is PermissionAsk.RunCommand -> "It wants to run a command"
     is PermissionAsk.NetworkAccess -> "It wants to reach the network"
     is PermissionAsk.Generic -> "It needs your decision"
-}
-
-/** Minimal JSON string escaping — the harness protocol is the only consumer. */
-private fun JsonString(value: String): String = buildString {
-    append('"')
-    value.forEach { character ->
-        when (character) {
-            '"' -> append("\\\"")
-            '\\' -> append("\\\\")
-            '\n' -> append("\\n")
-            '\r' -> append("\\r")
-            '\t' -> append("\\t")
-            else -> if (character < ' ') append("\\u%04x".format(character.code)) else append(character)
-        }
-    }
-    append('"')
 }

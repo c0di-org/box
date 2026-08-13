@@ -99,6 +99,7 @@ interface AgentBackend {
     val sessions: StateFlow<List<SessionSummary>>
     val permissionMode: StateFlow<AgentPermissionMode>
     suspend fun setPermissionMode(mode: AgentPermissionMode)
+    suspend fun setViewport(viewport: AgentViewport)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
     suspend fun startSession(harnessId: String, prompt: String?): String
@@ -133,10 +134,137 @@ itself. It started in the header's overflow menu and moved because of where it i
 asking me about this" is a thought someone has *while* being asked, and a setting nobody finds is
 one that turns into fatigue at the sheet instead.
 
+### Artifacts
+
+`ArtifactOffered` carries an `Artifact`: `Computer`, `Preview(url, guestPort)`, or
+`Document(guestPath, name, mimeType)`. On the wire it is
+`{"type": "artifact", "kind": "document", "guestPath": …, "name": …, "mimeType": …}`.
+
+`Preview` is a guest port. Opening one asks the runtime to forward it — QEMU's user-mode network
+stack does that itself, through the human monitor, with no proxy process and no change to the
+guest — and the panel loads the resulting `http://127.0.0.1:<port>/` in a WebView. The forward is
+bound to loopback because a dev server the agent started is for the person holding the phone, not
+for the network they are on, and it is released when the panel closes rather than left to the VM's
+lifetime.
+
+`Document` exists because most of what an agent makes needs no server. Requiring one to show a
+picture would mean starting a web server to hand over a PNG — absurd on a machine this size. It
+carries no bytes: the path is read when the user asks for it, through the same reader the Files
+panel uses, so it obeys the same size ceiling as everything else Box shows from the guest rather
+than inventing a second answer to "too big". Opening one puts it in the Files panel — a view onto
+the machine that floats over it, one at a time, which is what the panel already is.
+
+The degradation rule has one deliberate exception here. Everywhere else an unknown kind renders as
+a labelled card; an artifact this build cannot open is **dropped**, because an artifact is a
+button, and a row offering to open something that opens nothing is worse than no row.
+
+The offer half is a tool the agent calls, `mcp__box__show`, hosted in-process by the Claude
+harness through the Agent SDK's `createSdkMcpServer`. One tool for all three kinds, taking exactly
+one of `path`, `port` or `desktop`, because to the person they are one thing — a button that
+appears in the conversation — and three tools would make the model pick a mechanism before it had
+decided what it wanted to say.
+
+A tool rather than a line the agent is told to print, and that is the load-bearing choice: the
+harness emits the event, so a path is refused *before* it becomes a button and the agent is told
+why in a result it can act on. An agent echoing its own protocol lines would be writing
+unvalidated events into the log the app trusts, with no way to learn it got one wrong.
+
+Two rules the harness enforces, both following from an artifact being a button whose label the
+agent chooses and whose target the person cannot see before tapping:
+
+- **A document is resolved with `realpath` and must land under `/workspace`, outside
+  `/workspace/.config`, and be a regular file that exists.** Tighter than the inbox bound on
+  attachments rather than looser — the app draws the agent's `name`, so a row reading "report.md"
+  that opens the GitHub token is exactly what this refuses. Resolution rather than a prefix test
+  because a symlink defeats the prefix test; existence because a button that opens nothing is
+  worse than no button. There is deliberately no size check: the panel reads the path through the
+  same reader the Files panel uses, so "too big" keeps having one answer.
+- **A preview's port must already have a listener,** checked in `/proc/net/tcp`. Same reasoning:
+  offering a port nothing serves hands the user a WebView full of connection error, and the honest
+  place to fail is a tool result the agent reads. An unreadable table means an unknowable answer
+  and the agent is believed.
+
+`show` is passed in `allowedTools`, so it is the one tool that is never asked about. A sheet
+reading "allow the agent to show you a file?" has one honest answer, and the artifact is itself a
+button nobody has to press — the consent is the tap, and a prompt in front of it asks the same
+question twice. It draws no tool card either: the artifact row is what happened, and a card beside
+it saying so is the same sentence twice.
+
+An artifact carries no `subAgentId` even when a delegate offered it. That is a choice, not an
+omission: a button is addressed to the person, and the person is reading the main thread — one
+buried inside a collapsed sub-agent fold is one they will not find.
+
+`FakeAgentBackend` offers all three too, which is what keeps the path exercised without a VM.
+
+### Attachments ride on the turn
+
+`UserMessage` carries an `Attachment` list beside its text — `guestPath`, `name`, `mimeType`,
+`bytes` — because the UI has to draw a thumbnail and rule 2 above says it must never do that by
+parsing prose. On the wire it is one optional field on `prompt`, following `subAgentId`'s
+precedent: a harness that has never heard of attachments ignores it and the agent gets the text.
+Degraded, never wrong, which is what makes a field acceptable here where `stop_subagent` needed a
+type of its own.
+
+Nothing is carried in that field but a path. The file itself goes into the shared folder under
+`inbox/`, so it reaches the guest by the sync that folder already has, and `/workspace/shared/inbox`
+is the only place a harness will look — an attachment naming anything else is dropped with a
+diagnostic. Two consequences worth stating rather than discovering:
+
+- **The copy is about a second behind the keystroke,** so the harness waits for each file to be
+  whole before handing the turn to the model. Without that, the failure is the one the feature
+  exists to remove: the user shows the agent a picture and the agent says it cannot see it. If a
+  file never arrives the model is told *that*, rather than a path with nothing at it.
+- **Deleting is one-way in both directions.** A file the user deletes on the phone leaves the
+  box's copy where it is, so there is no unsend. The composer says so; do not quietly imply
+  otherwise.
+
+The harness echoes the attachments back into the log with the `user_message` it emits, which is
+what a restored transcript draws from. The app keeps no second record.
+
+`setViewport` tells the agent what it is being read on, so it can write for a phone in one hand or
+for a keyboard and a monitor rather than splitting the difference forever. On the wire it is
+`{"type": "viewport", "layout": "wide", "widthDp": 1280, "hardwareKeyboard": true}`, and it follows
+`permission_mode` exactly: stated to a session before its first prompt, and again whenever it
+changes.
+
+What it deliberately does **not** carry is a device type. "Is this DeX" is the question this
+contract already refuses, and it refuses it harder here — a layout that goes stale is corrected by
+the next frame, while an agent told once that it is talking to a phone believes that for the rest
+of the session, through the fold opening and the window being dragged wider. So every field is
+derived from the window that `BoxWindowSize` measures, re-sent on change, and `hardwareKeyboard` —
+the one fact that comes from the configuration rather than the window — earns its place only
+because it is re-sent too. It is carried apart from `widthDp` because it answers a different
+question: not how much can be shown, but what it is reasonable to ask the *person* to type.
+
+It is a new command type rather than a field on an existing one, for the `stop_subagent` reason: a
+harness that has never heard of `viewport` drops it with a diagnostic and goes on writing as it
+always has, which is a harmless failure. Values keep their JSON types — `widthDp` is a number —
+because the half of the pair that would otherwise have to be lenient about `"1280"` is the half
+that ships inside the guest image, where Box cannot reach it to settle the disagreement.
+
+Nothing about it is persisted, unlike the permission mode. A window size restored from disk
+describes a window that no longer exists, and a backend that has never been told is in an honest
+state: it says nothing, and the agent writes the way it always has.
+
 `interruptSubAgent` is not `interrupt` with an argument. Stopping the session throws away
 everything in flight; stopping a sub-agent asks one delegate to stand down and lets the agent that
 sent it carry on with whatever it hears back. A backend that cannot single one out should do nothing
 rather than fall back to interrupting the session.
+
+A transcript is readable **with the box closed**. Session logs are files in `:computer`'s private
+storage and they outlive the VM by design, so `events()` must replay one whenever the log can be
+reached — which needs the `:computer` process bound, not a booted guest. `GuestAgentBackend`
+decides this with `attachPlan`, and the two rules it exists to hold are: reading a log never starts
+a VM, and reading one is not a session ending — a task that stopped to ask a question yesterday
+must not come back as Finished, or jump to the top of the list, for having been looked at. The
+conversation stays honest about it: the connection is `Ended` and the box's own "Your box is closed
+· Open" banner sits above the history.
+
+`closeSession` is reachable from the list, by swiping a row from the end, as well as from the task's
+own header menu. Both go through one path: the row leaves the list immediately and the close itself
+waits out an undo snackbar (`BoxUiState.closingTaskId`). Nothing is told to the agent during that
+window, which is what makes the undo free — once the close lands, the record, the index entry and
+the guest's copy of the session are all gone.
 
 `FakeAgentBackend` implements all of this with a scripted "clone project and run" flow that pauses
 on a real permission request. It is the demo path and the development target. A second script —

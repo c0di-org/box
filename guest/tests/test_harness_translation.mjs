@@ -195,6 +195,32 @@ test('a Task block is the sub-agent card, and its id is the sub-agent', () => {
   assert.equal('subAgentId' in events[0], false);
 });
 
+test('a checklist update is a plan, and draws no tool card at either end', () => {
+  const started = emitted(() => translateAssistant(assistant([
+    {
+      type: 'tool_use',
+      id: 'todo-1',
+      name: 'TodoWrite',
+      input: { todos: [{ content: 'clone the repo', status: 'in_progress' }] },
+    },
+  ])));
+
+  assert.deepEqual(started.map((event) => event.type), ['task_progress']);
+  assert.deepEqual(started[0].items, [{ text: 'clone the repo', state: 'in_progress' }]);
+
+  // The other half. A `tool_finished` whose start the app never saw is not dropped there — it has
+  // the app build a placeholder card labelled "Tool" out of nothing, one after every checklist.
+  const finished = emitted(() => translateToolResults({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'todo-1', content: 'Todos have been modified' }],
+    },
+  }));
+
+  assert.deepEqual(finished, []);
+});
+
 test('sending a sub-agent is asked for in those words, and never blanket-approved', () => {
   const ask = describeAsk('Task', {
     description: 'Audit runtime-api',

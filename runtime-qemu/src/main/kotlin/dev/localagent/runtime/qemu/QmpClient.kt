@@ -23,6 +23,16 @@ internal class QmpClient(private val socketFile: File) {
     fun queryStatus(): Status = open().use { it.status() }
 
     /**
+     * Runs a single human-monitor command on a connection of its own.
+     *
+     * The shorthand for callers that need exactly one and do not care when it happens relative to
+     * anything else — adding and removing a host forward, which have no QMP equivalent either.
+     * Anything that has to be *ordered* must take a [open] session instead: two connections are
+     * two monitors, and QEMU offers no ordering between them.
+     */
+    fun monitorCommand(command: String): String = open().use { it.monitor(command) }
+
+    /**
      * A negotiated QMP session. Always close it: QEMU holds the monitor open otherwise, and the
      * next connection would be talking to a second monitor while the first still owns the guest.
      */

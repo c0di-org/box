@@ -3,6 +3,7 @@ package dev.localagent.workstation
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
@@ -27,7 +28,7 @@ enum class BoxDestination { Tasks, Computer }
  * panels drawn on top of it — the agent, a shell, the workspace — one at a time, dismissable back
  * to nothing. A tab bar would have made the desktop one of four equal things instead of the thing.
  */
-enum class ComputerPanel { None, Chat, Terminal, Files }
+enum class ComputerPanel { None, Chat, Terminal, Files, Preview }
 
 /**
  * The two places files live, and the Files panel opens on the first of them.
@@ -80,8 +81,24 @@ data class UiNotice(val id: Long, val message: String)
  * [sessionId] is null for the very first message of a conversation, which is typed before the
  * session it starts has an id. It is filled in as soon as the session exists — without that, the
  * act of selecting the new conversation would drop the message the user just typed.
+ *
+ * [heldForSignIn] separates the two reasons a message can be sitting here, and they are not the
+ * same promise. An ordinary queued message is already with the backend and will run itself when the
+ * guest can take it; a held one has deliberately not been handed over, because handing it to a box
+ * with no credential spends it — the agent answers "Box is not signed in yet" and the user has to
+ * type it again. Held messages are the ones a successful sign-in has to go back and send.
+ *
+ * [attachments] are here rather than left on the composer because a held message outlives the
+ * composer it was typed into. They are cleared from the composer the moment the message is queued —
+ * a second tap must not send them twice — so this is the only copy, and without it a photo attached
+ * before signing in would arrive as a turn about a file that was never mentioned.
  */
-data class QueuedPrompt(val sessionId: String?, val text: String)
+data class QueuedPrompt(
+    val sessionId: String?,
+    val text: String,
+    val heldForSignIn: Boolean = false,
+    val attachments: List<Attachment> = emptyList(),
+)
 
 /**
  * Where the box is, in the user's terms rather than the runtime's.
@@ -133,14 +150,36 @@ data class BoxUiState(
     val permissionMode: AgentPermissionMode = AgentPermissionMode.Ask,
     val startingSession: Boolean = false,
     /**
+     * The task swiped off the list, still waiting to find out whether the user meant it.
+     *
+     * Held here rather than closed on the spot because closing is the one thing on this surface
+     * that cannot be taken back: the record goes, the index is rewritten, and `:computer` is told
+     * to let the session go. So the row leaves immediately — a swipe that snaps back has not
+     * happened — and the actual close waits out the undo snackbar. One at a time; swiping a second
+     * task commits the first, because the snackbar it was relying on has gone.
+     */
+    val closingTaskId: String? = null,
+    /**
      * What the user typed before the guest could take it. Shown in the transcript's place so a
      * message sent to a booting computer is visibly waiting rather than apparently lost.
      */
     val queued: List<QueuedPrompt> = emptyList(),
 
+    /**
+     * Files picked or shared in, waiting on the next thing the user sends.
+     *
+     * They are already written into the box's shared folder by the time they are in here — this
+     * list is what the composer draws, not a staging area. Held on the box rather than inside the
+     * composer because a file can arrive from outside it: the share sheet reaches Box with no
+     * conversation open and nothing focused, and the picture has to be somewhere when it does.
+     */
+    val pendingAttachments: List<Attachment> = emptyList(),
+
     // ---- signing in ----
     val signIn: GuestAuth.State = GuestAuth.State.Unknown,
     val signInVisible: Boolean = false,
+    /** The hint that survives a restart. See [SignInHistory]. */
+    val signedInBefore: Boolean = false,
 
     // ---- computer ----
     /**
@@ -158,6 +197,14 @@ data class BoxUiState(
     val openingFilePath: String? = null,
     val openedFile: OpenedFile? = null,
 
+    /**
+     * Something the agent is serving in the guest, reachable on the phone's loopback.
+     *
+     * The guest port is kept beside the url because releasing the forward needs it, and the url is
+     * a loopback address that says nothing about which guest port it reaches.
+     */
+    val preview: OpenedPreview? = null,
+
     // ---- the shared folder ----
     val filesPlace: FilesPlace = FilesPlace.Shared,
     /** Relative to the shared folder; empty at its root. Never an absolute phone path. */
@@ -170,11 +217,22 @@ data class BoxUiState(
     val selectedSession: SessionSummary?
         get() = sessions.firstOrNull { it.id == selectedSessionId }
 
-    /** Queued messages belonging to the conversation on screen, oldest first. */
-    val queuedForSelected: List<String>
-        get() = queued
-            .filter { it.sessionId == null || it.sessionId == selectedSessionId }
-            .map { it.text }
+    /**
+     * Queued messages belonging to the conversation on screen, oldest first.
+     *
+     * A message with no session id is one typed before the task it starts existed, and it normally
+     * belongs to whatever conversation is open — because sending it *opens* that conversation, and
+     * the id lands a moment later. A held one does not: it can sit with no session for as long as
+     * the sign-in takes, and the box's own screen is where it is being shown. Without this it would
+     * turn up inside whichever unrelated task the user opened while they were signed out.
+     */
+    val queuedForSelected: List<QueuedPrompt>
+        get() = queued.filter { prompt ->
+            when {
+                prompt.sessionId != null -> prompt.sessionId == selectedSessionId
+                else -> !prompt.heldForSignIn
+            }
+        }
 
     /**
      * Every task, newest first, with no harness above it.
@@ -185,7 +243,9 @@ data class BoxUiState(
      * property of that task, drawn on its row.
      */
     val tasks: List<SessionSummary>
-        get() = sessions.sortedByDescending { it.updatedAt }
+        get() = sessions
+            .filterNot { it.id == closingTaskId }
+            .sortedByDescending { it.updatedAt }
 
     fun harnessOf(session: SessionSummary): HarnessDescriptor? =
         harnesses.firstOrNull { it.id == session.harnessId }
@@ -213,6 +273,29 @@ data class BoxUiState(
      */
     val needsSignIn: Boolean
         get() = signIn is GuestAuth.State.SignedOut || signIn is GuestAuth.State.Failed
+
+    /**
+     * Whether signing in is still ahead of this user — known from the guest, or expected.
+     *
+     * The wider question than [needsSignIn], and the one the *first-run* screens ask. Before the
+     * box has booted there is nobody to ask, so a fresh install answers from [signedInBefore]:
+     * nothing on this phone has ever signed in, therefore the next thing to happen is signing in.
+     * That is what lets the closed box say so before someone commits to a three-minute wait, and
+     * what lets the arrival paint its sign-in door on the first frame instead of swapping a door
+     * out from under the one moment an install ever gets.
+     *
+     * A sign-in already under way counts as wanted: it has not finished.
+     */
+    val signInWanted: Boolean
+        get() = when (signIn) {
+            is GuestAuth.State.SignedIn -> false
+            GuestAuth.State.Unknown, GuestAuth.State.Checking -> !signedInBefore
+            else -> true
+        }
+
+    /** What the user typed that is waiting on a sign-in rather than on the computer. */
+    val heldForSignIn: List<QueuedPrompt>
+        get() = queued.filter { it.heldForSignIn }
 
     /** The computer can be reached but is not usable yet. Chat never blocks on this. */
     val computerReady: Boolean
@@ -252,3 +335,6 @@ data class BoxUiState(
     val agentAtWork: Boolean
         get() = sessions.any { it.status == SessionStatus.Active }
 }
+
+/** A forwarded guest port, and the address on the phone that reaches it. */
+data class OpenedPreview(val url: String, val guestPort: Int)

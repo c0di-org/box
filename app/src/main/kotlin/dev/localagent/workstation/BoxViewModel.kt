@@ -22,6 +22,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.IExecCallback
 import dev.localagent.runtime.qemu.IFileListCallback
 import dev.localagent.runtime.qemu.IFileReadCallback
+import dev.localagent.runtime.qemu.IPortForwardCallback
 import dev.localagent.runtime.qemu.IRuntimeControl
 import dev.localagent.runtime.qemu.RuntimeService
 import dev.localagent.runtime.qemu.RuntimeStateCodec
@@ -30,7 +31,12 @@ import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.Attachment
+import dev.localagent.workstation.agent.AgentViewport
+import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
+import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.TranscriptBuilder
@@ -66,6 +72,7 @@ class BoxViewModel @JvmOverloads constructor(
     private val agents: AgentBackend = backend ?: FakeAgentBackend(viewModelScope)
     private val auth = BoxContainer.auth
     private val openings = OpeningHistory(application)
+    private val signIns = SignInHistory(application)
     private var transcriptJob: Job? = null
     private var connectionJob: Job? = null
 
@@ -167,8 +174,19 @@ class BoxViewModel @JvmOverloads constructor(
         resyncRuntimeState()
         observeAgents()
         watchSharedFolder()
+        mutableUiState.update { it.copy(signedInBefore = signIns.hasSignedIn()) }
         viewModelScope.launch {
-            auth.state.collect { signIn -> mutableUiState.update { it.copy(signIn = signIn) } }
+            auth.state.collect { signIn ->
+                mutableUiState.update { it.copy(signIn = signIn) }
+                if (signIn !is GuestAuth.State.SignedIn) return@collect
+                // Written from the guest's own answer, so it is remembered whether the credential
+                // arrived through Box's sign-in sheet or was already sitting in the workspace.
+                signIns.remember(true)
+                mutableUiState.update { it.copy(signedInBefore = true) }
+                // The point of holding anything: the words someone typed into a three-minute wait
+                // go now, without being retyped and without ever having failed.
+                flushHeldPrompts()
+            }
         }
     }
 
@@ -227,6 +245,18 @@ class BoxViewModel @JvmOverloads constructor(
      */
     fun setPermissionMode(mode: AgentPermissionMode) {
         viewModelScope.launch { agents.setPermissionMode(mode) }
+    }
+
+    /**
+     * Reported by the composition every time the window it measured changes shape.
+     *
+     * Called far more often than it does anything — a drag across a DeX corner is a stream of
+     * widths — so the backend drops the ones that repeat rather than the UI trying to guess which
+     * are worth sending. Nothing in [BoxUiState] holds it: no pixel on screen depends on what the
+     * agent was told, and the window itself is the only honest source for what the window is.
+     */
+    fun setViewport(viewport: AgentViewport) {
+        viewModelScope.launch { agents.setViewport(viewport) }
     }
 
     /**
@@ -293,6 +323,10 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     fun selectComputerPanel(panel: ComputerPanel) {
+        // Before the state changes, while the open preview is still readable: leaving the panel is
+        // how a forward ends, and a hole in the phone's loopback interface should not outlive the
+        // panel that asked for it.
+        if (mutableUiState.value.computerPanel == ComputerPanel.Preview) closePreview()
         mutableUiState.update {
             it.copy(
                 computerPanel = if (it.computerPanel == panel) ComputerPanel.None else panel,
@@ -365,27 +399,156 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Sending is never refused because the computer is off.
+     * Sending is never refused because the computer is off, and never spent because it is not
+     * signed in.
      *
      * A message to a cold runtime starts it and is held until the guest can take it — the backend
      * queues the write, and the boot is ~3 minutes of visible, normal waiting rather than an error.
      * The text is shown as queued in the meantime so the user's own words never vanish for the
      * length of a boot; the harness echoes each prompt into the session log when it finally runs,
      * and that echo is what clears the queued copy.
+     *
+     * A box with no credential is the other kind of not-yet, and it used to be treated as a yes.
+     * The first message anyone ever types is typed into the opening — three minutes before Box can
+     * discover there is nobody signed in — and handing it over then bought a failed task and a
+     * request to type it again. So it is *held* rather than sent: the same queue, the same visible
+     * card, and [flushHeldPrompts] sends it the moment the sign-in lands.
      */
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        val attachments = mutableUiState.value.pendingAttachments
+        // A picture on its own is a message. "Look at this" is often the whole thought, and
+        // requiring a word alongside it would be Box asking for something it does not need.
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
         wakeComputerIfNeeded()
-        val sessionId = mutableUiState.value.selectedSessionId
-        mutableUiState.update { it.copy(queued = it.queued + QueuedPrompt(sessionId, trimmed)) }
+        val state = mutableUiState.value
+        val sessionId = state.selectedSessionId
+        // Held on what Box knows *and* on what it expects — see [BoxUiState.signInWanted]. Waiting
+        // for certainty here would mean waiting for the guest, and the guest answers at exactly the
+        // moment the harness starts taking work, which is the race this exists to lose safely.
+        val held = state.signInWanted
+        mutableUiState.update {
+            it.copy(
+                queued = it.queued + QueuedPrompt(sessionId, trimmed, heldForSignIn = held, attachments = attachments),
+                // Cleared here rather than after the send lands: they are on their way with this
+                // turn, and a second tap must not send them twice. They ride on the queued copy
+                // rather than staying on the composer, which is what lets a turn held for a sign-in
+                // still have its files when the credential finally arrives — the composer the user
+                // would otherwise have to re-attach from is gone by then.
+                pendingAttachments = emptyList(),
+            )
+        }
+        if (held) {
+            // Only once the box is open. Interrupting a boot with a sheet that says "waiting for
+            // your box…" is the app asking for something it cannot accept yet; the arrival asks.
+            if (state.computerReady) showSignIn()
+            return
+        }
 
         viewModelScope.launch {
             if (sessionId == null) {
                 val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@launch
-                startSession(harness.id, trimmed)
+                startSession(harness.id, trimmed, attachments)
             } else {
-                agents.send(sessionId, trimmed)
+                agents.send(sessionId, trimmed, attachments)
+            }
+        }
+    }
+
+    /**
+     * Takes something the user picked, or shared in from another app, into the box.
+     *
+     * The copy happens now rather than at send, and that is the point: a `content://` uri is a
+     * loan from the app that produced it, revocable and often dead by the time the user has
+     * finished typing. Once it is in the shared folder it is a file, and the rest of Box only ever
+     * deals in paths.
+     */
+    fun attach(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            Inbox.receive(getApplication(), uri)
+                .onSuccess { attachment ->
+                    mutableUiState.update {
+                        it.copy(pendingAttachments = it.pendingAttachments + attachment)
+                    }
+                }
+                .onFailure { failure -> showNotice(failure.message ?: "That file could not be attached.") }
+        }
+    }
+
+    /**
+     * Files another app handed to Box through the share sheet.
+     *
+     * Beyond taking them in, this has to put them somewhere they can be *seen*. A share can reach
+     * Box with nothing open — the home surface has no composer once the box has settled — and an
+     * attachment nobody can see is the same as one that never arrived. So the newest conversation
+     * is selected, or one is started if this box has never had a conversation at all, which is
+     * exactly what someone who just shared a picture to a chat app expects to be looking at.
+     */
+    fun receiveShared(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        uris.forEach(::attach)
+        val state = mutableUiState.value
+        if (state.selectedSessionId != null) return
+        val newest = state.sessions.firstOrNull()
+        if (newest != null) {
+            selectSession(newest.id)
+        } else {
+            state.harnesses.firstOrNull()?.let { startSession(it.id) }
+        }
+    }
+
+    /**
+     * Taken back off the composer before it was sent, and deleted.
+     *
+     * Deleting is right only here. Before sending, the copy exists because Box made one and the
+     * user has changed their mind; after sending it is a file in their own folder, on their phone,
+     * and Box removing it would be tidying up something that is no longer its business.
+     */
+    fun removeAttachment(attachment: Attachment) {
+        mutableUiState.update {
+            it.copy(pendingAttachments = it.pendingAttachments.filterNot { held -> held == attachment })
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            Inbox.phoneFile(getApplication(), attachment.guestPath)?.delete()
+        }
+    }
+
+    /**
+     * Sends everything that was waiting on a credential, in the order it was typed.
+     *
+     * Deliberately a replay of [sendMessage]'s own two branches rather than a bulk write: a prompt
+     * held with no session still has to *start* one, and starting it is what gives the task its
+     * title — the user's first line. Marking each as no longer held before it goes keeps it on
+     * screen as an ordinary queued message, which the harness's echo then clears.
+     */
+    private fun flushHeldPrompts() {
+        val held = mutableUiState.value.heldForSignIn
+        if (held.isEmpty()) return
+        mutableUiState.update { state ->
+            state.copy(
+                queued = state.queued.map { it.copy(heldForSignIn = false) },
+                // The arrival has done its job and is about to be left behind: this sends the user
+                // into the conversation it was holding for them. Leaving the flag set would put the
+                // welcome screen back on the first press of the back button.
+                readyGreeting = false,
+            )
+        }
+        viewModelScope.launch {
+            // Sequential, and carrying the id the first one created: everything typed into a
+            // booting box was typed before any session existed, so all of it is bound for the one
+            // conversation the first line opens — not a task each.
+            var started: String? = null
+            held.forEach { prompt ->
+                val sessionId = prompt.sessionId ?: started
+                // The files go with the turn they were attached to, which is the whole reason
+                // [QueuedPrompt] carries them: the composer they came from was cleared when the
+                // message was typed, possibly minutes and a sign-in ago.
+                if (sessionId == null) {
+                    val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@forEach
+                    started = beginSession(harness.id, prompt.text, prompt.attachments)
+                } else {
+                    agents.send(sessionId, prompt.text, prompt.attachments)
+                }
             }
         }
     }
@@ -400,27 +563,39 @@ class BoxViewModel @JvmOverloads constructor(
         if (needsWaking) start()
     }
 
-    fun startSession(harnessId: String, prompt: String? = null) {
+    fun startSession(
+        harnessId: String,
+        prompt: String? = null,
+        attachments: List<Attachment> = emptyList(),
+    ) {
         if (mutableUiState.value.startingSession) return
+        viewModelScope.launch { beginSession(harnessId, prompt, attachments) }
+    }
+
+    /** The body of [startSession], for callers that need the id before they do anything else. */
+    private suspend fun beginSession(
+        harnessId: String,
+        prompt: String? = null,
+        attachments: List<Attachment> = emptyList(),
+    ): String? {
         mutableUiState.update { it.copy(startingSession = true) }
-        viewModelScope.launch {
-            val id = runCatching { agents.startSession(harnessId, prompt) }
-                .onFailure { error -> showNotice(error.message ?: "Box could not start that task.") }
-                .getOrNull()
-            mutableUiState.update { state ->
-                state.copy(
-                    startingSession = false,
-                    // The first message was typed before this session had an id. Give it one now,
-                    // so selecting the conversation does not take it for another session's.
-                    queued = if (id == null) {
-                        state.queued
-                    } else {
-                        state.queued.map { if (it.sessionId == null) it.copy(sessionId = id) else it }
-                    },
-                )
-            }
-            if (id != null) selectSession(id)
+        val id = runCatching { agents.startSession(harnessId, prompt, attachments) }
+            .onFailure { error -> showNotice(error.message ?: "Box could not start that task.") }
+            .getOrNull()
+        mutableUiState.update { state ->
+            state.copy(
+                startingSession = false,
+                // The first message was typed before this session had an id. Give it one now,
+                // so selecting the conversation does not take it for another session's.
+                queued = if (id == null) {
+                    state.queued
+                } else {
+                    state.queued.map { if (it.sessionId == null) it.copy(sessionId = id) else it }
+                },
+            )
         }
+        if (id != null) selectSession(id)
+        return id
     }
 
     fun resolvePermission(requestId: String, decision: PermissionDecision) {
@@ -454,6 +629,36 @@ class BoxViewModel @JvmOverloads constructor(
     fun interruptSubAgent(subAgentId: String) {
         val sessionId = mutableUiState.value.selectedSessionId ?: return
         viewModelScope.launch { agents.interruptSubAgent(sessionId, subAgentId) }
+    }
+
+    /**
+     * Take a task off the list, with a way back for as long as the snackbar is up.
+     *
+     * The list is where closing belongs — it used to mean opening the task and finding the header
+     * menu, which is a strange route to "I am done with this" — and a list you can close things
+     * from needs an undo, because a swipe is easy to do by accident and this one is final. So the
+     * row goes now and the close itself waits: see [BoxUiState.closingTaskId]. Nothing is told to
+     * the agent in the meantime, which is what makes taking it back free.
+     */
+    fun beginClosingTask(sessionId: String) {
+        val pending = mutableUiState.value.closingTaskId
+        // Its snackbar is about to be replaced by this one, so its undo is gone. Honour what the
+        // user did rather than quietly keeping a task they closed.
+        if (pending != null && pending != sessionId) closeSession(pending)
+        mutableUiState.update { it.copy(closingTaskId = sessionId) }
+        if (mutableUiState.value.selectedSessionId == sessionId) selectSession(null)
+    }
+
+    /** The undo window closed without being used. */
+    fun commitClosingTask() {
+        val pending = mutableUiState.value.closingTaskId ?: return
+        mutableUiState.update { it.copy(closingTaskId = null) }
+        closeSession(pending)
+    }
+
+    /** The row comes back exactly as it was, because nothing has happened to it yet. */
+    fun undoClosingTask() {
+        mutableUiState.update { it.copy(closingTaskId = null) }
     }
 
     fun closeSession(sessionId: String) {
@@ -520,9 +725,50 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(holder) }
     }
 
-    /** Port forwarding still does not exist, so a preview says so rather than opening nothing. */
-    fun openPreview(label: String) {
-        showNotice("$label isn’t connected yet — the runtime transport for it is still being built.")
+    /**
+     * Opens something the agent is serving in the guest, in a panel over the machine.
+     *
+     * The forward is asked for every time rather than cached here: the runtime hands back the same
+     * one for a guest port it has already opened, and that is the only place that can know whether
+     * the VM has restarted underneath it since.
+     */
+    fun openPreview(artifact: Artifact.Preview) {
+        val runtime = control ?: return showNotice("The computer is still starting.")
+        mutableUiState.update {
+            it.copy(destination = BoxDestination.Computer, computerPanel = ComputerPanel.Preview)
+        }
+        runCatching {
+            runtime.forwardPort(
+                artifact.guestPort,
+                object : IPortForwardCallback.Stub() {
+                    override fun onForwarded(guestPort: Int, url: String) {
+                        mutableUiState.update {
+                            it.copy(preview = OpenedPreview(url = url, guestPort = guestPort))
+                        }
+                    }
+
+                    override fun onError(message: String) {
+                        mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+                        showNotice(message)
+                    }
+                },
+            )
+        }.onFailure { error ->
+            mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+            showNotice(error.message ?: "Box could not open that preview.")
+        }
+    }
+
+    /**
+     * Closes the preview and gives the port back.
+     *
+     * `release` is honoured rather than left to the VM's lifetime because a forward is a hole in
+     * the phone's loopback interface: it should not outlive the panel that asked for it.
+     */
+    fun closePreview() {
+        val open = mutableUiState.value.preview ?: return
+        mutableUiState.update { it.copy(preview = null) }
+        runCatching { control?.releasePort(open.guestPort) }
     }
 
     // -----------------------------------------------------------------------
@@ -719,6 +965,32 @@ class BoxViewModel @JvmOverloads constructor(
             mutableUiState.update { it.copy(filesLoading = false) }
             showNotice(error.message ?: "Box could not read that folder.")
         }
+    }
+
+    /**
+     * Opens an artifact the agent offered, in the panel that already knows how to show a file.
+     *
+     * Not a new surface. The Files panel is a view onto the machine that floats over it one at a
+     * time — exactly what a document is — and it already reads a guest path, truncates the same
+     * way, and closes the same way. Adding a second viewer would be two places to keep right about
+     * what "too big" means.
+     */
+    fun openDocument(artifact: Artifact.Document) {
+        mutableUiState.update {
+            it.copy(
+                destination = BoxDestination.Computer,
+                computerPanel = ComputerPanel.Files,
+                filesPlace = FilesPlace.InTheBox,
+            )
+        }
+        openFile(
+            FileEntry(
+                path = artifact.guestPath,
+                name = artifact.name,
+                isDirectory = false,
+                size = 0L,
+            ),
+        )
     }
 
     fun openFile(entry: FileEntry) {
