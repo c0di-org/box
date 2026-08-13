@@ -185,7 +185,22 @@ class GuestAgentBackend(
     init {
         // A restarted UI process starts knowing nothing. The index says which sessions exist; the
         // logs say what happened in them.
-        val restored = store.load()
+        val restored = store.load().map { summary ->
+            // Nothing is running yet, whatever was running when this list was last saved.
+            //
+            // [SessionStatus.Active] means "the agent is doing something right now", and a status
+            // read back from disk cannot mean that: the process it described belonged to a guest
+            // that has since been shut, or to a Box that has since been restarted. Restoring it
+            // verbatim is what left every task in the list wearing a live dot — including ones
+            // whose harness had not existed for hours — which made the list unable to answer the
+            // one question it exists to answer: which of these is actually working.
+            //
+            // [SessionStatus.NeedsYou] is deliberately kept. A session that stopped to ask
+            // something is still waiting for an answer, and that is a fact about the conversation
+            // rather than about any process that happens to be alive.
+            if (summary.status is SessionStatus.Active) summary.copy(status = SessionStatus.Idle)
+            else summary
+        }
         restored.forEach { summary ->
             records[summary.id] = Record(
                 summary.id, summary.harnessId, summary.title, summary.workingDirectory,
@@ -236,7 +251,24 @@ class GuestAgentBackend(
                 }
                 return
             }
-            scope.launch { records.values.forEach { attach(it) } }
+            // Only the sessions actually waiting on the box — which is almost never all of them.
+            //
+            // This used to attach every record, and every record with [runtimeReady] set takes
+            // [AttachPlan.Open]: opening the box started a harness process per conversation, all
+            // at once, whether or not anyone had been near them. On a two-core TCG guest eight
+            // idle tasks is eight `claude` processes that never exit, and the one the user is
+            // actually typing into queues behind all of them. Measured on device: load average
+            // 14.9, ~70% of the guest spent on conversations nobody had opened.
+            //
+            // Nothing is lost by waiting. A session opens the moment it is looked at or spoken to
+            // — [events] and [send] both attach — so the only thing that genuinely cannot wait is
+            // a session holding something typed while the box was shut, which is what the outbox
+            // is. Everything else reads its history from the log, which needs no process at all.
+            scope.launch {
+                records.values
+                    .filter { synchronized(it.outbox) { it.outbox.isNotEmpty() } }
+                    .forEach { attach(it) }
+            }
         }
     }
 
@@ -684,6 +716,18 @@ class GuestAgentBackend(
     // ---- session list ------------------------------------------------------
 
     private fun publish(record: Record, status: SessionStatus, preview: String? = null) {
+        // A closed session does not go quiet the instant it is closed, and this is the one place
+        // that would let it undo the closing. [closeSession] drops the record and rewrites the
+        // list, but the callback still holds this same object and the guest process is still
+        // being asked to stop; the lines already in flight arrive after the row is gone. Each one
+        // used to land here and put it straight back — stamped with the current time, so it
+        // sorted to the *top* of the list, and saved to disk, so it survived a restart. From the
+        // outside that reads as a task refusing to be deleted: it disappears, reappears above
+        // everything else marked off, and then comes back to life.
+        //
+        // Identity rather than the id: a genuinely new task reusing an id is a different object
+        // and is welcome to publish. This only rejects a record the backend has let go of.
+        if (records[record.id] !== record) return
         record.status = status
         val summary = SessionSummary(
             id = record.id,
