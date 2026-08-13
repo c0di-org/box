@@ -80,8 +80,18 @@ data class UiNotice(val id: Long, val message: String)
  * [sessionId] is null for the very first message of a conversation, which is typed before the
  * session it starts has an id. It is filled in as soon as the session exists — without that, the
  * act of selecting the new conversation would drop the message the user just typed.
+ *
+ * [heldForSignIn] separates the two reasons a message can be sitting here, and they are not the
+ * same promise. An ordinary queued message is already with the backend and will run itself when the
+ * guest can take it; a held one has deliberately not been handed over, because handing it to a box
+ * with no credential spends it — the agent answers "Box is not signed in yet" and the user has to
+ * type it again. Held messages are the ones a successful sign-in has to go back and send.
  */
-data class QueuedPrompt(val sessionId: String?, val text: String)
+data class QueuedPrompt(
+    val sessionId: String?,
+    val text: String,
+    val heldForSignIn: Boolean = false,
+)
 
 /**
  * Where the box is, in the user's terms rather than the runtime's.
@@ -141,6 +151,8 @@ data class BoxUiState(
     // ---- signing in ----
     val signIn: GuestAuth.State = GuestAuth.State.Unknown,
     val signInVisible: Boolean = false,
+    /** The hint that survives a restart. See [SignInHistory]. */
+    val signedInBefore: Boolean = false,
 
     // ---- computer ----
     /**
@@ -170,11 +182,22 @@ data class BoxUiState(
     val selectedSession: SessionSummary?
         get() = sessions.firstOrNull { it.id == selectedSessionId }
 
-    /** Queued messages belonging to the conversation on screen, oldest first. */
-    val queuedForSelected: List<String>
-        get() = queued
-            .filter { it.sessionId == null || it.sessionId == selectedSessionId }
-            .map { it.text }
+    /**
+     * Queued messages belonging to the conversation on screen, oldest first.
+     *
+     * A message with no session id is one typed before the task it starts existed, and it normally
+     * belongs to whatever conversation is open — because sending it *opens* that conversation, and
+     * the id lands a moment later. A held one does not: it can sit with no session for as long as
+     * the sign-in takes, and the box's own screen is where it is being shown. Without this it would
+     * turn up inside whichever unrelated task the user opened while they were signed out.
+     */
+    val queuedForSelected: List<QueuedPrompt>
+        get() = queued.filter { prompt ->
+            when {
+                prompt.sessionId != null -> prompt.sessionId == selectedSessionId
+                else -> !prompt.heldForSignIn
+            }
+        }
 
     /**
      * Every task, newest first, with no harness above it.
@@ -213,6 +236,29 @@ data class BoxUiState(
      */
     val needsSignIn: Boolean
         get() = signIn is GuestAuth.State.SignedOut || signIn is GuestAuth.State.Failed
+
+    /**
+     * Whether signing in is still ahead of this user — known from the guest, or expected.
+     *
+     * The wider question than [needsSignIn], and the one the *first-run* screens ask. Before the
+     * box has booted there is nobody to ask, so a fresh install answers from [signedInBefore]:
+     * nothing on this phone has ever signed in, therefore the next thing to happen is signing in.
+     * That is what lets the closed box say so before someone commits to a three-minute wait, and
+     * what lets the arrival paint its sign-in door on the first frame instead of swapping a door
+     * out from under the one moment an install ever gets.
+     *
+     * A sign-in already under way counts as wanted: it has not finished.
+     */
+    val signInWanted: Boolean
+        get() = when (signIn) {
+            is GuestAuth.State.SignedIn -> false
+            GuestAuth.State.Unknown, GuestAuth.State.Checking -> !signedInBefore
+            else -> true
+        }
+
+    /** What the user typed that is waiting on a sign-in rather than on the computer. */
+    val heldForSignIn: List<QueuedPrompt>
+        get() = queued.filter { it.heldForSignIn }
 
     /** The computer can be reached but is not usable yet. Chat never blocks on this. */
     val computerReady: Boolean
