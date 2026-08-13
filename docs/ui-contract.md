@@ -23,6 +23,25 @@ Event kinds: `SessionStarted` · `SessionEnded` · `UserMessage` · `AgentMessag
 `PermissionRequested` · `PermissionResolved` · `TaskProgress` · `ActivityChanged` ·
 `ArtifactOffered` · `AgentError`.
 
+### A turn ending is not the session ending
+
+`SessionEnded` is terminal and happens once. A conversation has many turns and a session has one
+ending, and the difference cost Box both halves of it: the Claude Agent SDK emits a `result` per
+*turn* in streaming-input mode, the harness reported each one as `SessionEnded`, and so every
+single reply got a "Task finished" rule under it — carrying `result`, which is the final assistant
+message verbatim, printed a second time in small grey type — while the transcript sat marked ended,
+with no working indicator and no Stop, until something else happened to narrate itself.
+
+A turn ending is an `ActivityChanged` to `Idle`, and a turn starting is one to `Thinking`. A
+harness has to say both: nothing else in the log distinguishes an agent thinking for two minutes
+from an agent that finished and went quiet. `Transcript.isBusy` is what the header and the "Latest"
+pill draw from, and the fold gives a `UserMessage` the benefit of the doubt — a message sent into
+an idle or ended session marks it busy immediately, because the gap before the first thing comes
+back is exactly the one where a still conversation is the wrong answer.
+
+`SessionOutcome.Completed.summary` is for a caption, and the transcript gives it one line. It is
+not a place to repeat what the agent already said; Box's own harness sends none at all.
+
 ### Sub-agents are in the same log
 
 An agent that delegates does not get a second event stream. `ToolCall.Task` names a sub-agent —
@@ -91,6 +110,19 @@ rules fall out of that and both were once broken:
 `AllowAlways` widens a rule, so it also answers any request already outstanding under the same
 scope. Otherwise "always allow" visibly does nothing to the sibling ask that raised it.
 
+**The sheet is opened, never raised.** It used to put itself up the moment anything was asked,
+which on a phone meant appearing over whatever the user was doing: the keyboard went down as it
+arrived and came back after the answer, so a request landing mid-sentence cost them their place
+twice. The inline card is a complete decision, so the sheet is now what someone asks for by
+tapping a card — the case it serves is wanting to read a whole diff first, which is real and is
+not every request.
+
+What replaces the modal's one virtue, that it followed the user anywhere, is a scroll: the oldest
+unanswered request is brought onto the screen when it *changes*, which covers both one arriving
+while the transcript is scrolled back and the next coming up behind each answer. It stays put when
+the card is already fully on screen, so answering several that are visible together does not move
+the list once per tap. See `TranscriptList` in `ui/ConversationPane.kt`.
+
 ## 2. What the UI needs from a harness driver — `agent/AgentBackend.kt`
 
 ```kotlin
@@ -128,6 +160,15 @@ command, `{"type": "permission_mode", "mode": "bypassPermissions"}`, told to a s
 first prompt and again whenever it changes. Anything but `Ask` is drawn as a banner above every
 conversation for as long as it is in force — a box that is silently approving everything looks
 exactly like a box with nothing to approve, and that is the one confusion this must never cause.
+
+`bypassPermissions` has one more requirement, and missing it is silent. The CLI refuses the mode
+outright — at launch and through `setPermissionMode`, whose rejection reads "the session was not
+launched with `--dangerously-skip-permissions`" — unless the query was created with
+`allowDangerouslySkipPermissions: true`. Without it, Approve everything left the guest in
+`default`, every tool call went on stopping to ask, and the banner said the opposite. The option is
+an allowance and not a mode: a session still runs in whatever `permissionMode` says, and all it
+adds is that the answer the user picked is a legal one. A harness that cannot make a mode take must
+say so in the transcript rather than on stderr; it is the one failure nothing else can show.
 
 The control for it sits on the composer, next to send, with the same menu on a long-press of send
 itself. It started in the header's overflow menu and moved because of where it is wanted: "stop

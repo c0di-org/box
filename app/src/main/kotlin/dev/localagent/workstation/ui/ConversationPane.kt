@@ -549,14 +549,19 @@ private fun TranscriptList(
      * It had its own lane for a while, to be sure it never covered a word of the conversation, and
      * that cost more than it saved: a strip of the pane appearing and disappearing shoved every
      * line of the transcript up and back down as the user scrolled, and it read as a piece of
-     * furniture rather than a control. Floating is what a pill like this is; the room it needs is
-     * bought at the end of the list instead, so the newest message is never the thing it lands on.
+     * furniture rather than a control.
+     *
+     * Nothing is reserved at the end of the list for it either, which would be paying the same
+     * price in a quieter way — a permanent band of empty pane under the newest message, bought to
+     * protect a spot the pill is never in. It is only up while the transcript is scrolled *away*
+     * from its end, so the line it floats over is always somewhere in the middle: the newest
+     * message is the one thing it cannot land on.
      */
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 56.dp),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             items.forEach { entry ->
