@@ -46,11 +46,11 @@ the property three other parts of this codebase already depend on.
 | `mcp__box__connect` in the harness | The agent asking for an account, and blocking until it has one. |
 
 Configuration comes from Gradle properties, because a client id is public but still should not be
-written into source:
+written into source. They are set in `gradle.properties`, and a fork points them at its own app:
 
 ```
-box.github.clientId=Iv23li…
-box.github.appSlug=box
+box.github.clientId=Iv23ctD12lBb3VAZwutv
+box.github.appSlug=box-agent
 ```
 
 A build without them still runs — it says so, and offers the token escape hatch instead of failing
