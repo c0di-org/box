@@ -101,6 +101,90 @@ running agent session as activity however quiet it looks. That timer is only def
 because of the table above: it is allowed to act without asking precisely because being
 wrong costs about a second.
 
+## The cold start that is left
+
+The table above stops at "ready agent", and until recently that was the end of the story.
+It is not: after the guest is up, the *first task* pays a second start-up that nothing in
+this document was measuring — the Claude Code CLI coming to life inside the emulation.
+
+For a while that cost looked enormous. An agent running inside the box measured its own
+start at **~11.5 minutes**, and a bare `claude --version` at **1 m 5 s**. Both numbers were
+real and both were misleading: they were taken while eight harnesses were starting at once,
+because opening the box opened every conversation in the list. With that fixed, the same
+commands on the same phone:
+
+| | During the eight-way fan-out | One session, idle box |
+| --- | --- | --- |
+| `claude --version` | 65 s | **4.35 s** |
+| SDK import (295 MB) | 111 s | **9.95 s** |
+| Send to reply, warm session | — | **4.7 s** |
+| Guest load average | 14.94 | 0.28 |
+
+So the CLI is not slow here in the way it appeared to be. What remains is genuinely a
+cold-cache cost, and it is worth being precise about when it is paid.
+
+**Opening a task already pre-warms.** `query()` is called at harness start, not behind the
+first prompt: measured on a cold-booted box, a `claude` process exists within five seconds
+of opening a task and before any message is typed. The window in which the CLI warms is
+therefore the window in which the person is reading the screen and typing, which is the
+best place for it. Nothing needs adding here — this was checked precisely because it looked
+like an obvious thing to add.
+
+**What is not covered is the boot itself.** Between tapping Open and opening a task,
+nothing warms: 145 s of measured boot during which the disk holding the SDK and the CLI is
+never read. The first task opened after that pays for pulling ~300 MB off an emulated
+virtio disk into a cold page cache.
+
+**And an image update always lands there.** `RuntimeStorage` clears the suspend note when a
+provisioning plan is non-empty, for the good reason given above — the snapshot lives inside
+the disk being replaced. But the consequence is that the slow path is not the rare one: it
+follows every Box update that carries a new guest, which is exactly when someone has just
+installed something and is looking at it.
+
+### What a snapshot does and does not carry
+
+Worth stating plainly, because it decides what a fix can look like. `quiesceGuest()`
+deliberately reaps the guest's children before saving, so a restored box has **an idle
+agentd and no CLI** — a warm process from days ago is not something to want back, and
+agentd would kill it on reconnect regardless. But `savevm` writes the guest's memory, and
+that memory **includes the page cache**. The expensive half survives; the disposable half
+does not. That is the right split, and it is already what the code does.
+
+### Proposal: seed a snapshot after provisioning, rather than after use
+
+If a snapshot carries the page cache, one can be made deliberately instead of only as a
+side effect of the person closing their box. After an image is provisioned — a first
+install, or an update — Box could, once and in the background: boot the guest, read the SDK
+and the CLI binary through the page cache, `savevm`, and quit. The next open is then the
+~1 s restore in the table above, onto a warm cache, rather than 145 s onto a cold one.
+
+Nothing new is needed to do it. `suspendRuntime()` already saves and quits; `SuspendedVm`
+already records the image identity and machine that make a note refusable. The change is
+*when* it is called, not what it does.
+
+Open questions, none of them answered yet:
+
+- **When to run it.** A background boot costs battery and heat on a phone that just took an
+  app update. Opportunistic — charging, screen off — is the obvious answer and the obvious
+  place to get it wrong, because "charging and idle" on a phone that is never plugged in
+  means the seeding never happens and the cold path is still the normal one.
+- **What counts as warm.** Reading the payloads with `cat > /dev/null` is cheap and honest;
+  running `claude --version` additionally exercises whatever the binary touches on start.
+  Neither has been measured against a cold first task, and the difference between them is
+  the whole question of whether this is worth doing.
+- **Whether the snapshot can be built rather than made.** Shipping a snapshot inside the
+  image would remove the on-device boot entirely, but a snapshot is tied to the QEMU build
+  and the machine type that produced it — `SuspendedVm.machine` exists because that
+  mismatch is already a real failure. This is probably a no, and should be ruled out
+  explicitly rather than left as an idea.
+- **Cost on disk.** The saved memory is ~430 MB inside the system qcow2, which is a real
+  fraction of a phone's free space to spend on a box the person has not opened yet.
+
+The measurement that would settle whether any of this is worth building is one nobody has
+taken: **time from a freshly provisioned image to a first reply, cold**, against the same
+path with a seeded snapshot. Everything above is arithmetic and mechanism until that number
+exists.
+
 ## Current implementation state
 
 The storage/verification, agent protocol, guest-image source and isolated service

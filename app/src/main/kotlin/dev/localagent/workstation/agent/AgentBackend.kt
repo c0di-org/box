@@ -115,9 +115,10 @@ data class ConnectOutcome(
  * so Box stops seeing permission requests rather than answering them, and the tool cards in the
  * transcript become the only record of what was done.
  *
- * Whichever is chosen, the choice is visible while it is in force — see the banner in
- * `ConversationPane`. A box that is silently approving everything looks exactly like a box that
- * has nothing to approve, and that is the one confusion this setting must never cause.
+ * Whichever is chosen, the choice is visible while it is in force — the composer's mode control
+ * carries a caution sign for as long as anything but [Ask] is set. A box that is silently
+ * approving everything looks exactly like a box that has nothing to approve, and that is the one
+ * confusion this setting must never cause.
  */
 enum class AgentPermissionMode(val wire: String) {
     /** The default, and the reason the permission sheet exists. */
