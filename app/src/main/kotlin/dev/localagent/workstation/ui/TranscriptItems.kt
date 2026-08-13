@@ -1096,13 +1096,24 @@ private fun EndedRow(item: TranscriptItem.Ended, modifier: Modifier = Modifier) 
 // Live activity
 // ---------------------------------------------------------------------------
 
-/** The "agent is doing something" line that trails the transcript. */
+/**
+ * The "agent is doing something" line that trails the transcript.
+ *
+ * [waitingOn] is the ask the agent has stopped for, where it has stopped for one. Only the kind of
+ * it matters here: an agent parked on a question is not waiting for approval, and saying so put a
+ * word in the user's mouth — "approve" — for a card whose buttons read Answer and Rather not say.
+ */
 @Composable
-fun ActivityRow(activity: AgentActivity, modifier: Modifier = Modifier) {
+fun ActivityRow(
+    activity: AgentActivity,
+    modifier: Modifier = Modifier,
+    waitingOn: PermissionAsk? = null,
+) {
     val label = when (activity) {
         is AgentActivity.Thinking -> activity.label ?: "Thinking"
         is AgentActivity.Working -> activity.label
-        is AgentActivity.AwaitingPermission -> "Waiting for your approval"
+        is AgentActivity.AwaitingPermission ->
+            if (waitingOn is PermissionAsk.Questions) "Waiting for your answer" else "Waiting for your approval"
         AgentActivity.AwaitingInput -> "Waiting for your reply"
         AgentActivity.Idle, AgentActivity.Ended -> return
     }

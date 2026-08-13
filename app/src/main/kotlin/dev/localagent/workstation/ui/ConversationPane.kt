@@ -93,6 +93,7 @@ import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.ConnectRequest
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.HarnessDescriptor
+import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.Transcript
@@ -276,8 +277,11 @@ fun ConversationPane(
              * harness's queue and is picked up the moment the turn moves. So the message goes,
              * and this says what is still waiting rather than standing in front of it.
              */
+            // Named for what it is. "Request" is a permission's word, and an agent that stopped
+            // to ask you something has not requested anything.
             notice = when {
-                waiting.size > 1 -> "${waiting.size} requests are waiting on you."
+                waiting.size > 1 -> "${waiting.size} things are waiting on you."
+                waiting.firstOrNull()?.ask is PermissionAsk.Questions -> "A question is waiting on you."
                 waiting.isNotEmpty() -> "A request is waiting on you."
                 else -> null
             },
@@ -612,7 +616,11 @@ private fun TranscriptList(
             transcript?.let { live ->
                 item(key = "activity") {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        ActivityRow(live.activity, Modifier.widthIn(max = 760.dp))
+                        ActivityRow(
+                            live.activity,
+                            Modifier.widthIn(max = 760.dp),
+                            waitingOn = live.pendingPermission?.ask,
+                        )
                     }
                 }
             }
