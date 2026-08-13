@@ -187,7 +187,7 @@ test('a session asks, waits to be answered, and acts on the answer', async () =>
   const events = await runSession('allow');
   const order = kinds(events);
 
-  assert.deepEqual(order.slice(0, 2), ['session_started', 'activity']);
+  assert.deepEqual(order.slice(0, 3), ['activity', 'session_started', 'activity']);
   // The ask precedes its resolution, and both precede anything the agent said afterwards.
   assert.ok(order.indexOf('permission_requested') < order.indexOf('permission_resolved'));
   assert.ok(order.indexOf('permission_resolved') < order.indexOf('message'));
@@ -200,6 +200,25 @@ test('a session asks, waits to be answered, and acts on the answer', async () =>
   const said = events.find((event) => event.type === 'message');
   assert.match(said.text, /You said allow/);
   assert.equal(events.at(-1).outcome.status, 'completed');
+});
+
+test('the wait for Claude Code to start is narrated rather than silent', async () => {
+  const events = await runSession('allow');
+
+  // Under the stub this is instant. On the real thing the SDK import and the CLI's own start-up
+  // sit behind it and take minutes on emulated ARM, with nothing else to show for the wait — so
+  // what is pinned here is the order: the label is out before anything that could be slow begins.
+  const first = events[0];
+  assert.equal(first.type, 'activity');
+  assert.equal(first.activity.kind, 'thinking');
+  assert.match(first.activity.label, /Starting Claude Code/);
+  assert.ok(events.indexOf(first) < events.findIndex((event) => event.type === 'session_started'));
+
+  // And a second, so the longer half of the wait is not the same frame as the first half.
+  const labels = events
+    .filter((event) => event.type === 'activity' && event.activity.label)
+    .map((event) => event.activity.label);
+  assert.deepEqual(labels.slice(0, 2), ['Starting Claude Code…', 'Starting session…']);
 });
 
 test('denying reaches the harness as a denial rather than a silent allow', async () => {

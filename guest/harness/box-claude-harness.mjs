@@ -1481,6 +1481,27 @@ async function main() {
     diagnostic('no credential found up front; letting the SDK resolve');
   }
 
+  // Starting Claude Code is minutes of work on this hardware, and every second of it happens
+  // before the first prompt can be read: the 295MB SDK import below, then the CLI's own start-up
+  // behind `query()`. Measured cold on a phone-class ARM guest under full emulation: ~4.5 minutes
+  // to get through the import, ~11 more before the CLI could accept a message. Warm, the import
+  // alone is 1m51 and `claude --version` is 1m5, so this is the machine, not a fault.
+  //
+  // Box has no state for "not up yet". A message typed into that window is queued correctly and
+  // answered in 30 seconds once the CLI is live, but until then the transcript shows a bare
+  // "Thinking…" — indistinguishable from a wedged session, and the person watches it for a
+  // quarter of an hour on the first message after every box start. Saying which of the two it is
+  // costs a line and changes nothing else.
+  //
+  // Surviving their first message is the point, and it is not luck: `Transcript` replaces the
+  // activity on a user message only from `Idle` or `Ended`, so a labelled `Thinking` set here
+  // stays up until the SDK's own first activity event overwrites it.
+  //
+  // Not during sign-in, which has its own screen and no transcript to narrate into.
+  if (!authMode) {
+    emit({ type: 'activity', activity: { kind: 'thinking', label: 'Starting Claude Code…' } });
+  }
+
   const sdk = await loadSdk();
   if (!sdk) return;
   const query = sdk.query;
@@ -1506,6 +1527,10 @@ async function main() {
   }
 
   emit({ type: 'session_started', cwd, harness: 'claude-code' });
+
+  // The import is behind us; what is left is the CLI's own start-up, which is the longer half.
+  // A second label is the only progress signal available for a wait with no output of its own.
+  emit({ type: 'activity', activity: { kind: 'thinking', label: 'Starting session…' } });
 
   const box = await boxServer(sdk);
 
