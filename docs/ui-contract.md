@@ -147,6 +147,12 @@ must not come back as Finished, or jump to the top of the list, for having been 
 conversation stays honest about it: the connection is `Ended` and the box's own "Your box is closed
 · Open" banner sits above the history.
 
+`closeSession` is reachable from the list, by swiping a row from the end, as well as from the task's
+own header menu. Both go through one path: the row leaves the list immediately and the close itself
+waits out an undo snackbar (`BoxUiState.closingTaskId`). Nothing is told to the agent during that
+window, which is what makes the undo free — once the close lands, the record, the index entry and
+the guest's copy of the session are all gone.
+
 `FakeAgentBackend` implements all of this with a scripted "clone project and run" flow that pauses
 on a real permission request. It is the demo path and the development target. A second script —
 "Audit the public API" — delegates to a sub-agent that parks rather than finishing, because a

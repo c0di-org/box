@@ -67,6 +67,26 @@ class HomeSurfaceTest {
     }
 
     @Test
+    fun `a task swiped away leaves the list before it is closed`() {
+        // The undo window: the row is gone, but nothing has been told to the agent yet.
+        val closing = BoxUiState(
+            runtimeState = RuntimeState.Ready,
+            sessions = listOf(task("a"), task("b")),
+            closingTaskId = "a",
+        )
+        assertEquals(listOf("b"), closing.tasks.map { it.id })
+        assertEquals(listOf("a", "b"), closing.sessions.map { it.id })
+        assertEquals(listOf("a", "b"), closing.copy(closingTaskId = null).tasks.map { it.id })
+    }
+
+    @Test
+    fun `closing the last task gives the box the window back`() {
+        val closed = BoxUiState(runtimeState = RuntimeState.Stopped, sessions = listOf(task("a")))
+        assertFalse(closed.boxOwnsWindow)
+        assertTrue(closed.copy(closingTaskId = "a").boxOwnsWindow)
+    }
+
+    @Test
     fun `an idle box is the user's to drive`() {
         val idle = BoxUiState(
             runtimeState = RuntimeState.Ready,

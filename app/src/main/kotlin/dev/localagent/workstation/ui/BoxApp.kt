@@ -28,8 +28,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -87,6 +89,8 @@ fun BoxApp(
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onCloseSession: (String) -> Unit,
+    onUndoCloseSession: () -> Unit,
+    onCommitCloseSession: () -> Unit,
     onSelectComputerPanel: (ComputerPanel) -> Unit,
     onOpenBox: () -> Unit,
     onStop: () -> Unit,
@@ -130,6 +134,20 @@ fun BoxApp(
         onNoticeShown()
     }
 
+    // The undo window for a task swiped off the list, which is the snackbar's own lifetime and not
+    // a timer of Box's: whichever way it goes away is the user's answer. A second swipe cancels
+    // this effect without either branch running, which is why committing the previous task is the
+    // view model's job — see [BoxViewModel.beginClosingTask].
+    LaunchedEffect(state.closingTaskId) {
+        if (state.closingTaskId == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Task closed",
+            actionLabel = "Undo",
+            duration = SnackbarDuration.Short,
+        )
+        if (result == SnackbarResult.ActionPerformed) onUndoCloseSession() else onCommitCloseSession()
+    }
+
     // Three minutes of waiting deserve to end with something the hand can feel. The words are the
     // snackbar's job, or the greeting's on the first open ever; this is just the arrival landing.
     LaunchedEffect(state.boxStage) {
@@ -165,6 +183,7 @@ fun BoxApp(
                     desktop = desktop,
                     onSelectSession = { onSelectSession(it) },
                     onNewConversation = onNewConversation,
+                    onCloseTask = onCloseSession,
                     onOpenBox = onOpenBox,
                     onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                     onSendFirstTask = onSend,
@@ -466,6 +485,8 @@ private fun PreviewBox(state: BoxUiState) {
             onPermissionDecision = { _, _ -> },
             onOpenArtifact = {},
             onCloseSession = {},
+            onUndoCloseSession = {},
+            onCommitCloseSession = {},
             onSelectComputerPanel = {},
             onOpenBox = {},
             onStop = {},

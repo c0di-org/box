@@ -85,6 +85,8 @@ class UiGalleryActivity : ComponentActivity() {
                     onPermissionDecision = model::decide,
                     onOpenArtifact = {},
                     onCloseSession = {},
+                    onUndoCloseSession = {},
+                    onCommitCloseSession = {},
                     onSelectComputerPanel = model::panel,
                     onOpenBox = {},
                     onStop = {},
