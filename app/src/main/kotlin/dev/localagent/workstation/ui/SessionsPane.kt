@@ -76,6 +76,7 @@ fun SessionsPane(
     onSendFirstTask: (String) -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
+    onSignIn: () -> Unit,
     modifier: Modifier = Modifier,
     showSelection: Boolean = true,
 ) {
@@ -107,6 +108,7 @@ fun SessionsPane(
                 onSendFirstTask = onSendFirstTask,
                 onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
+                onSignIn = onSignIn,
                 modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
             )
             // Zero-height until the panel has shrunk out of the way, so the tasks slide up into

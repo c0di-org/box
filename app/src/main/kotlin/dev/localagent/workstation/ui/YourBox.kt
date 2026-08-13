@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +52,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,7 +78,8 @@ import kotlinx.coroutines.delay
  * - **Opening** — the ring, what it is doing, how long is left, and something worth doing with the
  *   wait: the first task can be typed now and is sent the moment the guest can take it.
  * - **Just opened, once ever** — the arrival gets the window exactly one time in the life of an
- *   install, and spends it saying that there are two ways to use this thing.
+ *   install, and spends it on the two ways to use this thing, or on the sign-in that has to happen
+ *   before one of them works.
  * - **Open** — a row carrying the machine's own live screen, which opens the computer.
  */
 @Composable
@@ -91,6 +94,7 @@ fun YourBox(
     onSendFirstTask: (String) -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
+    onSignIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Crossfade(
@@ -107,6 +111,10 @@ fun YourBox(
             stage == BoxStage.Working && owns -> OpeningHero(
                 progress = progress,
                 canType = state.harnesses.isNotEmpty(),
+                // Everything typed into the wait, held because there is nobody signed in yet. A
+                // message that is *not* held never reaches this screen: sending one opens the task
+                // it belongs to and the conversation takes the window.
+                waiting = state.heldForSignIn.map { it.text },
                 onSend = onSendFirstTask,
                 onWatch = onOpenComputer,
             )
@@ -114,6 +122,8 @@ fun YourBox(
             stage == BoxStage.Working -> OpeningRow(progress)
 
             greeting && owns -> ReadyHero(
+                signInWanted = state.signInWanted,
+                waiting = state.heldForSignIn.map { it.text },
                 onChat = {
                     onDismissGreeting()
                     onOpenChat()
@@ -122,6 +132,10 @@ fun YourBox(
                     onDismissGreeting()
                     onOpenComputer()
                 },
+                // The greeting deliberately stays up behind the sheet. Signing in is a step of the
+                // arrival, not a way out of it — and when it lands, this screen is holding the two
+                // doors that were the point of it.
+                onSignIn = onSignIn,
             )
 
             else -> ComputerRow(
@@ -228,16 +242,27 @@ private fun ClosedHero(state: BoxUiState, onOpen: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
         }
-        // The one fact worth spending a line on, and only before the first wait of the user’s life
-        // with this app — three minutes is long enough that discovering it halfway through is worse
-        // than being told. Four words is the whole of it.
-        if (failure == null && state.runtimeState == RuntimeState.NotProvisioned) {
+        // What this button costs, in one line, before anyone commits to it. Three minutes is long
+        // enough that discovering it halfway through is worse than being told — and so is
+        // discovering, at the end of those three minutes, that there is still a sign-in to do.
+        // Box cannot *ask* for the sign-in yet (the handshake runs inside the guest), but it can
+        // say it is coming: see [BoxUiState.signInWanted].
+        val note = when {
+            failure != null -> null
+            state.runtimeState == RuntimeState.NotProvisioned && state.signInWanted ->
+                "~3 min the first time, then a quick sign-in"
+            state.runtimeState == RuntimeState.NotProvisioned -> "~3 min the first time"
+            state.signInWanted -> "You’ll sign in to Claude once it’s open"
+            else -> null
+        }
+        note?.let {
             Spacer(Modifier.height(16.dp))
             Text(
-                "~3 min the first time",
+                it,
                 style = MaterialTheme.typography.bodyMedium,
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -260,6 +285,7 @@ private fun ClosedHero(state: BoxUiState, onOpen: () -> Unit) {
 private fun OpeningHero(
     progress: BoxProgress,
     canType: Boolean,
+    waiting: List<String>,
     onSend: (String) -> Unit,
     onWatch: () -> Unit,
 ) {
@@ -281,6 +307,9 @@ private fun OpeningHero(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // While the box is opening, the sign-in is not the wait anyone can act on — it cannot even
+        // be asked for yet — so this says the thing that is true now and the arrival says the rest.
+        HeldMessages(waiting, "Waiting for your box.")
         Spacer(Modifier.height(34.dp))
         Composer(
             enabled = canType,
@@ -302,9 +331,24 @@ private fun OpeningHero(
  * The only moment where saying what Box can do is free: the user is already looking at this screen,
  * waiting for exactly this. It is also the only place both doors are ever shown at the same size,
  * which is the point — the computer is not a feature of the chat.
+ *
+ * It is also where the sign-in belongs, and this is the only screen that can hold it. Claude's
+ * handshake runs *inside* the guest, so nothing can be asked before the box is open; the moment it
+ * opens is therefore the first moment the question can be put, and it is already the moment the
+ * user is looking at. Before this, sign-in was a banner discovered *after* a first task had been
+ * sent, failed, and asked to be typed again.
+ *
+ * [waiting] is that first task, if they typed one into the wait — shown here so their own words are
+ * visibly still in hand rather than something they have to trust Box kept.
  */
 @Composable
-private fun ReadyHero(onChat: () -> Unit, onComputer: () -> Unit) {
+private fun ReadyHero(
+    signInWanted: Boolean,
+    waiting: List<String>,
+    onChat: () -> Unit,
+    onComputer: () -> Unit,
+    onSignIn: () -> Unit,
+) {
     HeroFrame {
         Box(contentAlignment = Alignment.BottomEnd) {
             BoxMark(96.dp)
@@ -327,10 +371,66 @@ private fun ReadyHero(onChat: () -> Unit, onComputer: () -> Unit) {
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold,
         )
-        Spacer(Modifier.height(34.dp))
-        DoorButton(Icons.Outlined.Forum, "Chat with an agent", onChat, primary = true)
-        Spacer(Modifier.height(12.dp))
-        DoorButton(Icons.Outlined.Computer, "Use the computer", onComputer, primary = false)
+        if (signInWanted) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "One thing left: sign in to Claude.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            HeldMessages(waiting, "Sent as soon as you’re signed in.")
+            Spacer(Modifier.height(34.dp))
+            DoorButton(Icons.Outlined.Lock, "Sign in to Claude", onSignIn, primary = true)
+            Spacer(Modifier.height(12.dp))
+            // Still offered, and still true: a box is a Linux computer whether or not an agent can
+            // talk to it, and somebody who came for that should not be held up by a login.
+            DoorButton(Icons.Outlined.Computer, "Use the computer", onComputer, primary = false)
+        } else {
+            Spacer(Modifier.height(34.dp))
+            DoorButton(Icons.Outlined.Forum, "Chat with an agent", onChat, primary = true)
+            Spacer(Modifier.height(12.dp))
+            DoorButton(Icons.Outlined.Computer, "Use the computer", onComputer, primary = false)
+        }
+    }
+}
+
+/**
+ * What they asked for, still in hand, waiting on the one step in front of it.
+ *
+ * The composer clears itself the moment Send is pressed, so a held message with nowhere to appear
+ * is a message the user watched vanish. This is that somewhere, on both screens where a prompt can
+ * be held: the opening, and the arrival it is handed to.
+ *
+ * The first one, because that is the line the task will be named after. The rest are counted rather
+ * than stacked — this sits in the middle of a hero on a phone, and a column that grows with typing
+ * is a hero that pushes its own button off the screen.
+ */
+@Composable
+private fun HeldMessages(waiting: List<String>, note: String) {
+    val first = waiting.firstOrNull() ?: return
+    Spacer(Modifier.height(18.dp))
+    Surface(
+        modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
+            Text(
+                first,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                if (waiting.size > 1) "$note · ${waiting.size - 1} more waiting" else note,
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

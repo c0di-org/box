@@ -2,6 +2,7 @@ package dev.localagent.workstation.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +30,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -41,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BuildConfig
+import dev.localagent.workstation.agent.GuestAuth
 
 /**
  * What a runtime state is called, and in what colour.
@@ -168,9 +171,11 @@ fun RuntimeGate(state: RuntimeState, onOpenBox: () -> Unit) {
 @Composable
 fun DiagnosticsSheet(
     state: RuntimeState,
+    signIn: GuestAuth.State,
     onDismiss: () -> Unit,
     onOpenBox: () -> Unit,
     onStop: () -> Unit,
+    onSignIn: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -214,6 +219,7 @@ fun DiagnosticsSheet(
                 DiagnosticRow("Workspace", "/workspace • kept between tasks")
                 DiagnosticRow("Connection", "Private, on this phone")
                 DiagnosticRow("Network", "Outgoing only, through your phone")
+                SignedInRow(signIn, onSignIn)
                 Spacer(Modifier.height(20.dp))
                 when (state) {
                     RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended ->
@@ -237,6 +243,53 @@ fun DiagnosticsSheet(
             }
         }
     }
+}
+
+/**
+ * Who the box is signed in as, and the way to change it.
+ *
+ * The only route to signing in used to be a banner inside a conversation, which is fine for the
+ * first time — you are on your way to ask an agent for something — and useless every time after:
+ * a credential that expired leaves someone on the home screen with nothing to press. This sheet is
+ * what "your box" means, and the account it works as is part of that.
+ */
+@Composable
+private fun SignedInRow(signIn: GuestAuth.State, onSignIn: () -> Unit) {
+    val value = when (signIn) {
+        is GuestAuth.State.SignedIn -> signIn.account ?: "Signed in"
+        GuestAuth.State.Checking -> "Checking…"
+        GuestAuth.State.Starting, is GuestAuth.State.AwaitingCode -> "Signing in…"
+        is GuestAuth.State.Failed -> "Sign-in didn’t finish"
+        GuestAuth.State.SignedOut -> "Not signed in"
+        GuestAuth.State.Unknown -> "Not checked yet"
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Claude",
+            Modifier.weight(0.42f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(Modifier.weight(0.58f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SelectionContainer {
+                    Text(
+                        value,
+                        Modifier.weight(1f, fill = false),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                if (signIn !is GuestAuth.State.SignedIn) {
+                    Spacer(Modifier.width(6.dp))
+                    TextButton(onClick = onSignIn, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                        Text("Sign in")
+                    }
+                }
+            }
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }
 
 @Composable
