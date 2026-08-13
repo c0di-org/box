@@ -49,10 +49,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,7 +67,11 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.computer.ControlHolder
+import dev.localagent.workstation.computer.DesktopInput
 import dev.localagent.workstation.computer.DesktopTransport
+import dev.localagent.workstation.computer.GuestPointer
+import dev.localagent.workstation.computer.rememberHardwareInput
+import kotlinx.coroutines.launch
 
 /**
  * The computer.
@@ -102,10 +108,39 @@ fun ComputerPane(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
 ) {
-    // Held so the keyboard button has something to raise the IME against. The desktop is a
-    // SurfaceView, so there is no editor for Android to find on its own.
+    // Held so the pointer scale and the system IME have something to work against. The desktop is
+    // a SurfaceView, so there is no editor for Android to find on its own.
     var surface by remember { mutableStateOf<DesktopView?>(null) }
     val live = desktop != null && state.computerReady
+    val driving = state.desktopControl == ControlHolder.User
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val prefs = remember(context) { KeyboardPrefs(context) }
+
+    /**
+     * The one cursor. Both the desktop's own touch handling and the on-screen keyboard's trackpad
+     * move it, and it is what turns their relative gestures back into the absolute coordinate RFB
+     * wants — see [GuestPointer].
+     */
+    val pointer = remember(desktop) {
+        GuestPointer { input -> desktop?.let { transport -> scope.launch { transport.send(input) } } }
+    }
+
+    // Watched rather than asked once: plugging a keyboard in has to take the drawn one away in the
+    // same beat, or the promise that nobody ever goes looking for a setting is broken.
+    val hardware = rememberHardwareInput()
+    var mode by remember { mutableStateOf(prefs.mode) }
+    // Mirrored into state because a `SharedPreferences` read during composition is invisible to
+    // Compose: the keyboard would change shape only on the next unrelated recomposition.
+    var split by remember { mutableStateOf(prefs.split) }
+    val keyboardWanted = when (mode) {
+        OnScreenKeyboardMode.NEVER -> false
+        OnScreenKeyboardMode.ALWAYS -> true
+        OnScreenKeyboardMode.AUTO -> !hardware
+    }
+    // Only while the user is actually driving. Keys drawn under a desktop the agent holds are keys
+    // that do nothing, and the space they take is the guest's screen.
+    val showKeyboard = live && driving && keyboardWanted
 
     Column(modifier.fillMaxSize().background(BoxTerminal)) {
         ComputerBar(
@@ -115,52 +150,82 @@ fun ComputerPane(
             onSetControl = onSetControl,
             onShowDiagnostics = onShowDiagnostics,
             onStop = onStop,
-            onShowKeyboard = { surface?.showKeyboard() },
+            onShowSystemKeyboard = { surface?.showSystemKeyboard() },
+            keyboardShown = showKeyboard,
+            onToggleKeyboard = {
+                mode = if (showKeyboard) OnScreenKeyboardMode.NEVER else OnScreenKeyboardMode.ALWAYS
+                prefs.mode = mode
+                if (!driving) onSetControl(ControlHolder.User)
+            },
+            split = split,
+            onToggleSplit = {
+                split = !split
+                prefs.split = split
+            },
             live = live,
             compact = compact,
         )
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (live) {
-                DesktopSurface(
-                    transport = desktop,
-                    interactive = state.desktopControl == ControlHolder.User,
-                    modifier = Modifier.fillMaxSize(),
-                    onViewReady = { surface = it },
-                )
-            } else {
-                ComputerComingUp(
-                    state = state,
-                    progress = progress,
-                    onOpenBox = onOpenBox,
-                    onStop = onStop,
-                )
-            }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            // The whole pane, so the band the keys take can be remembered as a share of it rather
+            // than in pixels: this window changes size several times a minute on a foldable.
+            val paneHeightPx = constraints.maxHeight
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (live) {
+                        DesktopSurface(
+                            transport = desktop,
+                            interactive = driving,
+                            modifier = Modifier.fillMaxSize(),
+                            pointer = pointer,
+                            onViewReady = { surface = it },
+                        )
+                    } else {
+                        ComputerComingUp(
+                            state = state,
+                            progress = progress,
+                            onOpenBox = onOpenBox,
+                            onStop = onStop,
+                        )
+                    }
 
-            FloatingPanel(
-                panel = state.computerPanel,
-                compact = compact,
-                onClose = { onSelectPanel(state.computerPanel) },
-            ) { panelModifier ->
-                when (state.computerPanel) {
-                    ComputerPanel.Chat -> chat(panelModifier)
-                    ComputerPanel.Terminal -> TerminalTool(
-                        state = state,
-                        onOpenBox = onOpenBox,
-                        onRunCommand = onRunCommand,
+                    FloatingPanel(
+                        panel = state.computerPanel,
+                        compact = compact,
+                        onClose = { onSelectPanel(state.computerPanel) },
+                    ) { panelModifier ->
+                        when (state.computerPanel) {
+                            ComputerPanel.Chat -> chat(panelModifier)
+                            ComputerPanel.Terminal -> TerminalTool(
+                                state = state,
+                                onOpenBox = onOpenBox,
+                                onRunCommand = onRunCommand,
+                            )
+                            ComputerPanel.Files -> FilesTool(
+                                state = state,
+                                onOpenBox = onOpenBox,
+                                onSelectPlace = onSelectFilesPlace,
+                                onOpenDirectory = onOpenDirectory,
+                                onNavigateUp = onNavigateUp,
+                                onRefresh = onRefreshFiles,
+                                onOpenFile = onOpenFile,
+                                onCloseFile = onCloseFile,
+                                onOpenInPhoneFiles = onOpenInPhoneFiles,
+                            )
+                            ComputerPanel.Preview -> PreviewTool(state)
+                            ComputerPanel.None -> Unit
+                        }
+                    }
+                }
+                if (showKeyboard && desktop != null) {
+                    OnScreenKeyboard(
+                        pointer = pointer,
+                        onKey = { keysym, down ->
+                            scope.launch { desktop.send(DesktopInput.Key(keysym, down)) }
+                        },
+                        pointerScale = { surface?.pointerScale ?: 1f },
+                        prefs = prefs,
+                        paneHeightPx = paneHeightPx,
                     )
-                    ComputerPanel.Files -> FilesTool(
-                        state = state,
-                        onOpenBox = onOpenBox,
-                        onSelectPlace = onSelectFilesPlace,
-                        onOpenDirectory = onOpenDirectory,
-                        onNavigateUp = onNavigateUp,
-                        onRefresh = onRefreshFiles,
-                        onOpenFile = onOpenFile,
-                        onCloseFile = onCloseFile,
-                        onOpenInPhoneFiles = onOpenInPhoneFiles,
-                    )
-                    ComputerPanel.Preview -> PreviewTool(state)
-                    ComputerPanel.None -> Unit
                 }
             }
         }
@@ -185,7 +250,11 @@ private fun ComputerBar(
     onSetControl: (ControlHolder) -> Unit,
     onShowDiagnostics: () -> Unit,
     onStop: () -> Unit,
-    onShowKeyboard: () -> Unit,
+    onShowSystemKeyboard: () -> Unit,
+    keyboardShown: Boolean,
+    onToggleKeyboard: () -> Unit,
+    split: Boolean,
+    onToggleSplit: () -> Unit,
     live: Boolean,
     compact: Boolean,
 ) {
@@ -260,15 +329,41 @@ private fun ComputerBar(
                     )
                 }
                 if (live) {
-                    // A touchscreen has no keys. Without this there is no way to type into the
-                    // desktop from a phone at all — see [DesktopView.showKeyboard].
+                    // A touchscreen has no keys, and a phone with nothing plugged into it already
+                    // has these on screen — this is the correction for when the automatic answer is
+                    // wrong, in either direction. See [OnScreenKeyboard].
                     DropdownMenuItem(
-                        text = { Text("Keyboard") },
+                        text = { Text(if (keyboardShown) "Hide the keyboard" else "Show the keyboard") },
                         leadingIcon = { Icon(Icons.Outlined.Keyboard, contentDescription = null) },
                         onClick = {
                             menuOpen = false
+                            onToggleKeyboard()
+                        },
+                    )
+                }
+                if (live && keyboardShown) {
+                    // Two halves under two thumbs, for the phone held in both hands. Worth a menu
+                    // item rather than a gesture: which one suits you does not change during a
+                    // session, and a keyboard that rearranged itself by accident would be worse
+                    // than either shape.
+                    DropdownMenuItem(
+                        text = { Text(if (split) "Join the keyboard up" else "Split the keyboard") },
+                        onClick = {
+                            menuOpen = false
+                            onToggleSplit()
+                        },
+                    )
+                }
+                if (live) {
+                    // The way out for anyone who would rather have their own IME — dictation,
+                    // another language, a layout Box does not draw. It types through the same
+                    // editor-shaped fiction the desktop already maintains for hardware keyboards.
+                    DropdownMenuItem(
+                        text = { Text("Use the system keyboard") },
+                        onClick = {
+                            menuOpen = false
                             onSetControl(ControlHolder.User)
-                            onShowKeyboard()
+                            onShowSystemKeyboard()
                         },
                     )
                 }

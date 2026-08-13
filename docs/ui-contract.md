@@ -311,6 +311,32 @@ panel at a time (`ComputerPanel`). It is deliberately not a pane beside the chat
 used to give it the narrowest of three columns, non-interactive, which is how "there is a real
 Linux computer in here" ended up reading as a screenshot.
 
+### Driving it
+
+Two hands, one cursor. A mouse is absolute — it reports where it is, RFB says where the pointer is,
+and hover, which is most of what a mouse does and what every menu in the guest reacts to, arrives
+with a coordinate attached. A finger is not a pointer, so touch drives a **trackpad** instead: drag
+to move, tap to click, two fingers to right-click, two fingers to scroll, tap-then-drag to drag.
+Landing the cursor under the fingertip instead would put the target beneath the thing aiming at it,
+offer no hover at all, and cap precision at the width of a finger on a desktop drawn for a mouse.
+`GuestPointer` holds the one cursor both hands move and converts the trackpad's deltas back into
+the absolute coordinate the protocol wants, so the guest is still told where the pointer is on
+every event. While a finger is driving, Box draws a cursor of its own — the guest's is however far
+behind the emulated machine currently is, and the gap between the two is the only honest reading of
+that there is.
+
+**With no keyboard or pointer attached, the computer draws its own keyboard.** Not the IME: a stock
+soft keyboard has no Control, no Alt, no Super, no Escape and no function row, and `Ctrl+C` in the
+guest's terminal matters here more than autocorrect does. It is also a band in the layout rather
+than an overlay, so the guest is resized once when it appears instead of on every inset change, and
+the bar above it drags the split between screen and keys — which trades key size against screen,
+and walks the keyboard into two halves under two thumbs as it shrinks. Sweep across the middle of
+the keys and the keyboard becomes a trackpad for a few seconds, so pointing does not cost a mode
+switch or a permanent strip of layout. `HardwareInput` decides by capability, never by device name:
+DeX, a Bluetooth keyboard and a USB mouse all read the same, and plugging one in takes the drawn
+keys away in the same beat. The menu overrides it in both directions, and offers the system IME for
+anyone who wants dictation or another language.
+
 **Tasks** picks between two layouts from **window size only** — never device type, because a Fold
 changes class mid-process and DeX windows are resized by dragging a corner.
 
