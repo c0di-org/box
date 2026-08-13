@@ -1,9 +1,9 @@
 # The UI contract
 
-Box's UI is built against interfaces, not against the runtime. Everything below lives in `app/`
-and is satisfied today by an in-process fake, so the conversation surface can be built, demoed and
-screenshotted with no VM running. This document is the handshake for whoever implements the real
-thing.
+Box's UI is built against interfaces, not against the runtime. Everything below lives in `app/`,
+and each interface has two implementations: `GuestAgentBackend`, which drives a real harness in
+the VM, and an in-process fake, so the conversation surface can be built, demoed and screenshotted
+with no VM running. This document is the handshake for anyone implementing another one.
 
 ## 1. Agent events — `app/.../agent/AgentEvent.kt`
 
@@ -336,33 +336,32 @@ delegate that completes in eight seconds is one nobody can try the Stop button o
 
 ## 3. What the UI needs from the runtime layer — `computer/DesktopTransport.kt`
 
-Neither of these exists yet; both are declared so the panes have a shape to slot into.
-
 ```kotlin
 interface DesktopTransport {
     val state: StateFlow<DesktopState>
-    suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int)
-    suspend fun detach()
+    val wantedGuestScreen: StateFlow<GuestScreen?>
+    suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int, preview: Boolean = false)
+    suspend fun detach(surface: Surface)
     suspend fun send(input: DesktopInput)      // only while the user holds control
     suspend fun setControl(holder: ControlHolder)
-}
-
-interface PreviewTransport {
-    suspend fun forward(guestPort: Int): Result<String>   // loopback URL a WebView can load
-    suspend fun release(guestPort: Int)
 }
 ```
 
 - Frames go through an Android `Surface`, not a bitmap stream: copying 60fps of ARGB across a
-  process boundary would cost more than the VM does.
+  process boundary would cost more than the VM does. `VncDesktop` satisfies this from the UI
+  process, reading QEMU's VNC server on an app-private socket, so no frames cross a process
+  boundary at all.
+- More than one surface attaches at once, because the box's header, the inline pane and the full
+  window are three views of one machine. `preview` marks the ones that are only looked at, so a
+  thumbnail never decides how big the guest's screen should be.
 - `ControlHolder` is runtime-enforced, not a UI convention. Opening the Computer destination takes
   control unless an agent is mid-task, and leaving hands it back; guest-agent input is suspended
   for as long as the user holds it. The "Take over / You're driving" button in the computer's bar
   is a view of this state.
-- `release` exists so a forwarded port never outlives the session that asked for it.
 
-Until the preview transport lands, "Open preview" is wired but reports that it is still being
-built. The desktop transport exists: the computer draws the real guest screen.
+Port forwarding is not part of this interface. It is `IRuntimeControl.forwardPort`, because only
+`:computer` reaches the VM's monitor; `releasePort` exists so a forward never outlives the panel
+that asked for it.
 
 ## 4. Layout
 

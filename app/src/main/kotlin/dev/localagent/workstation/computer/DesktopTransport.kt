@@ -4,11 +4,10 @@ import android.view.Surface
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * What the UI needs from the runtime layer to show the agent's live desktop.
+ * What the UI needs from the runtime layer to show the agent's live desktop. Implemented by
+ * [VncDesktop].
  *
- * Nothing implements this yet — the display transport does not exist. It is written down here,
- * in app code, so the pane has a real shape to slot into and so the runtime side has a target:
- * frames are handed off through an Android [Surface] rather than streamed as bitmaps, because
+ * Frames are handed off through an Android [Surface] rather than streamed as bitmaps, because
  * copying 60 fps of ARGB across a process boundary would cost more than the VM does.
  *
  * The control split is the part that matters for the product. The agent drives the desktop by

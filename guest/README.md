@@ -1,8 +1,8 @@
 # Guest image
 
-`build-image.sh` is the reproducible base-system image builder for an ARM64 Linux
-CI runner. It creates Debian Bookworm VM data, a non-root `agent` account, and
-the private `agentd` service on QEMU's virtio serial port.
+`build-image.sh` builds the guest: the ARM64 Debian Bookworm system disk that ships
+inside the APK and boots as the user's Linux box. It creates the VM data, a non-root
+`agent` account, and the private `agentd` service on QEMU's virtio serial port.
 
 `agentd/agentd.py` is the whole guest control service, deliberately one file so the
 entire host-facing attack surface can be audited in one place. It speaks
@@ -96,7 +96,6 @@ docker run --rm --platform linux/arm64 --privileged -v "$PWD:/workspace" \
   -e OUT_DIR=/workspace/guest/image/out-new local-agent-guest-builder
 ```
 
-Release images are built in a locked ARM64 CI container and published with their
-`image.json` and per-payload SHA-256 files. On the device, the system disk is replaced
-whenever the installed version differs from the one in the APK; the `workspace.qcow2`
-beside it is created once and is never replaced by an image update.
+On the device, the system disk is replaced whenever the installed version differs from
+the one in the APK; the `workspace.qcow2` beside it is created once and is never replaced
+by an image update.

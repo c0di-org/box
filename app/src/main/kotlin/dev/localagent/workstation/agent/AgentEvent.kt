@@ -517,10 +517,10 @@ data class Attachment(
 
 @Immutable
 sealed interface Artifact {
-    /** The agent's live desktop. Inert until the display transport lands. */
+    /** The agent's live desktop. */
     data object Computer : Artifact
 
-    /** A forwarded guest port. Inert until port forwarding lands. */
+    /** A forwarded guest port. */
     data class Preview(val url: String, val guestPort: Int) : Artifact
 
     /**

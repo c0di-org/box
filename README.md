@@ -129,9 +129,9 @@ code, not the roadmap.
 | --- | --- |
 | **The computer** | Real. An ARM64 Debian Bookworm VM boots under QEMU in its own process, with a private control channel to `agentd` inside it. Commands run, files persist. |
 | **A real agent in it** | Real. Claude Code runs in the guest and speaks Box's event vocabulary; you sign in through the phone's browser, no API key to paste. The full OAuth round trip is not yet proven on hardware. |
-| **Open computer / Take over** | Real, confirmed on hardware 12 Aug 2026. The guest runs X and openbox, the screen reaches the app over RFB on a private socket, and taking over moves the guest's own cursor and types into its shell. Until that day the machine had a screen and no input devices at all, so "Take over" switched on and then silently dropped every click — see [docs/ux-field-notes.md](docs/ux-field-notes.md). The guest's resolution is still fixed at 1280×800 rather than following the window. |
+| **Open computer / Take over** | Real, confirmed on hardware 12 Aug 2026. The guest runs X and openbox, the screen reaches the app over RFB on a private socket, taking over moves the guest's own cursor and types into its shell, and the desktop is resized to fit whatever window is showing it. |
 | **Other agents** | ChatGPT and Cursor exist as a scripted demo only. One harness is wired for real. |
-| **Preview a running server** | Not built. Port forwarding throws, and the button says so instead of opening nothing. |
+| **Preview a running server** | Real. The agent offers a port, QEMU's own network stack forwards it to loopback on the phone, and it opens in a panel. Not yet confirmed on hardware. |
 
 The honest cost: it's a fully emulated ARM64 VM, so first light takes a couple of minutes
 on a Galaxy Z Fold 7 and most of that is the guest waiting on emulated udev. See
@@ -145,10 +145,7 @@ the shipping UI.
 
 The three desktop pictures are the other kind: [`tools/device-shots.sh`](tools/device-shots.sh)
 on a real Fold 7 with a real VM behind it, so the Debian in them is actually running, the
-prompt is a shell you could type into, and the `uname` output is that machine answering. That
-screen used to be the one thing Box could not honestly photograph — and until recently it could
-not be photographed *well* on a phone either, because the guest was a fixed 1280×800 letterboxed
-into whatever it was shown in, which on the cover screen left about 70% of the panel black.
+prompt is a shell you could type into, and the `uname` output is that machine answering.
 
 ## Build it
 

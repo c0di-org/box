@@ -5,8 +5,8 @@ private QEMU virtio-serial port (`dev.localagent.agentd`) backed by an app-priva
 Unix socket. There is no TCP listener, nothing on the LAN, and `agentd` runs as the
 unprivileged `agent` user. v2 changes the wire format; it does not change that.
 
-v1 ([agentd-v1.md](agentd-v1.md)) was newline-delimited JSON with exactly one
-request in flight, buffered whole. That carried a one-shot `exec` and nothing else.
+v1 was newline-delimited JSON with exactly one request in flight, buffered whole.
+That carried a one-shot `exec` and nothing else.
 v2 is a byte-oriented multiplexer: many logical streams over the same port, each
 independently readable, cancellable and flow-controlled.
 

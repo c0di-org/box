@@ -67,10 +67,8 @@ internal object HarnessWire {
                     .filter { it.guestPath.isNotEmpty() },
             )
 
-            // The offer half of the artifact contract. Nothing in the guest emits these yet — see
-            // docs/ui-handoff.md — but the parser is the piece that was missing entirely: without
-            // it a harness *could* not offer one, and `ArtifactOffered` was reachable only from
-            // the in-process fake.
+            // The offer half of the artifact contract; the harness's `mcp__box__show` is the
+            // other half.
             "artifact" -> artifact(json)?.let {
                 AgentEvent.ArtifactOffered(eventId, session, at, it)
             }
