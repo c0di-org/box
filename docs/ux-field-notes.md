@@ -396,6 +396,7 @@ In `docs/assets/screenshots/device/`, all taken on the Fold 7:
 | `tablet-wide-one-banner.png` | `Wide` after: one banner, and the box's state said once |
 | `tablet-tasks-named.png` | A task named from its first message, beside two older ones |
 | `tablet-computer-fitted.png` | The inner screen after: the desktop fills the pane, no band |
+| `tablet-wide-live.png` | `Wide` with nothing wrong: the ranked strip drawing no banner at all |
 
 Two of these (`dex-permission-asked-twice.png`, `tablet-wide.png`) contain real conversation text
 from the device they were taken on. They are fine as evidence in this document; check them before

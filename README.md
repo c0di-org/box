@@ -96,6 +96,19 @@ A Galaxy Z Fold 7 in DeX, driving a 3440×1440 monitor, showing the Debian deskt
 running inside the phone. Taken with [`tools/device-shots.sh`](tools/device-shots.sh),
 which drives and photographs the app on real hardware in each of its three shapes.
 
+It is the same machine folded shut, and unfolded — the guest's screen is resized to whatever
+window it is being shown in, so the desktop fits the shape you are holding rather than being
+letterboxed into it:
+
+<p align="center">
+  <img alt="Box on the cover screen of a folded Galaxy Z Fold 7: the Debian desktop fills the phone's portrait screen, a terminal on it showing PRETTY_NAME=Debian GNU/Linux 12 (bookworm), Linux 6.1.0-50-arm64 aarch64, and nproc reporting 2." src="docs/assets/screenshots/device/phone-computer-debian.png" width="270">
+  &nbsp;&nbsp;
+  <img alt="The same Debian session on the unfolded inner screen, the desktop filling the taller panel, with the header reading Computer, Debian, ARM64 and a You're driving pill." src="docs/assets/screenshots/device/tablet-computer-debian.png" width="470">
+</p>
+
+Debian 12 on an ARM64 kernel with two cores, in a phone, with nothing else running it. Both
+shots are the same box a few seconds apart, shut and open.
+
 ## Nothing to set up
 
 Real Linux on Android today means several apps, a tour of the developer settings, a
@@ -130,10 +143,12 @@ repository; what is in them is Box's built-in demo conversation, because an emul
 VM and there is no agent in there to have really run `npm install`. Every pixel around it is
 the shipping UI.
 
-The DeX picture is the other kind: [`tools/device-shots.sh`](tools/device-shots.sh) on a
-real Fold 7 with a real VM behind it, so the desktop in it is a Debian that is actually
-running and the prompt is a shell you could type into. That screen used to be the one thing
-Box could not honestly photograph.
+The three desktop pictures are the other kind: [`tools/device-shots.sh`](tools/device-shots.sh)
+on a real Fold 7 with a real VM behind it, so the Debian in them is actually running, the
+prompt is a shell you could type into, and the `uname` output is that machine answering. That
+screen used to be the one thing Box could not honestly photograph — and until recently it could
+not be photographed *well* on a phone either, because the guest was a fixed 1280×800 letterboxed
+into whatever it was shown in, which on the cover screen left about 70% of the panel black.
 
 ## Build it
 
