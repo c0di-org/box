@@ -198,10 +198,15 @@ class GitHubAuth {
         live = null
         runCatching { session?.cancel() }
         // Cancelling says nothing about whether a credential already exists, so this reverts to the
-        // last thing actually known rather than asserting a disconnected box.
+        // last thing actually known rather than asserting a disconnected box — and "unknown" is
+        // what is actually known here. It used to say Disconnected, which contradicted this
+        // sentence and mattered most on the path where a connected person backs out of the
+        // repository picker: they leave a box that works, and Box then reports it as not
+        // connected until something happens to ask again.
         stateFlow.value = when (val current = stateFlow.value) {
             is State.Connected -> current
-            else -> State.Disconnected
+            State.Disconnected, State.Unconfigured -> current
+            else -> State.Unknown
         }
     }
 
