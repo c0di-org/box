@@ -26,6 +26,16 @@ internal object SessionSignals {
 
         /** The agent is blocked on a decision only the user can make. */
         data class NeedsYou(val label: String) : Signal
+
+        /**
+         * A question that is over, however it ended.
+         *
+         * Not a thing to interrupt anybody about — the opposite. "Box needs you" outlives the
+         * needing: somebody who answers in the app leaves a notification in the shade offering to
+         * take them to a decision that has already been made, and it sits there for however long
+         * the agent goes on working afterwards.
+         */
+        data object Answered : Signal
     }
 
     fun read(line: String): Signal? {
@@ -44,6 +54,11 @@ internal object SessionSignals {
 
             "permission_requested" -> Signal.NeedsYou(describe(json.optJSONObject("ask")))
 
+            // The other half of both questions below. Reading two more type tags is still not a
+            // second parser of the wire format: it is the same two facts, plus the fact that they
+            // have stopped being true.
+            "permission_resolved", "connect_resolved" -> Signal.Answered
+
             // Also a thing only the user can do, and the one most worth a notification: the agent
             // is holding its turn open indefinitely waiting for it, so a phone in a pocket is the
             // difference between a task that finishes and one that is still waiting at bedtime.
@@ -53,6 +68,7 @@ internal object SessionSignals {
                     else -> "It needs you to connect an account"
                 },
             )
+
             else -> null
         }
     }

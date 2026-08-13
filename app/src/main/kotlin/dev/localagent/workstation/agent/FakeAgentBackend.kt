@@ -86,10 +86,18 @@ class FakeAgentBackend(
         // of the last and the cursor walks whatever arrived since.
         return flow {
             var cursor = 0
+            var caughtUp = false
             log(sessionId).collect { snapshot ->
                 while (cursor < snapshot.size) {
                     emit(snapshot[cursor])
                     cursor++
+                }
+                // Whatever was already in the script when this was subscribed to is the history
+                // here; everything after the first drain is the script running live. Said once,
+                // for the same reason the guest backend says it — see [AgentEvent.CaughtUp].
+                if (!caughtUp) {
+                    caughtUp = true
+                    emit(AgentEvent.CaughtUp("caught-up:$sessionId", sessionId, System.currentTimeMillis()))
                 }
             }
         }

@@ -154,6 +154,69 @@ test('the agent asks, and the app is told what for', async () => {
   assert.equal(asked.reason, 'to clone garfbargle/box');
 });
 
+test('a long reason is trimmed to something that still reads as a sentence', async () => {
+  const events = await connect({
+    input: {
+      service: 'github',
+      reason: 'I need to push a branch and open a pull request against garfbargle/box with the '
+        + 'cold-start fix, which touches the runtime and the harness and a couple of tests as well',
+    },
+    answer: { connected: true, login: 'codi', repositories: 3 },
+  });
+
+  const { reason } = events.find((event) => event.type === 'connect_requested');
+  assert.ok(reason.length <= 141);
+  // The three things that made this unreadable: a hard cut mid-word, the word "truncated" as
+  // though the caption were a log, and a newline inside a one-line caption on a phone.
+  assert.ok(reason.endsWith('…'));
+  assert.ok(!reason.includes('truncated'));
+  assert.ok(!reason.includes('\n'));
+  assert.ok(!/\s…$/.test(reason), 'the ellipsis follows a word, not a space');
+  assert.ok(reason.startsWith('I need to push a branch'));
+});
+
+test('a reason with a line break in it becomes one line', async () => {
+  const events = await connect({
+    input: { service: 'github', reason: '  to clone\n  garfbargle/box  ' },
+    answer: { connected: true, login: 'codi', repositories: 3 },
+  });
+
+  assert.equal(events.find((event) => event.type === 'connect_requested').reason, 'to clone garfbargle/box');
+});
+
+test('a request that ends says so in the log, so a replay does not reopen it', async () => {
+  const events = await connect({
+    input: { service: 'github', reason: 'to clone garfbargle/box' },
+    answer: { connected: true, login: 'codi', repositories: 3 },
+  });
+
+  const asked = events.find((event) => event.type === 'connect_requested');
+  const ended = events.find((event) => event.type === 'connect_resolved');
+  // Without this line the log holds a question and no answer, and a session log is read from the
+  // beginning every time somebody opens the task -- so an account connected weeks ago comes back
+  // as a live card carrying weeks-old wording, and nothing can dismiss it.
+  assert.ok(ended, 'the log has to record how the request ended');
+  assert.equal(ended.requestId, asked.requestId);
+  assert.equal(ended.connected, true);
+  assert.ok(events.indexOf(ended) > events.indexOf(asked));
+});
+
+test('declining is recorded as an ending, not left hanging', async () => {
+  const events = await connect({ answer: { connected: false } });
+  const ended = events.find((event) => event.type === 'connect_resolved');
+  assert.ok(ended);
+  assert.equal(ended.connected, false);
+});
+
+test('Box going away ends the request in the log as well as in the model', async () => {
+  // The other end of the same problem: a harness that is killed mid-request would otherwise leave
+  // a question in the log forever, and the process that could have answered it is gone.
+  const events = await connect({ closeWithoutAnswering: true });
+  const ended = events.find((event) => event.type === 'connect_resolved');
+  assert.ok(ended);
+  assert.equal(ended.connected, false);
+});
+
 test('the call waits for the person instead of returning an instruction', async () => {
   const events = await connect({ answer: { connected: true, login: 'codi', repositories: 1 } });
   // The app is only answered once it has seen the request, so `told` landing last is the proof

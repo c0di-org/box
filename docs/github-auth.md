@@ -43,7 +43,7 @@ the property three other parts of this codebase already depend on.
 | `guest/github/box-git-credential` | The git credential helper. The only thing on the machine that reads the token. |
 | `app/…/agent/GitHubAuth.kt` | Drives that program and turns its events into screen states. |
 | `app/…/ui/ConnectGitHubSheet.kt` | The code, and one button. |
-| `mcp__box__connect` in the harness | The agent asking for an account, and blocking until it has one. |
+| `mcp__box__connect` in the harness | The agent asking for an account, and blocking until it has one. Emits `connect_requested` and, when it settles, `connect_resolved`. |
 
 Configuration comes from Gradle properties, because a client id is public but still should not be
 written into source. They are set in `gradle.properties`, and a fork points them at its own app:
@@ -103,6 +103,32 @@ is looking at.
 Closing the sheet does not answer the agent — it goes on waiting, and the banner stays in the
 conversation. "Not now" is the only way to decline, because a dismissal is not a decision.
 
+### On a box that is already connected
+
+Which is most of the time, and it is a different flow. A GitHub App user token reaches only the
+repositories the app is *installed* on, so the 403 an agent hits on a private clone almost never
+means "no credential" — it means "not that one". Connecting therefore looks at the stored token
+first: if GitHub still accepts it, the device flow is skipped entirely and the sheet opens on the
+repository picker, saying so. It finishes when the reachable set actually changes, or when the
+person says they are done — a screen waiting on a count that will never move is a screen with no
+way out.
+
+Running the device flow again instead was a loop: re-authorise, find installations already there,
+finish, and hand the agent the identical 403 to retry into.
+
+## Why a request is a pair of events
+
+`connect_requested` goes into the session log, and so does `connect_resolved`. That second line is
+not bookkeeping — a session log is replayed from the beginning every time somebody opens the task,
+so a request with no recorded ending is indistinguishable from one still waiting. Without it, an
+account connected last week comes back as a live card carrying last week's wording, every time,
+and nothing can answer it: the harness dropped the id long ago, so the reply goes nowhere.
+
+The app also has to know whether it is reading history or hearing news, since a replayed question
+and a live one are the same bytes. `AgentEvent.CaughtUp` marks the boundary; a request read before
+it is remembered and left alone, and only what is still outstanding when the log runs out is put
+in front of anybody.
+
 ## What this does not do yet
 
 - **Push is not treated differently from any other command.** It should be: pushing is the one
@@ -111,6 +137,10 @@ conversation. "Not now" is the only way to decline, because a dismissal is not a
   `PreToolUse` hook in the harness rather than a permission rule.
 - **One account, one host.** The stored file is not keyed by host, so GitHub Enterprise and a
   second account both need the paste-a-token path today.
+- **The guest resolves through 1.1.1.1 and 8.8.8.8**, written into the image, because slirp's own
+  relay reads a `/etc/resolv.conf` Android does not have. A network that blocks or hijacks public
+  resolvers therefore produces "Box could not reach GitHub" with nothing to distinguish it from
+  being offline. Following the phone's own DNS would be better on both counts.
 - **No repository picker inside Box.** Box knows which repositories the box can reach and could
   offer them as clone targets; right now it only counts them.
 

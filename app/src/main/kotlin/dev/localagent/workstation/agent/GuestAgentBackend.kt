@@ -371,6 +371,11 @@ class GuestAgentBackend(
             held.forEach { emitLines(cursor.accept(it.first, it.second)) }
             held.clear()
             replayed = true
+            // Said once, inside the lock, so it lands between the last historical line and the
+            // first live one and cannot be overtaken by either. What it buys is in
+            // [AgentEvent.CaughtUp]: some events are a thing to act on when they arrive and a
+            // thing to merely remember when they are read back.
+            send(AgentEvent.CaughtUp("caught-up:${record.id}", record.id, System.currentTimeMillis()))
         }
 
         live.join()

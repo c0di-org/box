@@ -140,6 +140,7 @@ val SCENES = listOf(
     "github-ask",
     "github-code",
     "github-repos",
+    "github-add-repo",
     // The machine.
     "computer",
     "computer-chat",
@@ -313,6 +314,25 @@ private class GalleryModel(private val scope: CoroutineScope) {
                         github = GitHubAuth.State.ChoosingRepositories(
                             url = "https://github.com/apps/box/installations/new",
                             login = "codi",
+                        ),
+                    )
+                }
+            }
+
+            // The same step on a box that is already connected, which is the commoner arrival: an
+            // agent's 403 on a private repository usually means "not that one", not "no account".
+            "github-add-repo" -> {
+                select(headline)
+                allowPending()
+                settle()
+                mutable.update {
+                    it.copy(
+                        connectRequest = CLONE_REQUEST.copy(sessionId = headline),
+                        githubVisible = true,
+                        github = GitHubAuth.State.ChoosingRepositories(
+                            url = "https://github.com/apps/box/installations/new",
+                            login = "codi",
+                            adding = true,
                         ),
                     )
                 }

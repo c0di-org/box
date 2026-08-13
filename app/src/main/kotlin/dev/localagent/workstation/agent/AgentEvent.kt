@@ -208,6 +208,39 @@ sealed interface AgentEvent {
         val reason: String?,
     ) : AgentEvent
 
+    /**
+     * A [ConnectRequested] that is over, however it ended.
+     *
+     * The sibling of [PermissionResolved], and it exists for the same reason: a session log is
+     * replayed from the beginning every time the conversation is opened, so a request with no
+     * recorded ending reads as one still waiting. An account connected last week would otherwise
+     * come back as a live card carrying last week's reason, and nothing could dismiss it — the
+     * harness has long since forgotten the id, so the answer goes nowhere.
+     */
+    data class ConnectResolved(
+        override val eventId: String,
+        override val sessionId: String,
+        override val at: Long,
+        val requestId: String,
+        val connected: Boolean,
+    ) : AgentEvent
+
+    /**
+     * The end of history: everything already on disk has been delivered, and what follows is
+     * happening now.
+     *
+     * Emitted once per subscription and never written to the log — it is a property of *this*
+     * reading of it, not of the session. It exists because two events that look identical need
+     * opposite handling: an agent asking for GitHub right now should raise a sheet with a code in
+     * it, and the same line replayed from a log should raise nothing at all until the rest of the
+     * log has had its say about how it ended. See `BoxViewModel.offerConnection`.
+     */
+    data class CaughtUp(
+        override val eventId: String,
+        override val sessionId: String,
+        override val at: Long,
+    ) : AgentEvent
+
     data class ArtifactOffered(
         override val eventId: String,
         override val sessionId: String,

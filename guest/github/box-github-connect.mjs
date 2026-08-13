@@ -106,13 +106,28 @@ function nextCommand() {
 
 // ---------------------------------------------------------------- GitHub
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref());
+
 /**
  * One request, with the failure modes this flow actually meets.
  *
  * A phone in a lift and a revoked token are different answers and the caller has to tell them
  * apart: one is worth retrying silently and the other has to be said out loud.
  */
-async function github(url, { method = 'GET', body, token, timeout = 20_000 } = {}) {
+async function github(url, { method = 'GET', body, token, timeout = 20_000, attempts = 1 } = {}) {
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    // Growing, and only between attempts: a phone whose radio is mid-handover comes back in a
+    // second or two, and hammering it does not make it come back sooner.
+    if (attempt > 0) await sleep(attempt * 1_500);
+    last = await once(url, { method, body, token, timeout });
+    if (!last.offline) return last;
+  }
+  return last;
+}
+
+/** One request, with the failure modes this flow actually meets. */
+async function once(url, { method = 'GET', body, token, timeout = 20_000 } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
@@ -139,8 +154,6 @@ async function github(url, { method = 'GET', body, token, timeout = 20_000 } = {
     clearTimeout(timer);
   }
 }
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref());
 
 /**
  * A number GitHub sent, or the documented default if it sent nothing usable.
@@ -260,8 +273,8 @@ function configureGit(account) {
 // ---------------------------------------------------------------- the flow
 
 /** Who this token belongs to, which is also the check that it is still a token. */
-async function identify(token) {
-  const response = await github(`${API}/user`, { token });
+async function identify(token, { attempts = 1 } = {}) {
+  const response = await github(`${API}/user`, { token, attempts });
   if (response.offline) return { unreachable: true };
   if (response.status === 401) return { revoked: true };
   if (!response.ok || !response.payload?.login) {
@@ -337,8 +350,15 @@ async function settle(token, appSlug) {
  * saying they are done, which is answered immediately; the slow poll behind it is what makes the
  * screen finish on its own when they simply come back to Box without pressing anything.
  */
-async function waitForInstallation(token) {
+async function waitForInstallation(token, baseline = null) {
   const deadline = Date.now() + 15 * 60_000;
+  // With nothing installed, any installation is the thing being waited for. With something
+  // already installed -- somebody adding a repository to a box that is otherwise connected -- the
+  // thing being waited for is a *change*, because "more than zero" was true before they left.
+  const arrived = (reach) => (baseline === null
+    ? reach.installations > 0
+    : reach.installations !== baseline.installations || reach.repositories !== baseline.repositories);
+
   while (Date.now() < deadline) {
     const raced = await raceCommand(4_000);
     if (raced === null || raced?.type === 'cancel') {
@@ -346,10 +366,55 @@ async function waitForInstallation(token) {
       return null;
     }
     const reach = await reachableRepositories(token);
-    if (reach.installations > 0) return reach;
+    if (arrived(reach)) return reach;
+    // Done, having added nothing, is a decision and not a mistake -- and only answerable when
+    // there was already something to fall back on. Somebody who went to GitHub and thought better
+    // of it should not be held on a screen that waits a quarter of an hour for them to change
+    // their mind. With nothing installed at all there is nothing to go back to, so that case
+    // keeps waiting: a connected box that reaches no repository is not a finished job.
+    if (raced?.type === 'installed' && baseline !== null) return reach;
   }
   fail('Nothing was chosen in time.', 'Connect again when you are ready to pick repositories.');
   return null;
+}
+
+/**
+ * Connecting a box that is already connected, which is the commonest reason to be here.
+ *
+ * A GitHub App user token reaches only the repositories the app is *installed* on, so the 403 an
+ * agent hits on a private clone almost never means "no credential" -- it means "not that one".
+ * Running the device flow again answers a question nobody asked: the person re-authorises, the
+ * installation check finds installations already, and the flow finishes without ever offering the
+ * screen that would have fixed it. Then the agent retries and gets the same 403. That loop was
+ * the whole failure.
+ *
+ * So a box with a working token goes straight to the picker. The credential is rewritten on the
+ * way past, which costs nothing and repairs a box whose token predates half of what connecting
+ * now writes -- an older Box wrote the token and no git identity, and `git commit` fails without
+ * one.
+ */
+async function addRepositories(token, account, appSlug) {
+  storeCredential(token, account);
+  configureGit(account);
+
+  const baseline = await reachableRepositories(token);
+  emit({
+    type: 'github_install',
+    url: `${WEB}/apps/${appSlug}/installations/new`,
+    login: account.login,
+    // So the screen can say "add another" rather than "now pick what this box can see", which
+    // reads as though the connection they already have did not happen.
+    adding: true,
+  });
+  const reach = await waitForInstallation(token, baseline);
+  if (!reach) return;
+  emit({
+    type: 'github_connected',
+    host: HOST,
+    login: account.login,
+    name: account.name,
+    repositories: reach.repositories,
+  });
 }
 
 /** The device flow itself. */
@@ -357,6 +422,12 @@ async function connect(clientId, appSlug) {
   const started = await github(`${WEB}/login/device/code`, {
     method: 'POST',
     body: { client_id: clientId },
+    // The first outbound request this box makes in the flow, and often the first it has made at
+    // all: an agent-driven connect can start within a second of the guest's DHCP lease. One flake
+    // there used to paint the whole sheet red and make the person start over, so it is retried
+    // rather than reported. The poll loop below has always tolerated a dropped request; this is
+    // the same tolerance, at the one point that did not have it.
+    attempts: 3,
   });
   if (started.offline) return fail('Box could not reach GitHub.', 'Check the phone’s connection and try again.');
   if (!started.ok || !started.payload?.device_code) {
@@ -519,6 +590,21 @@ async function main() {
     // though: a token made by hand still works, so this waits for one rather than exiting.
     emit({ type: 'github_unconfigured' });
     return awaitPastedToken(appSlug ?? 'box');
+  }
+
+  // A box that already holds a working credential does not need another one; see
+  // [addRepositories] for why it needs the picker instead.
+  const existing = readToken();
+  if (existing) {
+    const identified = await identify(existing, { attempts: 3 });
+    // Not a reason to start a device flow that would fail at the same fence. Better to say the
+    // network is the problem than to walk somebody to GitHub and back for nothing.
+    if (identified.unreachable) {
+      return fail('Box could not reach GitHub.', 'Check the phone’s connection and try again.');
+    }
+    // Revoked or refused falls through: the credential is genuinely gone and a fresh one is
+    // exactly what is wanted.
+    if (identified.account) return addRepositories(existing, identified.account, appSlug);
   }
 
   // Pasting instead of using the code is offered throughout, so it is answered whether it arrives

@@ -62,8 +62,20 @@ class GitHubAuth {
             val reason: String? = null,
         ) : State
 
-        /** Authorised, and now choosing which repositories this box can reach. */
-        data class ChoosingRepositories(val url: String, val login: String) : State
+        /**
+         * Authorised, and now choosing which repositories this box can reach.
+         *
+         * [adding] separates the second half of a first connection from somebody widening a box
+         * that already works — the commonest way to arrive here, since an agent's 403 on a
+         * private repository usually means "not that one" rather than "no credential". The two
+         * need different words: telling a connected person to "now pick what this box can see"
+         * reads as though the connection they already have did not happen.
+         */
+        data class ChoosingRepositories(
+            val url: String,
+            val login: String,
+            val adding: Boolean = false,
+        ) : State
 
         /** This build has no GitHub App, so the only way in is a token made by hand. */
         data object Unconfigured : State
@@ -82,6 +94,7 @@ class GitHubAuth {
         // A connection already under way is a better answer than starting a second one, and this
         // can be called at any time — `:computer` reconnects while the user is still at GitHub.
         if (live != null) return
+        val before = stateFlow.value
         stateFlow.value = State.Checking
         val events = LineBuffer()
         runCatching {
@@ -99,11 +112,29 @@ class GitHubAuth {
                         // A connection may have started while this was still asking; on a cold box
                         // the check outlives the user's patience. Answering now would replace a
                         // live code with "not connected" and strand them mid-flow.
-                        if (stateFlow.value == State.Checking) stateFlow.value = State.Disconnected
+                        if (stateFlow.value == State.Checking) stateFlow.value = unanswered(before)
                     }
                 },
             )
-        }.onFailure { stateFlow.value = State.Disconnected }
+        }.onFailure { stateFlow.value = unanswered(before) }
+    }
+
+    /**
+     * What to believe when the box did not answer at all.
+     *
+     * Not "disconnected", which is what this used to say and is a claim nothing here is entitled
+     * to make. A box that is asleep, still booting, or running an image built before any of this
+     * existed produces a session that opens and closes having said nothing — and the program is
+     * careful to distinguish a revoked token from an unreachable network precisely so that the app
+     * does not have to guess. Guessing "not connected" put a Connect button in front of somebody
+     * who was connected, which is the same false negative in a different place.
+     *
+     * A real disconnection always arrives as an event saying so.
+     */
+    private fun unanswered(before: State): State = when (before) {
+        // Still connected as far as anything knows; just not confirmed this time.
+        is State.Connected -> before.copy(stale = true)
+        else -> State.Unknown
     }
 
     /**
@@ -167,10 +198,15 @@ class GitHubAuth {
         live = null
         runCatching { session?.cancel() }
         // Cancelling says nothing about whether a credential already exists, so this reverts to the
-        // last thing actually known rather than asserting a disconnected box.
+        // last thing actually known rather than asserting a disconnected box — and "unknown" is
+        // what is actually known here. It used to say Disconnected, which contradicted this
+        // sentence and mattered most on the path where a connected person backs out of the
+        // repository picker: they leave a box that works, and Box then reports it as not
+        // connected until something happens to ask again.
         stateFlow.value = when (val current = stateFlow.value) {
             is State.Connected -> current
-            else -> State.Disconnected
+            State.Disconnected, State.Unconfigured -> current
+            else -> State.Unknown
         }
     }
 
@@ -227,6 +263,7 @@ class GitHubAuth {
             "github_install" -> stateFlow.value = State.ChoosingRepositories(
                 url = event.optString("url"),
                 login = event.optString("login"),
+                adding = event.optBoolean("adding"),
             )
 
             "github_connected" -> stateFlow.value = State.Connected(
