@@ -12,10 +12,35 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+                The only practical way to get a file *into* a box. Everything else about the shared
+                folder is a place you navigate to: it appears in the system Files app and in every
+                app's Open dialog, but that makes Box a destination and never something you send to.
+                Without this filter a screenshot in the user's hand can only be described to the
+                agent in prose.
+
+                Deliberately not `*/*`. A share target that offers itself for everything clutters
+                every share sheet on the device, and Box has no answer for an arbitrary binary
+                beyond putting it on a disk. Widen it when there is a reason.
+
+                `singleTask` above is part of the same feature: it is what makes a share land in the
+                conversation the user already has open, rather than starting a second copy of Box on
+                top of their own.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/pdf" />
             </intent-filter>
         </activity>
 

@@ -22,6 +22,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.IExecCallback
 import dev.localagent.runtime.qemu.IFileListCallback
 import dev.localagent.runtime.qemu.IFileReadCallback
+import dev.localagent.runtime.qemu.IPortForwardCallback
 import dev.localagent.runtime.qemu.IRuntimeControl
 import dev.localagent.runtime.qemu.RuntimeService
 import dev.localagent.runtime.qemu.RuntimeStateCodec
@@ -30,6 +31,10 @@ import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.Attachment
+import dev.localagent.workstation.agent.AgentViewport
+import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
@@ -243,6 +248,18 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     /**
+     * Reported by the composition every time the window it measured changes shape.
+     *
+     * Called far more often than it does anything — a drag across a DeX corner is a stream of
+     * widths — so the backend drops the ones that repeat rather than the UI trying to guess which
+     * are worth sending. Nothing in [BoxUiState] holds it: no pixel on screen depends on what the
+     * agent was told, and the window itself is the only honest source for what the window is.
+     */
+    fun setViewport(viewport: AgentViewport) {
+        viewModelScope.launch { agents.setViewport(viewport) }
+    }
+
+    /**
      * Android can reclaim the UI process while the VM keeps running in `:computer`, which would
      * otherwise leave a fresh BoxUiState claiming Box was never set up. Installed images decide
      * the starting point, then a live runtime process overrides it with the real state.
@@ -301,6 +318,10 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     fun selectComputerPanel(panel: ComputerPanel) {
+        // Before the state changes, while the open preview is still readable: leaving the panel is
+        // how a forward ends, and a hole in the phone's loopback interface should not outlive the
+        // panel that asked for it.
+        if (mutableUiState.value.computerPanel == ComputerPanel.Preview) closePreview()
         mutableUiState.update {
             it.copy(
                 computerPanel = if (it.computerPanel == panel) ComputerPanel.None else panel,
@@ -390,7 +411,10 @@ class BoxViewModel @JvmOverloads constructor(
      */
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        val attachments = mutableUiState.value.pendingAttachments
+        // A picture on its own is a message. "Look at this" is often the whole thought, and
+        // requiring a word alongside it would be Box asking for something it does not need.
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
         wakeComputerIfNeeded()
         val state = mutableUiState.value
         val sessionId = state.selectedSessionId
@@ -399,7 +423,15 @@ class BoxViewModel @JvmOverloads constructor(
         // moment the harness starts taking work, which is the race this exists to lose safely.
         val held = state.signInWanted
         mutableUiState.update {
-            it.copy(queued = it.queued + QueuedPrompt(sessionId, trimmed, heldForSignIn = held))
+            it.copy(
+                queued = it.queued + QueuedPrompt(sessionId, trimmed, heldForSignIn = held, attachments = attachments),
+                // Cleared here rather than after the send lands: they are on their way with this
+                // turn, and a second tap must not send them twice. They ride on the queued copy
+                // rather than staying on the composer, which is what lets a turn held for a sign-in
+                // still have its files when the credential finally arrives — the composer the user
+                // would otherwise have to re-attach from is gone by then.
+                pendingAttachments = emptyList(),
+            )
         }
         if (held) {
             // Only once the box is open. Interrupting a boot with a sheet that says "waiting for
@@ -411,10 +443,68 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             if (sessionId == null) {
                 val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@launch
-                startSession(harness.id, trimmed)
+                startSession(harness.id, trimmed, attachments)
             } else {
-                agents.send(sessionId, trimmed)
+                agents.send(sessionId, trimmed, attachments)
             }
+        }
+    }
+
+    /**
+     * Takes something the user picked, or shared in from another app, into the box.
+     *
+     * The copy happens now rather than at send, and that is the point: a `content://` uri is a
+     * loan from the app that produced it, revocable and often dead by the time the user has
+     * finished typing. Once it is in the shared folder it is a file, and the rest of Box only ever
+     * deals in paths.
+     */
+    fun attach(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            Inbox.receive(getApplication(), uri)
+                .onSuccess { attachment ->
+                    mutableUiState.update {
+                        it.copy(pendingAttachments = it.pendingAttachments + attachment)
+                    }
+                }
+                .onFailure { failure -> showNotice(failure.message ?: "That file could not be attached.") }
+        }
+    }
+
+    /**
+     * Files another app handed to Box through the share sheet.
+     *
+     * Beyond taking them in, this has to put them somewhere they can be *seen*. A share can reach
+     * Box with nothing open — the home surface has no composer once the box has settled — and an
+     * attachment nobody can see is the same as one that never arrived. So the newest conversation
+     * is selected, or one is started if this box has never had a conversation at all, which is
+     * exactly what someone who just shared a picture to a chat app expects to be looking at.
+     */
+    fun receiveShared(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        uris.forEach(::attach)
+        val state = mutableUiState.value
+        if (state.selectedSessionId != null) return
+        val newest = state.sessions.firstOrNull()
+        if (newest != null) {
+            selectSession(newest.id)
+        } else {
+            state.harnesses.firstOrNull()?.let { startSession(it.id) }
+        }
+    }
+
+    /**
+     * Taken back off the composer before it was sent, and deleted.
+     *
+     * Deleting is right only here. Before sending, the copy exists because Box made one and the
+     * user has changed their mind; after sending it is a file in their own folder, on their phone,
+     * and Box removing it would be tidying up something that is no longer its business.
+     */
+    fun removeAttachment(attachment: Attachment) {
+        mutableUiState.update {
+            it.copy(pendingAttachments = it.pendingAttachments.filterNot { held -> held == attachment })
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            Inbox.phoneFile(getApplication(), attachment.guestPath)?.delete()
         }
     }
 
@@ -445,11 +535,14 @@ class BoxViewModel @JvmOverloads constructor(
             var started: String? = null
             held.forEach { prompt ->
                 val sessionId = prompt.sessionId ?: started
+                // The files go with the turn they were attached to, which is the whole reason
+                // [QueuedPrompt] carries them: the composer they came from was cleared when the
+                // message was typed, possibly minutes and a sign-in ago.
                 if (sessionId == null) {
                     val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@forEach
-                    started = beginSession(harness.id, prompt.text)
+                    started = beginSession(harness.id, prompt.text, prompt.attachments)
                 } else {
-                    agents.send(sessionId, prompt.text)
+                    agents.send(sessionId, prompt.text, prompt.attachments)
                 }
             }
         }
@@ -465,15 +558,23 @@ class BoxViewModel @JvmOverloads constructor(
         if (needsWaking) start()
     }
 
-    fun startSession(harnessId: String, prompt: String? = null) {
+    fun startSession(
+        harnessId: String,
+        prompt: String? = null,
+        attachments: List<Attachment> = emptyList(),
+    ) {
         if (mutableUiState.value.startingSession) return
-        viewModelScope.launch { beginSession(harnessId, prompt) }
+        viewModelScope.launch { beginSession(harnessId, prompt, attachments) }
     }
 
     /** The body of [startSession], for callers that need the id before they do anything else. */
-    private suspend fun beginSession(harnessId: String, prompt: String? = null): String? {
+    private suspend fun beginSession(
+        harnessId: String,
+        prompt: String? = null,
+        attachments: List<Attachment> = emptyList(),
+    ): String? {
         mutableUiState.update { it.copy(startingSession = true) }
-        val id = runCatching { agents.startSession(harnessId, prompt) }
+        val id = runCatching { agents.startSession(harnessId, prompt, attachments) }
             .onFailure { error -> showNotice(error.message ?: "Box could not start that task.") }
             .getOrNull()
         mutableUiState.update { state ->
@@ -619,9 +720,50 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(holder) }
     }
 
-    /** Port forwarding still does not exist, so a preview says so rather than opening nothing. */
-    fun openPreview(label: String) {
-        showNotice("$label isn’t connected yet — the runtime transport for it is still being built.")
+    /**
+     * Opens something the agent is serving in the guest, in a panel over the machine.
+     *
+     * The forward is asked for every time rather than cached here: the runtime hands back the same
+     * one for a guest port it has already opened, and that is the only place that can know whether
+     * the VM has restarted underneath it since.
+     */
+    fun openPreview(artifact: Artifact.Preview) {
+        val runtime = control ?: return showNotice("The computer is still starting.")
+        mutableUiState.update {
+            it.copy(destination = BoxDestination.Computer, computerPanel = ComputerPanel.Preview)
+        }
+        runCatching {
+            runtime.forwardPort(
+                artifact.guestPort,
+                object : IPortForwardCallback.Stub() {
+                    override fun onForwarded(guestPort: Int, url: String) {
+                        mutableUiState.update {
+                            it.copy(preview = OpenedPreview(url = url, guestPort = guestPort))
+                        }
+                    }
+
+                    override fun onError(message: String) {
+                        mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+                        showNotice(message)
+                    }
+                },
+            )
+        }.onFailure { error ->
+            mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+            showNotice(error.message ?: "Box could not open that preview.")
+        }
+    }
+
+    /**
+     * Closes the preview and gives the port back.
+     *
+     * `release` is honoured rather than left to the VM's lifetime because a forward is a hole in
+     * the phone's loopback interface: it should not outlive the panel that asked for it.
+     */
+    fun closePreview() {
+        val open = mutableUiState.value.preview ?: return
+        mutableUiState.update { it.copy(preview = null) }
+        runCatching { control?.releasePort(open.guestPort) }
     }
 
     // -----------------------------------------------------------------------
@@ -796,6 +938,32 @@ class BoxViewModel @JvmOverloads constructor(
             mutableUiState.update { it.copy(filesLoading = false) }
             showNotice(error.message ?: "Box could not read that folder.")
         }
+    }
+
+    /**
+     * Opens an artifact the agent offered, in the panel that already knows how to show a file.
+     *
+     * Not a new surface. The Files panel is a view onto the machine that floats over it one at a
+     * time — exactly what a document is — and it already reads a guest path, truncates the same
+     * way, and closes the same way. Adding a second viewer would be two places to keep right about
+     * what "too big" means.
+     */
+    fun openDocument(artifact: Artifact.Document) {
+        mutableUiState.update {
+            it.copy(
+                destination = BoxDestination.Computer,
+                computerPanel = ComputerPanel.Files,
+                filesPlace = FilesPlace.InTheBox,
+            )
+        }
+        openFile(
+            FileEntry(
+                path = artifact.guestPath,
+                name = artifact.name,
+                isDirectory = false,
+                size = 0L,
+            ),
+        )
     }
 
     fun openFile(entry: FileEntry) {

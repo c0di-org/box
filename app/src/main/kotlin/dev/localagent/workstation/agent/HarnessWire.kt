@@ -59,8 +59,21 @@ internal object HarnessWire {
             )
 
             "user_message" -> AgentEvent.UserMessage(
-                eventId, session, at, text = json.optString("text"),
+                eventId, session, at,
+                text = json.optString("text"),
+                // Absent on every turn that carried nothing, and on every turn at all from a
+                // harness older than the feature. Both read as an empty list.
+                attachments = json.optJSONArray("attachments").mapObjects(::attachment)
+                    .filter { it.guestPath.isNotEmpty() },
             )
+
+            // The offer half of the artifact contract. Nothing in the guest emits these yet — see
+            // docs/ui-handoff.md — but the parser is the piece that was missing entirely: without
+            // it a harness *could* not offer one, and `ArtifactOffered` was reachable only from
+            // the in-process fake.
+            "artifact" -> artifact(json)?.let {
+                AgentEvent.ArtifactOffered(eventId, session, at, it)
+            }
 
             "message" -> AgentEvent.AgentMessage(
                 eventId, session, at,
@@ -284,12 +297,89 @@ internal object HarnessWire {
         else -> ChangeKind.Modify
     }
 
+    /**
+     * One offered artifact, or null for a kind this build cannot draw.
+     *
+     * Null rather than a placeholder, because an artifact is a *button*: a row saying "open the
+     * thing" that opens nothing is worse than no row. That is the one place this file's usual
+     * degrade-to-a-labelled-card rule does not apply — there is nothing to label.
+     */
+    private fun artifact(json: JSONObject): Artifact? = when (json.optString("kind")) {
+        "computer" -> Artifact.Computer
+
+        "preview" -> json.optStringOrNull("url")?.let { url ->
+            Artifact.Preview(url = url, guestPort = json.optInt("guestPort"))
+        }
+
+        "document" -> json.optStringOrNull("guestPath")?.let { path ->
+            Artifact.Document(
+                guestPath = path,
+                name = json.optStringOrNull("name") ?: path.substringAfterLast('/'),
+                mimeType = json.optStringOrNull("mimeType") ?: "text/plain",
+            )
+        }
+
+        else -> null
+    }
+
+    private fun attachment(json: JSONObject) = Attachment(
+        guestPath = json.optStringOrNull("guestPath").orEmpty(),
+        name = json.optStringOrNull("name") ?: json.optStringOrNull("guestPath")?.substringAfterLast('/').orEmpty(),
+        mimeType = json.optStringOrNull("mimeType") ?: "application/octet-stream",
+        bytes = json.optLong("bytes", 0L),
+    )
+
     private fun taskState(value: String): TaskState = when (value) {
         "in_progress", "running" -> TaskState.Running
         "completed", "done" -> TaskState.Done
         "failed" -> TaskState.Failed
         "skipped" -> TaskState.Skipped
         else -> TaskState.Pending
+    }
+
+    // ---- the other direction -----------------------------------------------
+
+    /**
+     * One command from Box to the harness, as a line of JSON.
+     *
+     * Values keep their types on the wire. It would be simpler to quote everything and let the
+     * other end coerce, and that is exactly the leniency worth refusing: a `widthDp` of `"1280"`
+     * puts the decision about what it means in the harness, which is the half of the pair that
+     * ships in the guest image and is therefore the half Box cannot update to fix a disagreement.
+     * Numbers go as numbers, booleans as booleans, everything else as an escaped string.
+     */
+    fun encode(command: Map<String, Any>): String = encodeObject(command)
+
+    private fun encodeObject(fields: Map<String, Any>): String =
+        fields.entries.joinToString(",", "{", "}") { (key, value) ->
+            "${jsonString(key)}:${encodeValue(value)}"
+        }
+
+    private fun encodeValue(value: Any): String = when (value) {
+        is Boolean -> value.toString()
+        is Int, is Long -> value.toString()
+        is List<*> -> value.filterNotNull().joinToString(",", "[", "]", transform = ::encodeValue)
+        is Map<*, *> -> encodeObject(
+            value.entries.mapNotNull { (key, nested) ->
+                if (key is String && nested != null) key to nested else null
+            }.toMap(),
+        )
+        else -> jsonString(value.toString())
+    }
+
+    private fun jsonString(value: String): String = buildString {
+        append('"')
+        value.forEach { character ->
+            when (character) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (character < ' ') append("\\u%04x".format(character.code)) else append(character)
+            }
+        }
+        append('"')
     }
 
     // ---- json helpers ------------------------------------------------------

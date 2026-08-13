@@ -26,6 +26,15 @@ interface AgentBackend {
     /** Applies to every session, running and future, and survives the app being killed. */
     suspend fun setPermissionMode(mode: AgentPermissionMode)
 
+    /**
+     * What Box is being read on right now, told to every session and re-told whenever it changes.
+     *
+     * Like [setPermissionMode] in shape and for the same reason: it is one fact about the box as a
+     * whole, not a property of a conversation. Unlike it, nothing here is persisted — a window size
+     * that outlived the window it described would be worse than not knowing.
+     */
+    suspend fun setViewport(viewport: AgentViewport)
+
     /** Every known session across every harness, newest activity first. */
     val sessions: StateFlow<List<SessionSummary>>
 
@@ -39,9 +48,20 @@ interface AgentBackend {
     /** Transport health for [sessionId]. Independent of whether the agent is busy. */
     fun connection(sessionId: String): StateFlow<SessionConnection>
 
-    suspend fun startSession(harnessId: String, prompt: String?): String
+    suspend fun startSession(
+        harnessId: String,
+        prompt: String?,
+        attachments: List<Attachment> = emptyList(),
+    ): String
 
-    suspend fun send(sessionId: String, text: String)
+    /**
+     * The user's turn: what they typed, and anything they showed.
+     *
+     * [attachments] are already in the box by the time this is called — they are files in the
+     * shared folder, not bytes to be carried here — so this only has to name them. A backend that
+     * ignores them still delivers the text, which is the whole reason they are a field.
+     */
+    suspend fun send(sessionId: String, text: String, attachments: List<Attachment> = emptyList())
 
     /** Answers the outstanding [AgentEvent.PermissionRequested]. Idempotent per request id. */
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
@@ -98,4 +118,34 @@ enum class AgentPermissionMode(val wire: String) {
         AcceptEdits -> ask is PermissionAsk.EditFile
         Everything -> true
     }
+}
+
+/**
+ * The window Box is being read in, as a fact an agent can write for.
+ *
+ * Derived from the *window*, never from the device — the same discipline `BoxWindowSize` holds to,
+ * and for a sharper reason here. A layout that goes stale is corrected by the next frame; an agent
+ * told once that it is "on a phone" believes it for the rest of the session, and will still believe
+ * it after the fold opens or the DeX window is dragged wider. So there is no device type in here,
+ * and every field is re-sent when it changes.
+ *
+ * [hardwareKeyboard] is carried separately from [widthDp] because it answers a different question:
+ * not how much can be shown, but what it is reasonable to ask the *person* to type.
+ */
+data class AgentViewport(
+    val layout: ViewportLayout,
+    val widthDp: Int,
+    val hardwareKeyboard: Boolean,
+)
+
+/**
+ * How much room there is, in the two sizes worth writing differently for.
+ *
+ * Named for the reading rather than for the panes — `BoxWindowSize.BoxLayout` calls the narrow one
+ * `Single` because one pane is what fits, which is a fact about Box's own layout and means nothing
+ * to an agent choosing how long an answer should be.
+ */
+enum class ViewportLayout(val wire: String) {
+    Compact("compact"),
+    Wide("wide"),
 }

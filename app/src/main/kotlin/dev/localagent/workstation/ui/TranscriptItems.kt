@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Language
@@ -39,6 +41,9 @@ import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
+import android.content.Context
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -48,13 +53,22 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -66,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.CodeLanguage
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionAsk
@@ -76,6 +91,7 @@ import dev.localagent.workstation.agent.TaskState
 import dev.localagent.workstation.agent.ToolCall
 import dev.localagent.workstation.agent.ToolOutcome
 import dev.localagent.workstation.agent.TranscriptItem
+import dev.localagent.workstation.files.Inbox
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -140,12 +156,118 @@ private fun UserBubble(item: TranscriptItem.User, modifier: Modifier = Modifier)
                     modifier = Modifier.alpha(0.7f),
                 )
             }
-            Spacer(Modifier.height(6.dp))
-            SelectionContainer {
-                Text(item.text, style = MaterialTheme.typography.bodyLarge)
+            if (item.attachments.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                item.attachments.forEach { attachment ->
+                    AttachmentTile(attachment)
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+            if (item.text.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                SelectionContainer {
+                    Text(item.text, style = MaterialTheme.typography.bodyLarge)
+                }
             }
         }
     }
+}
+
+/**
+ * Something the user showed the agent, drawn on their own turn.
+ *
+ * A picture is shown as a picture. Everything else is a labelled row, in the spirit of
+ * `ToolCall.Generic`: Box has no renderer for a PDF and will not pretend otherwise, but it can
+ * always say what was sent and how big it was.
+ *
+ * The thumbnail is read from the phone's copy, found from the guest path rather than stored beside
+ * it — the guest path is the one the agent was told and therefore the one that has to be right.
+ * When there is no file there the row still draws, which is not an error case worth hiding: a file
+ * the user has since deleted from their own Files app is *gone from the phone and still in the
+ * box*, and a turn that quietly lost its picture would be Box hiding that from them.
+ */
+@Composable
+internal fun AttachmentTile(attachment: Attachment) {
+    val context = LocalContext.current
+    var thumbnail by remember(attachment.guestPath) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(attachment.guestPath) {
+        if (!attachment.isImage) return@LaunchedEffect
+        thumbnail = withContext(Dispatchers.IO) { readThumbnail(context, attachment.guestPath) }
+    }
+
+    val picture = thumbnail
+    if (picture != null) {
+        Image(
+            bitmap = picture,
+            contentDescription = attachment.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .heightIn(max = 260.dp)
+                .clip(RoundedCornerShape(12.dp)),
+        )
+    } else {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.25f),
+        ) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (attachment.isImage) Icons.Outlined.Image else Icons.Outlined.Description,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(
+                        attachment.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        formatBytes(attachment.bytes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = 11.sp,
+                        modifier = Modifier.alpha(0.75f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A thumbnail, decoded at roughly the size it will be drawn at.
+ *
+ * Sampled down rather than loaded whole and scaled: this runs on a phone that is also emulating a
+ * computer, and a full-resolution camera photograph is tens of megabytes of bitmap for a picture
+ * the size of a message bubble.
+ */
+private fun readThumbnail(context: Context, guestPath: String): ImageBitmap? {
+    val file = Inbox.phoneFile(context, guestPath) ?: return null
+    return runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > THUMBNAIL_PIXELS || bounds.outHeight / sample > THUMBNAIL_PIXELS) {
+            sample *= 2
+        }
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        BitmapFactory.decodeFile(file.path, options)?.asImageBitmap()
+    }.getOrNull()
+}
+
+private const val THUMBNAIL_PIXELS = 1024
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes <= 0 -> "unknown size"
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
 }
 
 @Composable
@@ -752,6 +874,12 @@ private fun ArtifactRow(
                     when (artifact) {
                         Artifact.Computer -> Icons.Outlined.Computer
                         is Artifact.Preview -> Icons.Outlined.Language
+                        is Artifact.Document ->
+                            if (artifact.mimeType.startsWith("image/")) {
+                                Icons.Outlined.Image
+                            } else {
+                                Icons.Outlined.Description
+                            }
                     },
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
@@ -761,7 +889,12 @@ private fun ArtifactRow(
                     when (artifact) {
                         Artifact.Computer -> "Open computer"
                         is Artifact.Preview -> "Open preview"
+                        // Named, unlike the other two: there is only ever one computer and one
+                        // preview to open, and there can be any number of documents.
+                        is Artifact.Document -> "Open ${artifact.name}"
                     },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

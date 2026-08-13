@@ -1,5 +1,6 @@
 package dev.localagent.workstation
 
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.GuestAuth
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,5 +91,58 @@ class SignInGateTest {
         // The unheld case is unchanged: sending opens the task, and the id arrives a moment later.
         val starting = BoxUiState(queued = listOf(QueuedPrompt(sessionId = null, text = "go")))
         assertEquals(listOf("go"), starting.queuedForSelected.map { it.text })
+    }
+
+    @Test
+    fun `a message held for a sign-in keeps the files it was sent with`() {
+        // The composer is cleared the moment a message is queued, because a second tap must not
+        // send the same files twice — so the queued copy is the only one left. A picture attached
+        // before signing in has to still be attached three minutes later, when the sign-in lands
+        // and the wait is finally sent; the alternative is a turn about a file nobody mentioned.
+        val waiting = BoxUiState(
+            queued = listOf(
+                QueuedPrompt(
+                    sessionId = null,
+                    text = "what is this?",
+                    heldForSignIn = true,
+                    attachments = listOf(shot),
+                ),
+            ),
+        )
+        assertEquals(listOf(listOf(shot)), waiting.heldForSignIn.map { it.attachments })
+    }
+
+    @Test
+    fun `letting a held message go does not strip its files`() {
+        // Exactly what the flush does to each one before sending it. It is a `copy` rather than a
+        // rebuild for this reason: a rebuild that forgot the new field would lose the picture, and
+        // would lose it silently, in the one path nobody watches because it only runs once.
+        val held = QueuedPrompt(null, "look", heldForSignIn = true, attachments = listOf(shot))
+
+        val released = held.copy(heldForSignIn = false)
+
+        assertFalse(released.heldForSignIn)
+        assertEquals(listOf(shot), released.attachments)
+        assertEquals("look", released.text)
+    }
+
+    @Test
+    fun `a picture with no words is a whole message, held or not`() {
+        // Box does not require a word alongside a picture, so an empty text with an attachment is
+        // a real message and not an empty one to be dropped on the way through the wait.
+        val waiting = BoxUiState(
+            queued = listOf(QueuedPrompt(null, "", heldForSignIn = true, attachments = listOf(shot))),
+        )
+        assertEquals(1, waiting.heldForSignIn.size)
+        assertEquals(listOf(shot), waiting.heldForSignIn.single().attachments)
+    }
+
+    private companion object {
+        val shot = Attachment(
+            guestPath = "/workspace/shared/inbox/20260812-214755-shot.png",
+            name = "shot.png",
+            mimeType = "image/png",
+            bytes = 4,
+        )
     }
 }

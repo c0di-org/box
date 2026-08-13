@@ -19,7 +19,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
@@ -62,18 +62,24 @@ const clip = (text, limit = MAX_TEXT) =>
 /** Resolvers for permission requests the user has not answered yet, keyed by requestId. */
 const pendingPermissions = new Map();
 
-/** Prompts waiting to be fed into the SDK, and whoever is waiting for the next one. */
+/**
+ * Turns waiting to be fed into the SDK, and whoever is waiting for the next one.
+ *
+ * A turn is `{ text, attachments }` rather than a bare string, because what the person said and
+ * what they showed arrive together and have to stay together — the attachment belongs to the turn
+ * it was sent with, not to whichever turn happens to be running when the file lands.
+ */
 const promptQueue = [];
 let promptWaiter = null;
 let inputClosed = false;
 
-function pushPrompt(text) {
+function pushPrompt(turn) {
   if (promptWaiter) {
     const resolve = promptWaiter;
     promptWaiter = null;
-    resolve(text);
+    resolve(turn);
   } else {
-    promptQueue.push(text);
+    promptQueue.push(turn);
   }
 }
 
@@ -115,6 +121,131 @@ let activeQuery = null;
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
 let permissionMode = 'default';
 
+/**
+ * What the person is reading this on, as last reported by the app. Null until it says.
+ *
+ * Deliberately not a device: the app derives it from its own window, because a fold changes class
+ * mid-process and a DeX window is resized by dragging a corner. An agent holds an answer for a
+ * whole session, so a device type told once would go stale in a way a layout never does -- which
+ * is why this arrives again on every change and is re-stated to the model whenever it differs.
+ */
+const VIEWPORT_LAYOUTS = new Set(['compact', 'wide']);
+let viewport = null;
+let viewportTold = null;
+
+/** Prefixed to the next prompt when it has changed. Never emitted: a resize is not conversation. */
+function viewportNote(view) {
+  const where = view.layout === 'wide'
+    ? `a wide window, ${view.widthDp}dp across`
+    : `a compact window, ${view.widthDp}dp across`;
+  const typing = view.hardwareKeyboard
+    ? 'with a hardware keyboard'
+    : "typing on the phone's on-screen keyboard";
+  return `[box] The person is reading you on ${where}, ${typing}.`;
+}
+
+/**
+ * The one directory inside the shared folder that files from the phone land in.
+ *
+ * This is the wire contract and it is fixed: it is the prefix the app sends, the prefix every
+ * attachment is checked against, and the path the agent is told. It does not move.
+ *
+ * [INBOX_ON_DISK] is where this process looks for those files, which is the same place on a
+ * device and somewhere writable under test — off a device there is no `/workspace` to create.
+ * Keeping the two apart matters more than it looks: it means a test exercises the real paths the
+ * app puts on the wire, rather than proving the harness accepts whatever it is pointed at.
+ */
+const INBOX = '/workspace/shared/inbox/';
+const INBOX_ON_DISK = process.env.BOX_INBOX ?? INBOX;
+
+/** Where to look for something the agent will be told is at [guestPath]. */
+const onDisk = (guestPath) => INBOX_ON_DISK + guestPath.slice(INBOX.length);
+
+/**
+ * How long to wait for a file the app says it has sent.
+ *
+ * It is already written on the phone by the time the prompt is sent; what is being waited for is
+ * the copy into this box, which is driven by an inotify watch on the other side and normally takes
+ * about a second. The ceiling is generous because the alternative failure is the expensive one:
+ * an agent that looked too early tells the user it cannot see the picture they are looking at.
+ */
+const ATTACHMENT_WAIT_MS = Number(process.env.BOX_ATTACHMENT_WAIT_MS ?? 30_000);
+
+/**
+ * What the app said it attached, keeping only what this harness is willing to act on.
+ *
+ * The path is checked rather than trusted. It arrives over a pipe from the app, which is not a
+ * hostile party — but "read whatever path you are sent" is a capability worth not having, and
+ * confining it to the inbox costs one comparison. Anything else is dropped with a diagnostic.
+ */
+function readAttachments(value) {
+  if (!Array.isArray(value)) return [];
+  const kept = [];
+  for (const item of value) {
+    const guestPath = String(item?.guestPath ?? '');
+    if (!guestPath.startsWith(INBOX) || guestPath.slice(INBOX.length).includes('/')) {
+      diagnostic(`ignoring an attachment outside the inbox: ${guestPath}`);
+      continue;
+    }
+    kept.push({
+      guestPath,
+      name: String(item?.name ?? guestPath.slice(INBOX.length)),
+      mimeType: String(item?.mimeType ?? 'application/octet-stream'),
+      bytes: Number.isFinite(Number(item?.bytes)) ? Number(item.bytes) : 0,
+    });
+  }
+  return kept;
+}
+
+/** Resolves once every file is on this side, or once waiting has stopped being worth it. */
+async function awaitAttachments(attachments) {
+  const deadline = Date.now() + ATTACHMENT_WAIT_MS;
+  const arrived = [];
+  const missing = [];
+  for (const attachment of attachments) {
+    const path = onDisk(attachment.guestPath);
+    let here = false;
+    while (true) {
+      // Size as well as existence: the copy is not atomic, so a file can be visible while it is
+      // still being written, and an agent reading half a screenshot is worse than one waiting.
+      here = existsSync(path) && settled(path, attachment.bytes);
+      if (here || Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    (here ? arrived : missing).push(attachment);
+  }
+  return { arrived, missing };
+}
+
+/**
+ * True when the whole file is here, not just the start of it.
+ *
+ * The app sends the size it actually wrote, so this is a real completeness check rather than a
+ * guess. Zero means it did not say, which an older app or a stream of unknown length can both
+ * produce, and there is nothing better to do then than believe the file exists.
+ */
+function settled(path, expected) {
+  let size;
+  try { size = statSync(path).size; } catch { return false; }
+  return expected > 0 ? size >= expected : true;
+}
+
+/** What the model is told about the files, in the turn they came with. */
+function attachmentNote({ arrived, missing }) {
+  const lines = [];
+  if (arrived.length > 0) {
+    lines.push(arrived.length === 1
+      ? '[box] They attached a file, which is now at:'
+      : `[box] They attached ${arrived.length} files, which are now at:`);
+    for (const one of arrived) lines.push(`  ${one.guestPath}  (${one.name}, ${one.mimeType})`);
+  }
+  if (missing.length > 0) {
+    lines.push('[box] These were attached but have not reached this box; say so rather than guessing:');
+    for (const one of missing) lines.push(`  ${one.name}`);
+  }
+  return lines.join('\n');
+}
+
 function handleCommand(line) {
   let command;
   try {
@@ -126,11 +257,13 @@ function handleCommand(line) {
   switch (command.type) {
     case 'prompt': {
       const text = String(command.text ?? '');
+      const attachments = readAttachments(command.attachments);
       // Echoed into the log so the transcript has one source of truth in one order. The app could
       // record what the user typed itself, but then a replay would have to interleave two logs and
-      // guess where each turn belonged.
-      emit({ type: 'user_message', text });
-      pushPrompt(text);
+      // guess where each turn belonged. The attachments ride in that echo for the same reason: the
+      // thumbnail on a restored transcript is drawn from this line, not from anything the app kept.
+      emit(attachments.length > 0 ? { type: 'user_message', text, attachments } : { type: 'user_message', text });
+      pushPrompt({ text, attachments });
       break;
     }
     case 'decision': {
@@ -171,6 +304,20 @@ function handleCommand(line) {
       // Into the log as well as into the SDK. The transcript is the record of what happened, and
       // "nothing asked for the next hour" is only honest if the log says why.
       emit({ type: 'permission_mode', mode });
+      break;
+    }
+    case 'viewport': {
+      const layout = String(command.layout ?? '');
+      const widthDp = Number(command.widthDp);
+      if (!VIEWPORT_LAYOUTS.has(layout) || !Number.isFinite(widthDp) || widthDp <= 0) {
+        diagnostic(`ignoring an unreadable viewport: ${line}`);
+        return;
+      }
+      viewport = {
+        layout,
+        widthDp: Math.round(widthDp),
+        hardwareKeyboard: command.hardwareKeyboard === true,
+      };
       break;
     }
     case 'interrupt':
@@ -421,6 +568,17 @@ const toolNames = new Map();
 let planId = 0;
 
 /**
+ * Calls whose result must not become a tool card either, because their start never did.
+ *
+ * `mcp__box__show` and `TodoWrite`: one is an artifact row, the other a checklist, and both say
+ * what happened somewhere other than a tool card. The set is keyed by tool_use id rather than
+ * being a name test on the way out, because a `tool_result` carries no name — only the id of the
+ * call it answers. Dropping only the start is not enough: the app builds a placeholder card out
+ * of a `tool_finished` whose beginning it never saw, which is the stray "Tool" row.
+ */
+const silentCalls = new Set();
+
+/**
  * Live sub-agents, keyed by the tool_use id of the Task block that started them.
  *
  * That id is the one the rest of Box knows a sub-agent by, because it is the only identity the
@@ -504,7 +662,15 @@ function translateAssistant(message) {
         type: 'thinking', messageId: message.uuid, text: clip(block.thinking), complete: true, ...from,
       });
     } else if (block.type === 'tool_use') {
+      if (block.name === SHOW_TOOL) {
+        // No tool card. The artifact row *is* what happened, and a card beside it reading "showed
+        // you the thing" is the same sentence twice.
+        silentCalls.add(block.id);
+        continue;
+      }
       if (block.name === 'TodoWrite') {
+        // No tool card either: the plan block is where a checklist update shows up.
+        silentCalls.add(block.id);
         emit({
           type: 'task_progress',
           planId: `plan-${++planId}`,
@@ -555,6 +721,7 @@ function translateToolResults(message) {
     // The delegate's own aborted report. Its card has already said it was stopped, by the person
     // reading it, and that is the truer of the two answers.
     if (stoppedSubAgents.has(block.tool_use_id)) continue;
+    if (silentCalls.delete(block.tool_use_id)) continue;
     const output = Array.isArray(block.content)
       ? block.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n')
       : String(block.content ?? '');
@@ -571,15 +738,325 @@ function translateToolResults(message) {
   }
 }
 
+// ---------------------------------------------------------------- showing things
+
+/**
+ * The workspace disk, and where this process looks for it.
+ *
+ * The same split as [INBOX], for the same reason: `/workspace` is the path the agent names, the
+ * path that goes on the wire, and the path the app reads back — while [WORKSPACE_ON_DISK] is
+ * where this process goes looking, which off a device is a temporary directory because there is
+ * no `/workspace` to create. Keeping them apart means a test exercises the paths a real device
+ * would carry rather than proving the harness accepts whatever it is pointed at.
+ */
+const WORKSPACE = '/workspace/';
+const WORKSPACE_ON_DISK = process.env.BOX_WORKSPACE ?? WORKSPACE;
+
+/**
+ * The one place inside the workspace an artifact may never point at.
+ *
+ * `/workspace/.config` is where guest/agent-conventions.md puts this box's credentials — the
+ * GitHub token, and whatever else it is signed in to. Named explicitly rather than caught by some
+ * rule about dotfiles, because `/workspace/src/box/.github/workflows/ci.yml` is a perfectly
+ * reasonable thing to show someone and a blanket rule would refuse it.
+ */
+const CREDENTIALS = WORKSPACE + '.config/';
+
+/** Extension to media type. Decides the icon on the row, and nothing else. */
+const MEDIA_TYPES = {
+  css: 'text/css', csv: 'text/csv', diff: 'text/x-diff', gif: 'image/gif', htm: 'text/html',
+  html: 'text/html', jpeg: 'image/jpeg', jpg: 'image/jpeg', js: 'text/javascript',
+  json: 'application/json', log: 'text/plain', md: 'text/markdown', patch: 'text/x-diff',
+  pdf: 'application/pdf', png: 'image/png', py: 'text/x-python', svg: 'image/svg+xml',
+  toml: 'text/plain', ts: 'text/typescript', txt: 'text/plain', webp: 'image/webp',
+  xml: 'text/xml', yaml: 'text/yaml', yml: 'text/yaml',
+};
+
+function mediaType(name) {
+  const dot = name.lastIndexOf('.');
+  // Not text/plain: the app reads a document artifact as text, and claiming a type for something
+  // this list has never heard of would be a guess the file viewer then has to live with.
+  return dot > 0 ? MEDIA_TYPES[name.slice(dot + 1).toLowerCase()] ?? 'application/octet-stream'
+    : 'application/octet-stream';
+}
+
+/**
+ * One file the agent may put in front of the user, or the reason it may not.
+ *
+ * An artifact is a *button*, and this is the function that decides what a button the agent labels
+ * itself is allowed to open. That is why the bound is tighter than `readAttachments`' rather than
+ * looser: the app draws the agent's `name`, so a row reading "report.md" that opens the GitHub
+ * token is a button whose target the person cannot see before they tap it. Four rules, each
+ * earning its place:
+ *
+ *   - **Under `/workspace`.** The workspace disk is where the agent's own work lives, which is
+ *     what "look at this" is about. The system disk holds the image — identical on every device,
+ *     nothing the agent made, and replaced whole on the next update.
+ *   - **Resolved, not string-matched.** `realpathSync` first, because a symlink at
+ *     `/workspace/report.md` pointing into `/etc` passes every prefix test ever written until the
+ *     link is followed. It also settles existence: a file that is not there cannot be shown.
+ *   - **Never the credential directory,** checked after resolution so a link into it is caught too.
+ *   - **A regular file.** A directory or a device node is not something the file viewer can draw.
+ *
+ * No size check. The contract puts that in one place on purpose — the panel reads the path through
+ * the same reader the Files panel uses, so "too big" already has exactly one answer and a second
+ * one here would be a second thing to keep right.
+ */
+function showable(rawPath) {
+  const given = String(rawPath ?? '').trim();
+  if (!given) {
+    return { refusal: 'No path was given.' };
+  }
+  if (!given.startsWith('/')) {
+    return { refusal: `'${given}' is relative. Give the absolute path; this does not guess what a relative one is relative to.` };
+  }
+  if (!given.startsWith(WORKSPACE)) {
+    return {
+      refusal: `Only files under ${WORKSPACE} can be shown, and '${given}' is not one. Everything else here is on the system disk, which is replaced wholesale by the next update — copy it into ${WORKSPACE} and show that.`,
+    };
+  }
+
+  let root;
+  try {
+    root = realpathSync(WORKSPACE_ON_DISK);
+  } catch {
+    return { refusal: `This box has no ${WORKSPACE}.` };
+  }
+  const prefix = root.endsWith('/') ? root : root + '/';
+
+  let resolved;
+  try {
+    resolved = realpathSync(WORKSPACE_ON_DISK + given.slice(WORKSPACE.length));
+  } catch {
+    return {
+      refusal: `Nothing is at ${given}. Finish writing the file before showing it — a button that opens nothing is worse than no button.`,
+    };
+  }
+
+  let info;
+  try {
+    info = statSync(resolved);
+  } catch {
+    return { refusal: `${given} cannot be read.` };
+  }
+  if (info.isDirectory()) {
+    return { refusal: `${given} is a folder. Show one file, or write the listing to a file and show that.` };
+  }
+  if (!info.isFile()) {
+    return { refusal: `${given} is not a regular file.` };
+  }
+
+  if (!resolved.startsWith(prefix)) {
+    return { refusal: `${given} leads out of ${WORKSPACE}, so it is not the agent's own work and is not shown.` };
+  }
+  const guestPath = WORKSPACE + resolved.slice(prefix.length);
+  if (guestPath.startsWith(CREDENTIALS)) {
+    return { refusal: `${CREDENTIALS} holds this box's credentials and is never shown to anyone, including its owner.` };
+  }
+
+  const name = guestPath.slice(guestPath.lastIndexOf('/') + 1);
+  return { artifact: { kind: 'document', guestPath, name, mimeType: mediaType(name) } };
+}
+
+/**
+ * Where to read the kernel's TCP tables. A single path, or several separated by `:`.
+ *
+ * Overridable for the same reason [INBOX_ON_DISK] is: these tests do not run on Linux, and a
+ * fixture is the only way to pin the refusal as well as the pass.
+ */
+const PROC_TCP = process.env.BOX_PROC_TCP ?? '/proc/net/tcp:/proc/net/tcp6';
+
+/**
+ * Whether anything in this box is listening on [port].
+ *
+ * Checked because a preview is a button too. Offering one for a port with no server behind it
+ * hands the person a WebView full of connection error, and the agent that did it does not find
+ * out — so the honest place to fail is here, in a tool result the agent can read and act on.
+ *
+ * Unreadable tables mean an unknowable answer, and the call then is the one `settled` makes about
+ * a size it was not told: believe the agent. Refusing on ignorance would break this everywhere
+ * `/proc` is not Linux's, which includes every machine these tests run on.
+ */
+function listening(port) {
+  const wanted = ':' + port.toString(16).toUpperCase().padStart(4, '0');
+  let read = false;
+  for (const file of PROC_TCP.split(':')) {
+    let table;
+    try {
+      table = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    read = true;
+    for (const line of table.split('\n').slice(1)) {
+      // sl  local_address rem_address st … — `st` is the connection state and 0A is LISTEN.
+      const columns = line.trim().split(/\s+/);
+      if (columns.length >= 4 && columns[1].endsWith(wanted) && columns[3] === '0A') return true;
+    }
+  }
+  return !read;
+}
+
+/**
+ * `mcp__box__show` — the agent-facing half of the artifact contract.
+ *
+ * Everything else about an artifact was already built: the wire, the parser, the row, the three
+ * things a tap can open. What was missing was any way for an agent to start one, so on a real
+ * device the whole surface was reachable only from the in-process fake.
+ *
+ * An in-process MCP tool rather than a line the agent is told to `echo`, because the emitting has
+ * to be the harness's own: a path is refused before it becomes a button, and the agent is told
+ * *why* in a tool result it can act on. Told to print its own protocol lines, an agent would be
+ * writing unvalidated events into the log the app trusts, and would have no way to learn it got
+ * one wrong.
+ *
+ * One tool for all three kinds, because to the person they are one thing — a button that appears
+ * in the conversation — and splitting them into three would make the model choose a mechanism
+ * before it has decided what it wants to say.
+ */
+function showTool(tool, z) {
+  return tool(
+    'show',
+    [
+      'Put something in front of the person you are talking to: a file you wrote, a port you are',
+      'serving on, or the desktop you are working beside.',
+      '',
+      'They get a button in the conversation and tap it if they want it. It never interrupts them,',
+      'and it is not a substitute for saying what the thing is — offer it alongside your answer,',
+      'not instead of one.',
+      '',
+      'Give exactly one of path, port or desktop.',
+    ].join('\n'),
+    {
+      path: z.string().optional()
+        .describe('An absolute path under /workspace to a file you have finished writing. It opens in a text viewer, so it is for things that read as text — not an image.'),
+      port: z.number().int().optional()
+        .describe('A port something in this box is already listening on. Box forwards it to the phone and loads it in a browser panel.'),
+      desktop: z.boolean().optional()
+        .describe('True to offer the live desktop — worth it once you have something drawn on it.'),
+    },
+    async (args) => {
+      const asked = [
+        args.path != null ? 'path' : null,
+        args.port != null ? 'port' : null,
+        args.desktop ? 'desktop' : null,
+      ].filter(Boolean);
+      if (asked.length !== 1) {
+        return refused(asked.length === 0
+          ? 'Give exactly one of path, port or desktop.'
+          : `That asked for ${asked.join(' and ')} at once. One thing per call, so the person can tell what each button is.`);
+      }
+
+      if (args.path != null) {
+        const { artifact, refusal } = showable(args.path);
+        if (refusal) return refused(refusal);
+        emit({ type: 'artifact', ...artifact });
+        return shown(`${artifact.name} is now a button in the conversation.`);
+      }
+
+      if (args.port != null) {
+        const port = Number(args.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          return refused(`${args.port} is not a port number.`);
+        }
+        if (!listening(port)) {
+          return refused(`Nothing in this box is listening on ${port}. Start the server, wait for it to bind, then show it.`);
+        }
+        // The url is the guest's own view of the port and is deliberately not what the WebView
+        // loads: opening one asks the runtime to forward it and the panel loads the loopback
+        // address it hands back. It is sent because the parser drops a preview without one, and
+        // because it is the honest thing to put in the log for a replayed transcript to show.
+        emit({ type: 'artifact', kind: 'preview', url: `http://localhost:${port}/`, guestPort: port });
+        return shown(`Port ${port} is now a button in the conversation.`);
+      }
+
+      emit({ type: 'artifact', kind: 'computer' });
+      return shown('The desktop is now a button in the conversation.');
+    },
+  );
+}
+
+/** Said to the model, never to the person: nothing appeared, and here is what to do about it. */
+const refused = (why) => ({
+  content: [{ type: 'text', text: `Nothing was shown. ${why}` }],
+  isError: true,
+});
+
+/**
+ * Said to the model when a button did appear.
+ *
+ * The second sentence is the load-bearing one. An offer is not a viewing, and an agent that
+ * believes it is writes "as you can see in the diagram" to someone looking at an unpressed button.
+ */
+const shown = (what) => ({
+  content: [{ type: 'text', text: `${what} They may or may not open it, so do not write as though they already have.` }],
+});
+
+/** The full name the model calls [showTool] by, and the name the log has to recognise it under. */
+const SHOW_TOOL = 'mcp__box__show';
+
+/**
+ * The `box` server, or null if this guest's SDK cannot host one.
+ *
+ * Null rather than a throw, on the `setPermissionMode` and `stopTask` precedent: the guest image
+ * carries whichever SDK it was built with, Box cannot reach in to correct it, and a session that
+ * runs without a way to show things is enormously better than one that will not start. The
+ * absence is a stderr line, and the agent simply never sees the tool.
+ */
+async function boxServer(sdk) {
+  if (typeof sdk.createSdkMcpServer !== 'function' || typeof sdk.tool !== 'function') {
+    diagnostic('this SDK cannot host in-process tools, so the agent has no way to show anything');
+    return null;
+  }
+  let z;
+  try {
+    ({ z } = await import('zod'));
+  } catch (error) {
+    // A declared dependency, so this is a broken install rather than a version difference.
+    diagnostic(`zod is missing, so the agent has no way to show anything: ${error?.message ?? error}`);
+    return null;
+  }
+  try {
+    return sdk.createSdkMcpServer({
+      name: 'box',
+      version: '1.0.0',
+      instructions: 'Box is a chat app on an Android phone; this agent runs in a Linux VM inside it. Use show to put a file, a served port, or the desktop in front of the person as a button in the conversation.',
+      // Kept out of tool search. It is one tool, and the alternative is the model spending a round
+      // trip on a fully emulated phone to discover the thing it is being told about in its prompt.
+      alwaysLoad: true,
+      tools: [showTool(sdk.tool, z)],
+    });
+  } catch (error) {
+    // The exports being present is not the same as their signatures being the ones this file was
+    // written against. Everything above this point is a check; this is the one that cannot be
+    // made in advance, and letting it escape would take the whole session down over a tool.
+    diagnostic(`this SDK would not host box's tools: ${error?.message ?? error}`);
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------- main
 
 async function* prompts() {
   while (true) {
-    const text = await nextPrompt();
-    if (text === null) return;
+    const turn = await nextPrompt();
+    if (turn === null) return;
+    const { text, attachments = [] } = turn;
+    // Blocking here is the point: this generator *is* the model's queue, so waiting for the file
+    // holds the turn rather than the whole harness, and everything else — a decision, an
+    // interrupt, a viewport — keeps being read off stdin while it waits.
+    const files = attachments.length > 0 ? attachmentNote(await awaitAttachments(attachments)) : '';
+    // The viewport rides with the turn rather than arriving as one of its own. A turn of its own
+    // would cost a model round trip on a machine that is fully emulated, and would do it every
+    // time someone rotated the phone. Only sent when it differs from what was last said, so a
+    // session that never changes shape mentions it exactly once.
+    const note = viewport && JSON.stringify(viewport) !== viewportTold ? viewportNote(viewport) : null;
+    if (note) viewportTold = JSON.stringify(viewport);
     yield {
       type: 'user',
-      message: { role: 'user', content: text },
+      // The event log already carries the user's own words, emitted by `prompt` above; this is the
+      // only copy the notes appear in, so nothing draws them in the transcript as something they said.
+      message: { role: 'user', content: [note, files, text].filter(Boolean).join('\n\n') },
       parent_tool_use_id: null,
     };
   }
@@ -592,10 +1069,13 @@ async function* prompts() {
  * like — and it has to arrive in the transcript as something Box can render, not as an
  * ERR_MODULE_NOT_FOUND stack trace on stderr that the UI never sees. Keeping the import lazy also
  * lets the translation above be tested without the 295MB dependency present.
+ *
+ * The whole module rather than `query` alone, because `createSdkMcpServer` and `tool` are read off
+ * it too and their absence has to be survivable separately — see `boxServer`.
  */
 async function loadSdk() {
   try {
-    return (await import('@anthropic-ai/claude-agent-sdk')).query;
+    return await import('@anthropic-ai/claude-agent-sdk');
   } catch (error) {
     emit({
       type: 'error',
@@ -758,8 +1238,9 @@ async function main() {
     diagnostic('no credential found up front; letting the SDK resolve');
   }
 
-  const query = await loadSdk();
-  if (!query) return;
+  const sdk = await loadSdk();
+  if (!sdk) return;
+  const query = sdk.query;
 
   const reader = createInterface({ input: process.stdin });
   reader.on('line', handleCommand);
@@ -779,6 +1260,8 @@ async function main() {
 
   emit({ type: 'session_started', cwd, harness: 'claude-code' });
 
+  const box = await boxServer(sdk);
+
   activeQuery = query({
     prompt: prompts(),
     options: {
@@ -789,6 +1272,11 @@ async function main() {
       canUseTool,
       permissionMode,
       includePartialMessages: false,
+      // Showing something is the one tool that is never asked about. A sheet reading "allow the
+      // agent to show you a file?" has one honest answer, and asking is worse than not: the
+      // artifact is *itself* a button nobody has to press, so the consent is the tap, and a
+      // permission prompt in front of it makes the person answer the same question twice.
+      ...(box ? { mcpServers: { box }, allowedTools: [SHOW_TOOL] } : {}),
     },
   });
 

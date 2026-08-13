@@ -9,6 +9,13 @@ Type=simple
 User=agent
 Group=agent
 WorkingDirectory=/workspace
+# The desktop belongs to the person, and this service does not wait for it or need it. But when it
+# is up, the agent should not be the only party in the room that cannot see it -- with DISPLAY set,
+# `scrot` captures the session running beside this one, which is the only way to find out what a
+# GUI it just started actually drew. Both sides are the `agent` user talking to a server begun by
+# plain xinit, so there is no cookie to find; and a DISPLAY naming a server that never started
+# costs nothing until something tries to connect.
+Environment=DISPLAY=:0
 ExecStart=/usr/bin/python3 -u /opt/local-agent/agentd.py --device /dev/virtio-ports/dev.localagent.agentd
 Restart=always
 RestartSec=1

@@ -94,13 +94,13 @@ Working, against the fake:
 
 Deliberately inert:
 
-- "Open preview" — wired, and posts a snackbar saying the port-forwarding transport is still
-  being built
+- The display transport. `DesktopTransport` is declared and nothing implements it, so the computer
+  draws a placeholder rather than the guest's screen.
 
 Not built:
 
 - Persistence. Sessions live in the fake's memory and die with the process.
-- Attachments in the composer, session rename, search, notifications for `NeedsYou`.
+- Session rename, search, notifications for `NeedsYou`.
 
 ## Gotchas
 
@@ -113,6 +113,11 @@ Not built:
 - **Insets are handled once,** by `safeDrawingPadding()` on the root in `BoxApp`. That includes
   the IME, so do *not* add `imePadding()` to the composer or the terminal — you will double-pad
   when the keyboard opens.
+- **A document artifact opens in a *text* viewer.** `openDocument` routes through the Files
+  panel's `readFile`, which hands back a `String` — so a `Document` whose `mimeType` is `image/*`
+  gets the right icon on the row and then renders as mojibake when tapped. `guest/agent-conventions.md`
+  tells the agent to hand pictures over through `/workspace/shared` instead, which is a
+  documentation patch over a viewer that cannot draw them yet.
 - **The diff renderer needs `IntrinsicSize.Max`.** Rows live inside a `horizontalScroll`, so
   `fillMaxWidth` alone sizes each row to its own text and the added/removed wash stops mid-line.
   The `Column(Modifier.width(IntrinsicSize.Max))` in `DiffView` is what makes the washes run edge

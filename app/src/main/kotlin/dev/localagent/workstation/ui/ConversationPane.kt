@@ -19,9 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -41,6 +43,10 @@ import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.CircularProgressIndicator
@@ -77,6 +83,7 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
@@ -105,6 +112,9 @@ fun ConversationPane(
     showComputerAction: Boolean = true,
     onSignIn: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
+    onAttachPhoto: (() -> Unit)? = null,
+    onAttachFile: (() -> Unit)? = null,
+    onRemoveAttachment: (Attachment) -> Unit = {},
 ) {
     val session = state.selectedSession
     val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
@@ -183,6 +193,10 @@ fun ConversationPane(
             onReview = onReviewPermission,
             mode = state.permissionMode,
             onModeChange = onSetPermissionMode,
+            attachments = state.pendingAttachments,
+            onAttachPhoto = onAttachPhoto,
+            onAttachFile = onAttachFile,
+            onRemoveAttachment = onRemoveAttachment,
         )
     }
 }
@@ -520,12 +534,23 @@ private fun QueuedMessage(prompt: QueuedPrompt, modifier: Modifier = Modifier) {
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
         ) {
-            Text(
-                prompt.text,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // The same tiles the sent turn draws, so a message waiting here looks like the message
+            // it is about to become. It matters most for a picture sent with no words, which is a
+            // whole message on its own — and which, held for a sign-in, would otherwise sit on
+            // screen as an empty bubble for as long as the user took to sign in.
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 11.dp)) {
+                prompt.attachments.forEach { attachment ->
+                    AttachmentTile(attachment)
+                    Spacer(Modifier.height(6.dp))
+                }
+                if (prompt.text.isNotBlank()) {
+                    Text(
+                        prompt.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(5.dp))
         Text(
@@ -619,10 +644,25 @@ internal fun Composer(
     mode: AgentPermissionMode = AgentPermissionMode.Ask,
     /** Null where the setting has nowhere to go — the opening hero shares this composer. */
     onModeChange: ((AgentPermissionMode) -> Unit)? = null,
+    /** What the user has picked or shared in and not sent yet. Drawn above the text. */
+    attachments: List<Attachment> = emptyList(),
+    /**
+     * Null where nothing can be attached. Two entries rather than one because Android has two
+     * pickers and they are not interchangeable: the photo picker needs no storage permission and
+     * shows the camera roll, while the document picker reaches everything else. Offering only one
+     * would mean either asking for a permission to show pictures, or making someone find a
+     * screenshot through a file tree.
+     */
+    onAttachPhoto: (() -> Unit)? = null,
+    onAttachFile: (() -> Unit)? = null,
+    onRemoveAttachment: (Attachment) -> Unit = {},
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var modeMenuOpen by remember { mutableStateOf(false) }
-    val canSend = enabled && blockedReason == null && draft.isNotBlank()
+    var attachMenuOpen by remember { mutableStateOf(false) }
+    // A picture on its own is a message: "look at this" is often the whole thought, and asking for
+    // a word alongside it would be Box requiring something it does not need.
+    val canSend = enabled && blockedReason == null && (draft.isNotBlank() || attachments.isNotEmpty())
     fun submit() {
         if (!canSend) return
         onSend(draft.trim())
@@ -660,6 +700,30 @@ internal fun Composer(
                 }
             }
         }
+        if (attachments.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 760.dp)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                attachments.forEach { attachment ->
+                    AttachmentChip(attachment) { onRemoveAttachment(attachment) }
+                }
+            }
+            // Said here because there is no unsend, and this is the last moment it is true. A file
+            // the user later deletes on the phone leaves the box's copy where it is — the sync
+            // stops carrying it out, and nothing reaches in to remove it.
+            Text(
+                "Once sent, a file stays in the box.",
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(bottom = 8.dp),
+            )
+        }
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp),
             shape = RoundedCornerShape(20.dp),
@@ -667,9 +731,52 @@ internal fun Composer(
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         ) {
             Row(
-                Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                Modifier.padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
+                // The second door. The share sheet wins when the file exists first and the wish to
+                // send it comes second; this wins when the conversation exists first — which is
+                // most of the time, and is the one that needs no app switch to reach.
+                if (onAttachPhoto != null || onAttachFile != null) {
+                    Box {
+                        IconButton(
+                            onClick = { attachMenuOpen = true },
+                            enabled = enabled,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Add,
+                                contentDescription = "Attach something",
+                                tint = if (enabled) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                },
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = attachMenuOpen,
+                            onDismissRequest = { attachMenuOpen = false },
+                        ) {
+                            onAttachPhoto?.let { pick ->
+                                DropdownMenuItem(
+                                    text = { Text("Photo") },
+                                    leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                                    onClick = { attachMenuOpen = false; pick() },
+                                )
+                            }
+                            onAttachFile?.let { pick ->
+                                DropdownMenuItem(
+                                    text = { Text("File") },
+                                    leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+                                    onClick = { attachMenuOpen = false; pick() },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.width(12.dp))
+                }
                 BasicTextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -745,6 +852,52 @@ internal fun Composer(
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
             )
+        }
+    }
+}
+
+/**
+ * One waiting attachment, with the way to take it back off.
+ *
+ * Named for what the user called it rather than for the stamped name it was given on disk. The
+ * stamp exists so two screenshots never argue with each other inside the shared folder; showing it
+ * here would be Box explaining its own filing to someone who just picked a photo.
+ */
+@Composable
+private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+    ) {
+        Row(
+            Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (attachment.isImage) Icons.Outlined.Image else Icons.Outlined.Description,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                attachment.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 180.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = "Remove ${attachment.name}",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

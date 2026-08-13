@@ -3,6 +3,7 @@ package dev.localagent.workstation
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
@@ -27,7 +28,7 @@ enum class BoxDestination { Tasks, Computer }
  * panels drawn on top of it — the agent, a shell, the workspace — one at a time, dismissable back
  * to nothing. A tab bar would have made the desktop one of four equal things instead of the thing.
  */
-enum class ComputerPanel { None, Chat, Terminal, Files }
+enum class ComputerPanel { None, Chat, Terminal, Files, Preview }
 
 /**
  * The two places files live, and the Files panel opens on the first of them.
@@ -86,11 +87,17 @@ data class UiNotice(val id: Long, val message: String)
  * guest can take it; a held one has deliberately not been handed over, because handing it to a box
  * with no credential spends it — the agent answers "Box is not signed in yet" and the user has to
  * type it again. Held messages are the ones a successful sign-in has to go back and send.
+ *
+ * [attachments] are here rather than left on the composer because a held message outlives the
+ * composer it was typed into. They are cleared from the composer the moment the message is queued —
+ * a second tap must not send them twice — so this is the only copy, and without it a photo attached
+ * before signing in would arrive as a turn about a file that was never mentioned.
  */
 data class QueuedPrompt(
     val sessionId: String?,
     val text: String,
     val heldForSignIn: Boolean = false,
+    val attachments: List<Attachment> = emptyList(),
 )
 
 /**
@@ -158,6 +165,16 @@ data class BoxUiState(
      */
     val queued: List<QueuedPrompt> = emptyList(),
 
+    /**
+     * Files picked or shared in, waiting on the next thing the user sends.
+     *
+     * They are already written into the box's shared folder by the time they are in here — this
+     * list is what the composer draws, not a staging area. Held on the box rather than inside the
+     * composer because a file can arrive from outside it: the share sheet reaches Box with no
+     * conversation open and nothing focused, and the picture has to be somewhere when it does.
+     */
+    val pendingAttachments: List<Attachment> = emptyList(),
+
     // ---- signing in ----
     val signIn: GuestAuth.State = GuestAuth.State.Unknown,
     val signInVisible: Boolean = false,
@@ -179,6 +196,14 @@ data class BoxUiState(
     val filesLoading: Boolean = false,
     val openingFilePath: String? = null,
     val openedFile: OpenedFile? = null,
+
+    /**
+     * Something the agent is serving in the guest, reachable on the phone's loopback.
+     *
+     * The guest port is kept beside the url because releasing the forward needs it, and the url is
+     * a loopback address that says nothing about which guest port it reaches.
+     */
+    val preview: OpenedPreview? = null,
 
     // ---- the shared folder ----
     val filesPlace: FilesPlace = FilesPlace.Shared,
@@ -310,3 +335,6 @@ data class BoxUiState(
     val agentAtWork: Boolean
         get() = sessions.any { it.status == SessionStatus.Active }
 }
+
+/** A forwarded guest port, and the address on the phone that reaches it. */
+data class OpenedPreview(val url: String, val guestPort: Int)

@@ -86,6 +86,29 @@ class GuestAgentBackend(
     private fun permissionModeCommand(mode: AgentPermissionMode) =
         mapOf("type" to "permission_mode", "mode" to mode.wire)
 
+    /**
+     * The last window Box was read in, held only in memory.
+     *
+     * Not persisted, unlike the permission mode, and the asymmetry is deliberate: a mode the user
+     * chose is still their choice after a restart, while a window size restored from disk describes
+     * a window that no longer exists. Null until the UI has measured itself, which is the honest
+     * state — a harness that is told nothing writes the way it always has.
+     */
+    @Volatile private var viewport: AgentViewport? = null
+
+    override suspend fun setViewport(viewport: AgentViewport) {
+        if (this.viewport == viewport) return
+        this.viewport = viewport
+        records.values.forEach { it.write(viewportCommand(viewport)) }
+    }
+
+    private fun viewportCommand(viewport: AgentViewport): Map<String, Any> = mapOf(
+        "type" to "viewport",
+        "layout" to viewport.layout.wire,
+        "widthDp" to viewport.widthDp,
+        "hardwareKeyboard" to viewport.hardwareKeyboard,
+    )
+
     /** One attached session: its live chunks, its handle, and how the transcript reached it. */
     private class Record(
         val id: String,
@@ -309,7 +332,11 @@ class GuestAgentBackend(
     override fun connection(sessionId: String): StateFlow<SessionConnection> =
         (records[sessionId]?.connection ?: MutableStateFlow(SessionConnection.Ended)).asStateFlow()
 
-    override suspend fun startSession(harnessId: String, prompt: String?): String {
+    override suspend fun startSession(
+        harnessId: String,
+        prompt: String?,
+        attachments: List<Attachment>,
+    ): String {
         val id = "s-" + System.currentTimeMillis().toString(36)
         val record = Record(
             id = id,
@@ -321,16 +348,44 @@ class GuestAgentBackend(
         publish(record, SessionStatus.Active, prompt)
 
         attach(record)
-        if (prompt != null) send(id, prompt)
+        if (prompt != null) send(id, prompt, attachments)
         return id
     }
 
-    override suspend fun send(sessionId: String, text: String) {
+    override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
         val record = records[sessionId] ?: return
         attach(record)
-        record.write(mapOf("type" to "prompt", "text" to text))
+        record.write(promptCommand(text, attachments))
         publish(record, SessionStatus.Active, text)
     }
+
+    /**
+     * A turn, with anything the user showed alongside it.
+     *
+     * The files are not carried here. They were written into the shared folder before this was
+     * called and reach the guest by the sync that folder already has, so all that crosses is the
+     * path each one will be at. What the guest does *not* get is a promise that they have arrived
+     * yet: the harness waits for them before handing the turn to the model, because the copy is a
+     * second or so behind the keystroke and the alternative is an agent that looks too early and
+     * tells the user it cannot see their picture.
+     */
+    private fun promptCommand(text: String, attachments: List<Attachment>): Map<String, Any> =
+        if (attachments.isEmpty()) {
+            mapOf("type" to "prompt", "text" to text)
+        } else {
+            mapOf(
+                "type" to "prompt",
+                "text" to text,
+                "attachments" to attachments.map {
+                    mapOf(
+                        "guestPath" to it.guestPath,
+                        "name" to it.name,
+                        "mimeType" to it.mimeType,
+                        "bytes" to it.bytes,
+                    )
+                },
+            )
+        }
 
     override suspend fun resolvePermission(
         sessionId: String,
@@ -460,11 +515,17 @@ class GuestAgentBackend(
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
             if (session != null) {
                 // Whatever the user asked for while the computer was still starting — with the
-                // permission mode ahead of it. Every harness process starts out asking, including
-                // one that came back after `:computer` died, so a prompt delivered before the mode
-                // would run its first turn under a setting the user had already changed. This is
-                // the one place both orders meet, so it is the only place that can promise it.
-                record.flushOutbox(first = permissionModeCommand(modeState.value))
+                // standing settings ahead of it. Every harness process starts out asking and knowing
+                // nothing about the window, including one that came back after `:computer` died, so
+                // a prompt delivered before them would run its first turn under a setting the user
+                // had already changed, or write for a screen it cannot see. This is the one place
+                // all of those orders meet, so it is the only place that can promise them.
+                record.flushOutbox(
+                    first = listOfNotNull(
+                        permissionModeCommand(modeState.value),
+                        viewport?.let(::viewportCommand),
+                    ),
+                )
                 // A session that failed to open earlier is no longer failed, and the list has to
                 // stop saying so.
                 scope.launch { publish(record, SessionStatus.Active) }
@@ -528,8 +589,8 @@ class GuestAgentBackend(
      * queued since before the boot, and the agent would read the user's turns out of order.
      * `IAgentSession.write` is `oneway`, so nothing waits on the guest while the lock is held.
      */
-    private fun Record.write(command: Map<String, String>) {
-        val json = encode(command)
+    private fun Record.write(command: Map<String, Any>) {
+        val json = HarnessWire.encode(command)
         synchronized(outbox) {
             val live = handle
             if (live == null || outbox.isNotEmpty()) {
@@ -544,21 +605,17 @@ class GuestAgentBackend(
         }
     }
 
-    private fun encode(command: Map<String, String>): String =
-        command.entries.joinToString(",", "{", "}") { (key, value) ->
-            "${JsonString(key)}:${JsonString(value)}"
-        }
 
     /**
      * Everything written while the guest process was still starting, in the order it was written,
      * behind [first] — which exists so a session's standing settings can be stated to a brand new
-     * process before the work it was queued to do.
+     * process before the work it was queued to do, in the order given.
      */
-    private fun Record.flushOutbox(first: Map<String, String>? = null) {
+    private fun Record.flushOutbox(first: List<Map<String, Any>> = emptyList()) {
         synchronized(outbox) {
             val live = handle ?: return
             val undelivered = mutableListOf<String>()
-            for (json in listOfNotNull(first?.let(::encode)) + outbox) {
+            for (json in first.map(HarnessWire::encode) + outbox) {
                 runCatching { live.write((json + "\n").toByteArray()) }
                     .onFailure {
                         Log.e(TAG, "could not deliver a queued command", it)
@@ -696,20 +753,4 @@ private fun reasonFor(ask: PermissionAsk): String = when (ask) {
     is PermissionAsk.RunCommand -> "It wants to run a command"
     is PermissionAsk.NetworkAccess -> "It wants to reach the network"
     is PermissionAsk.Generic -> "It needs your decision"
-}
-
-/** Minimal JSON string escaping — the harness protocol is the only consumer. */
-private fun JsonString(value: String): String = buildString {
-    append('"')
-    value.forEach { character ->
-        when (character) {
-            '"' -> append("\\\"")
-            '\\' -> append("\\\\")
-            '\n' -> append("\\n")
-            '\r' -> append("\\r")
-            '\t' -> append("\\t")
-            else -> if (character < ' ') append("\\u%04x".format(character.code)) else append(character)
-        }
-    }
-    append('"')
 }

@@ -59,6 +59,8 @@ import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.AgentViewport
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
@@ -113,6 +115,10 @@ fun BoxApp(
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
+    onViewportChanged: (AgentViewport) -> Unit = {},
+    onAttachPhoto: (() -> Unit)? = null,
+    onAttachFile: (() -> Unit)? = null,
+    onRemoveAttachment: (Attachment) -> Unit = {},
     desktop: DesktopTransport? = null,
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
@@ -178,6 +184,12 @@ fun BoxApp(
             val layout = rememberBoxLayout(maxWidth, maxHeight)
             val compact = layout == BoxLayout.Single
 
+            // The one place in Box that knows how much room there is. Reported rather than stored:
+            // this is the same measurement the layout above is drawn from, so an agent writing for
+            // a wide window and a UI drawing one can never disagree about which it is.
+            val viewport = rememberViewport(maxWidth, maxHeight)
+            LaunchedEffect(viewport) { onViewportChanged(viewport) }
+
             val home: @Composable (Modifier, Boolean) -> Unit = { modifier, showSelection ->
                 SessionsPane(
                     state = state,
@@ -223,6 +235,9 @@ fun BoxApp(
                     showComputerAction = showComputerAction,
                     onSignIn = onShowSignIn,
                     onSetPermissionMode = onSetPermissionMode,
+                    onAttachPhoto = onAttachPhoto,
+                    onAttachFile = onAttachFile,
+                    onRemoveAttachment = onRemoveAttachment,
                 )
             }
 

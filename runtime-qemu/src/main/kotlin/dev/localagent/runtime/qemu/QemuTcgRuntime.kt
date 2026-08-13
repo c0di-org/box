@@ -44,6 +44,9 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.net.ServerSocket
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /** App-private QEMU/TCG runtime. Guest operations are never substituted with Android shell work. */
@@ -338,7 +341,69 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     override suspend fun desktopStop(): Unit = unavailable("Desktop")
     override suspend fun snapshot(): SnapshotId = unavailable("Snapshots")
     override suspend fun restore(snapshot: SnapshotId): Unit = unavailable("Snapshot restore")
-    override suspend fun forwardPort(request: PortForwardRequest): PortForward = unavailable("Port forwarding")
+    /**
+     * Opens a loopback port on the phone that reaches [request]'s port inside the guest.
+     *
+     * QEMU's user-mode network stack does this itself — no proxy process, no root, no change to
+     * the guest — but only through the human monitor: `hostfwd_add` and `hostfwd_remove` have no
+     * QMP equivalent, so success is an empty line and failure is *printed text*. Anything the
+     * monitor says is therefore treated as the error.
+     *
+     * The host port is chosen by asking the OS for a free one and immediately giving it back. That
+     * is a race in principle — something else could take it in the gap — and it is the right trade
+     * anyway: the alternative is Box picking numbers out of a fixed range and colliding with
+     * whatever else on the phone had the same idea. A lost race surfaces as a failed forward, which
+     * is recoverable; a fixed range fails the same way and less legibly.
+     *
+     * Bound to 127.0.0.1 on purpose. A dev server the agent started is for the person holding the
+     * phone, and binding it to the phone's wifi address would publish it to the network they are on.
+     */
+    override suspend fun forwardPort(request: PortForwardRequest): PortForward =
+        withContext(Dispatchers.IO) {
+            check(NativeQemu.isRunning()) { "The computer is not running" }
+            forwards[request.guestPort]?.let { return@withContext it }
+
+            val localPort = ServerSocket(0).use { it.localPort }
+            val monitor = QmpClient(storage.qmpSocket)
+            val complaint = monitor.monitorCommand(
+                "hostfwd_add $NETDEV tcp:$LOOPBACK:$localPort-:${request.guestPort}",
+            )
+            check(complaint.isEmpty()) { "Could not forward port ${request.guestPort}: $complaint" }
+
+            val forward = QemuPortForward(request.guestPort, localPort) {
+                // Removing is best-effort by design: the common way a forward ends is the VM
+                // stopping, and by then there is no monitor to tell. A failure here must not
+                // propagate into a UI action whose whole job was to tidy up.
+                runCatching {
+                    QmpClient(storage.qmpSocket)
+                        .monitorCommand("hostfwd_remove $NETDEV tcp:$LOOPBACK:$localPort")
+                }
+                forwards.remove(request.guestPort)
+            }
+            forwards[request.guestPort] = forward
+            forward
+        }
+
+    /**
+     * Live forwards, so asking twice for the same guest port is the same forward.
+     *
+     * Without this a second ask would add a second host forward to the same guest port, and the
+     * first one's local port would be a number nothing ever closes.
+     */
+    private val forwards = ConcurrentHashMap<Int, QemuPortForward>()
+
+    private class QemuPortForward(
+        val guestPort: Int,
+        override val localPort: Int,
+        private val onClose: suspend () -> Unit,
+    ) : PortForward {
+        private val closed = AtomicBoolean(false)
+
+        override suspend fun close() {
+            if (closed.compareAndSet(false, true)) onClose()
+        }
+    }
+
     override suspend fun suspendRuntime(): Unit = unavailable("Suspend")
     override suspend fun resumeRuntime(): Unit = unavailable("Resume")
 
@@ -457,6 +522,12 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         throw UnsupportedOperationException("$feature is not available in this runtime yet")
 
     private companion object {
+        /** The id given to the user-mode netdev in [QemuCommand]. `hostfwd_add` names it. */
+        const val NETDEV = "net0"
+
+        /** Forwards are for the person holding the phone, not for the network it is on. */
+        const val LOOPBACK = "127.0.0.1"
+
         const val TAG = "BoxRuntime"
         const val QMP_ATTEMPTS = 80
         const val QMP_RETRY_MILLIS = 250L
