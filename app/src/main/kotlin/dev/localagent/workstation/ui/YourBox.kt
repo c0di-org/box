@@ -71,7 +71,8 @@ import kotlinx.coroutines.delay
  *
  * Four states, and each one is only allowed to say what is true at that moment:
  *
- * - **Closed** — a mark and a button.
+ * - **Closed** — a mark and a button, or the same offer as a row once there are tasks to see
+ *   behind it.
  * - **Opening** — the ring, what it is doing, how long is left, and something worth doing with the
  *   wait: the first task can be typed now and is sent the moment the guest can take it.
  * - **Just opened, once ever** — the arrival gets the window exactly one time in the life of an
@@ -99,7 +100,9 @@ fun YourBox(
         modifier = modifier,
     ) { (stage, owns, greeting) ->
         when {
-            stage == BoxStage.Closed -> ClosedHero(state = state, onOpen = onOpen)
+            stage == BoxStage.Closed && owns -> ClosedHero(state = state, onOpen = onOpen)
+
+            stage == BoxStage.Closed -> ClosedRow(state = state, onOpen = onOpen)
 
             stage == BoxStage.Working && owns -> OpeningHero(
                 progress = progress,
@@ -402,6 +405,42 @@ private fun HeroFrame(content: @Composable () -> Unit) {
 // ---------------------------------------------------------------------------
 // Settled
 // ---------------------------------------------------------------------------
+
+/**
+ * Closed, when there is already work on this screen to look at.
+ *
+ * The same offer the hero makes, in the space the opening and the open box use — so coming back to
+ * Box the next day is a list of what the agents did, with one row on top saying the machine is off
+ * and one word to turn it back on. It was a full-window splash with all of that behind it.
+ */
+@Composable
+private fun ClosedRow(state: BoxUiState, onOpen: () -> Unit) {
+    val failure = (state.runtimeState as? RuntimeState.Failed)?.reason
+
+    RowFrame(onClick = onOpen) {
+        BoxMark(34.dp, Modifier.padding(start = 6.dp))
+        Spacer(Modifier.width(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (failure != null) "Your box didn’t open" else "Your box is closed",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                // The reason, when there is one: a row that only ever says "closed" turns a
+                // failure into a button that appears to do nothing when pressed twice.
+                failure?.message ?: "Nothing is running.",
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        TextButton(onClick = onOpen) { Text(if (failure != null) "Try again" else "Open") }
+    }
+}
 
 /**
  * Opening, when there is already work on this screen to look at.

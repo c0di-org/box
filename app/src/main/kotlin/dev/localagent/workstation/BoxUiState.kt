@@ -226,14 +226,18 @@ data class BoxUiState(
     /**
      * Whether the box itself is worth the whole home surface.
      *
-     * It is, whenever there is nothing else on that surface: a closed box, a first opening with no
-     * tasks under it yet, and the one arrival an install ever gets. It is not, the moment there is
-     * real work to look at — reopening the box after a restart must not hide a list of tasks behind
-     * a progress screen for three minutes, so that opening is a row instead.
+     * It is, whenever there is nothing else on that surface: a first-run box with nothing in it, a
+     * first opening with no tasks under it yet, and the one arrival an install ever gets. It is
+     * not, the moment there is real work to look at — reopening the box after a restart must not
+     * hide a list of tasks behind a progress screen for three minutes, so that opening is a row.
+     *
+     * The same is true of a *closed* box, and used to not be: Android reclaims `:computer`
+     * routinely, so "closed, with a week of tasks in the list" is the ordinary state of a returning
+     * user, and they were meeting a full-window splash with their own work hidden behind it.
      */
     val boxOwnsWindow: Boolean
         get() = when (boxStage) {
-            BoxStage.Closed -> true
+            BoxStage.Closed -> tasks.isEmpty()
             BoxStage.Working -> tasks.isEmpty()
             BoxStage.Open -> readyGreeting
         }

@@ -27,8 +27,17 @@ class HomeSurfaceTest {
     )
 
     @Test
-    fun `a closed box is the whole window`() {
+    fun `a closed box with nothing behind it is the whole window`() {
         assertTrue(BoxUiState().boxOwnsWindow)
+    }
+
+    @Test
+    fun `a closed box never hides work either`() {
+        // The returning user: `:computer` was reclaimed while they were away, so the box is off and
+        // a week of tasks is sitting behind it. This used to be a full-window splash.
+        val closed = BoxUiState(runtimeState = RuntimeState.Stopped, sessions = listOf(task("a")))
+        assertEquals(BoxStage.Closed, closed.boxStage)
+        assertFalse(closed.boxOwnsWindow)
     }
 
     @Test

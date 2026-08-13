@@ -119,8 +119,9 @@ fun BoxApp(
     /** Set when a specific card asks to be reviewed, so the sheet opens on that one, not the first. */
     var reviewingRequestId by remember { mutableStateOf<String?>(null) }
     val progress = rememberBoxProgress(state)
-    // The app is handed back on press. Only the closed box is allowed to hold the window.
-    val revealed = state.boxStage != BoxStage.Closed
+    // The app is handed back on press. Only a box holding the whole window keeps the chrome off,
+    // which is the first-run splash and the one arrival — never a closed box with work under it.
+    val revealed = state.boxStage != BoxStage.Closed || state.tasks.isNotEmpty()
     val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(state.notice?.id) {
