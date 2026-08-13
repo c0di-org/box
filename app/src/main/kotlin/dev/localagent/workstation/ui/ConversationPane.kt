@@ -927,7 +927,6 @@ internal fun Composer(
      */
     notice: String? = null,
     onNotice: (() -> Unit)? = null,
-    footer: Boolean = true,
     mode: AgentPermissionMode = AgentPermissionMode.Ask,
     /** Null where the setting has nowhere to go — the opening hero shares this composer. */
     onModeChange: ((AgentPermissionMode) -> Unit)? = null,
@@ -1134,15 +1133,6 @@ internal fun Composer(
                     )
                 }
             }
-        }
-        if (footer) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Box can make mistakes. Review all work.",
-                style = MaterialTheme.typography.bodyMedium,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-            )
         }
     }
 }

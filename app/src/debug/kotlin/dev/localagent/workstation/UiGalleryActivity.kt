@@ -457,7 +457,7 @@ private object StubDesktop : DesktopTransport {
     // layout, and a stub that drove the guest's screen would be reaching past what it is for.
     override val wantedGuestScreen: StateFlow<GuestScreen?> = MutableStateFlow(null)
 
-    override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int) = Unit
+    override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int, preview: Boolean) = Unit
     override suspend fun detach(surface: Surface) = Unit
     override suspend fun send(input: DesktopInput) = Unit
     override suspend fun setControl(holder: ControlHolder) = Unit

@@ -34,11 +34,17 @@ interface DesktopTransport {
      * Renders guest output into [surface] until [detach].
      *
      * More than one surface may be attached at once, and they all show the same screen. That is not
-     * a luxury: the box's row in the task list, the inline pane and the full window are three views
-     * of one machine, and on a Fold two of them are on screen together. A transport that held a
-     * single surface would have them stealing the picture from each other.
+     * a luxury: the box's header on the home column, the inline pane and the full window are three
+     * views of one machine, and on a Fold two of them are on screen together. A transport that held
+     * a single surface would have them stealing the picture from each other.
+     *
+     * @param preview a view that is only ever looked at, and must not be allowed to decide how big
+     * the guest's screen is. The minimap in the box's header is one: it is a real surface at a real
+     * size, and on a phone it is comfortably larger than a desktop pane on a small window — so
+     * counting it would resize the guest's display every time the user walked back to their tasks.
+     * [GuestScreenFit] never sees these. See [wantedGuestScreen].
      */
-    suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int)
+    suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int, preview: Boolean = false)
 
     /** Stops drawing into [surface]. The stream ends when the last surface has gone. */
     suspend fun detach(surface: Surface)

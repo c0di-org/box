@@ -44,11 +44,15 @@ class VncDesktop(
      * Every view currently showing the guest, in attach order.
      *
      * A set rather than one surface because the same screen legitimately appears in several places
-     * at once — the box's row in the task list while the full window is open over it, or the inline
-     * pane beside a conversation on a Fold. One RFB connection feeds all of them; the cost of an
-     * extra view is one scaled blit per frame, not another framebuffer crossing the emulated link.
+     * at once — the box's header on the home column while the full window is open over it, or the
+     * inline pane beside a conversation on a Fold. One RFB connection feeds all of them; the cost
+     * of an extra view is one scaled blit per frame, not another framebuffer crossing the emulated
+     * link.
      */
-    private val surfaces = LinkedHashMap<Surface, GuestScreen>()
+    private val surfaces = LinkedHashMap<Surface, Attached>()
+
+    /** A view of the guest, and whether its size is allowed to be an opinion about the guest's. */
+    private data class Attached(val screen: GuestScreen, val preview: Boolean)
 
     private val wantedScreen = MutableStateFlow<GuestScreen?>(null)
     override val wantedGuestScreen: StateFlow<GuestScreen?> = wantedScreen.asStateFlow()
@@ -61,11 +65,11 @@ class VncDesktop(
     /** Filtering matters here: the guest is 1280x800 and the pane it lands in rarely is. */
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
 
-    override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int) {
+    override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int, preview: Boolean) {
         synchronized(lock) {
             // Re-measured, not merely added: `surfaceChanged` is how a rotation, a fold and a DeX
             // window drag all arrive, and each of those is a resize of a surface already here.
-            surfaces[surface] = GuestScreen(widthPx, heightPx)
+            surfaces[surface] = Attached(GuestScreen(widthPx, heightPx), preview)
             publishWantedScreen()
             if (pump != null) {
                 // Already streaming; a view was resized, recreated, or newly opened. Repaint into
@@ -189,7 +193,10 @@ class VncDesktop(
      * published from a half-updated set of views would be a size the guest then actually took.
      */
     private fun publishWantedScreen() {
-        wantedScreen.value = GuestScreenFit.of(surfaces.values)
+        // Previews are not opinions about the guest's screen; see [DesktopTransport.attach].
+        wantedScreen.value = GuestScreenFit.of(
+            surfaces.values.filterNot { it.preview }.map { it.screen },
+        )
     }
 
     private fun bitmapMatches(rfb: RfbConnection): Boolean = synchronized(lock) {
