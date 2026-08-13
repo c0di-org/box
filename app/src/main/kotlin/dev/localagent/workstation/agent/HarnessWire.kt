@@ -144,7 +144,7 @@ internal object HarnessWire {
             "permission_resolved" -> AgentEvent.PermissionResolved(
                 eventId, session, at,
                 requestId = json.optString("requestId"),
-                decision = decision(json.optString("decision")),
+                decision = decision(json),
             )
 
             "task_progress" -> AgentEvent.TaskProgress(
@@ -263,6 +263,17 @@ internal object HarnessWire {
                 destructive = json.optBoolean("destructive", false),
                 alwaysAllowScope = scope,
             )
+            // A question with nothing answerable left in it is not a question, so it falls through
+            // to the generic ask rather than drawing a sheet with no way off it. That is the only
+            // safe direction: allow/deny always works, and an empty option list never does.
+            "question" -> questions(json.optJSONArray("questions"))
+                .takeIf { it.isNotEmpty() }
+                ?.let { PermissionAsk.Questions(it) }
+                ?: PermissionAsk.Generic(
+                    title = "A question for you",
+                    description = "The agent asked something this version of Box cannot draw.",
+                )
+
             "network_access" -> PermissionAsk.NetworkAccess(
                 host = json.optString("host"),
                 purpose = json.optStringOrNull("purpose"),
@@ -278,9 +289,34 @@ internal object HarnessWire {
         }
     }
 
-    private fun decision(value: String): PermissionDecision = when (value) {
+    private fun questions(json: JSONArray?): List<Question> = json.mapObjects { item ->
+        Question(
+            text = item.optString("text"),
+            header = item.optString("header"),
+            options = item.optJSONArray("options").mapObjects { option ->
+                QuestionOption(
+                    label = option.optString("label"),
+                    description = option.optStringOrNull("description"),
+                )
+            }.filter { it.label.isNotBlank() },
+            multiSelect = item.optBoolean("multiSelect", false),
+        )
+    }.filter { it.text.isNotBlank() && it.options.isNotEmpty() }
+
+    /**
+     * Takes the whole line rather than the decision string, because one decision carries a payload.
+     *
+     * An `answer` with nothing in it degrades to [PermissionDecision.Allow] instead of claiming an
+     * answer nobody gave. The claim is the dangerous half here: a wrongly-plain allow costs the
+     * transcript a word, and a wrongly-reported answer is the original bug wearing a new hat.
+     */
+    private fun decision(json: JSONObject): PermissionDecision = when (json.optString("decision")) {
         "allow" -> PermissionDecision.Allow
         "allow_always" -> PermissionDecision.AllowAlways("this session")
+        "answer" -> json.optJSONObject("answers").toStringMap()
+            .takeIf { it.isNotEmpty() }
+            ?.let { PermissionDecision.Answered(it) }
+            ?: PermissionDecision.Allow
         "deny" -> PermissionDecision.Deny
         else -> PermissionDecision.Abandoned
     }
@@ -403,6 +439,15 @@ internal object HarnessWire {
     private fun <T> JSONArray?.mapObjects(transform: (JSONObject) -> T): List<T> {
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { optJSONObject(it) }.map(transform)
+    }
+
+    /** `{"question": "answer", …}` — string to string, and anything else in there is dropped. */
+    private fun JSONObject?.toStringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        return keys().asSequence().mapNotNull { key ->
+            val value = optString(key)
+            if (value.isEmpty()) null else key to value
+        }.toMap()
     }
 
     /** `[["key", "value"], …]` — the shape both generic tool arguments and ask details use. */

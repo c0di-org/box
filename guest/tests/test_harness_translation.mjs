@@ -14,8 +14,15 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { describeTool, describeAsk, editPatch, createPatch, translateAssistant, translateToolResults } =
-  await import('../harness/box-claude-harness.mjs');
+const {
+  describeTool,
+  describeAsk,
+  answeredInput,
+  editPatch,
+  createPatch,
+  translateAssistant,
+  translateToolResults,
+} = await import('../harness/box-claude-harness.mjs');
 
 /**
  * The events one translation call writes.
@@ -70,8 +77,9 @@ test('an unmodelled tool degrades to a labelled card rather than a raw dump', ()
   assert.equal(tool.kind, 'generic');
   assert.equal(tool.name, 'SomeFutureTool');
   assert.deepEqual(tool.arguments[0], ['alpha', '1']);
-  // Objects are stringified, never dropped: a degraded card still has to be honest.
-  assert.equal(tool.arguments[1][1], '{"nested":true}');
+  // Structure is written out, never dropped and never punctuated: a degraded card still has to be
+  // honest, and the card it degrades to promises in as many words that it is not raw JSON.
+  assert.equal(tool.arguments[1][1], 'nested: true');
 });
 
 test('an edit patch carries the real line number of the change', () => {
@@ -231,4 +239,109 @@ test('sending a sub-agent is asked for in those words, and never blanket-approve
   assert.deepEqual(ask.details[0], ['Kind', 'Explore']);
   // One sub-agent is one cost; "always allow" would answer for every later one too.
   assert.equal(ask.alwaysAllowScope, null);
+});
+
+/**
+ * The question round trip.
+ *
+ * `AskUserQuestion` is answered through the permission result rather than beside it: the tool's own
+ * input carries an `answers` field the SDK documents as "collected by the permission component",
+ * and a host fills it in by handing the input back as `updatedInput`. These pin both ends of that
+ * — the ask the sheet is drawn from, and the input an answer turns into.
+ */
+const question = (over = {}) => ({
+  questions: [
+    {
+      question: 'Which model should the sub-agent use?',
+      header: 'Model',
+      multiSelect: false,
+      options: [
+        { label: 'Sonnet', description: 'Faster, cheaper.' },
+        { label: 'Opus', description: 'Better at long reasoning.' },
+      ],
+    },
+  ],
+  ...over,
+});
+
+test('a question is asked as a question, not as a permission to weigh', () => {
+  const ask = describeAsk('AskUserQuestion', question());
+
+  assert.equal(ask.kind, 'question');
+  assert.equal(ask.questions.length, 1);
+  assert.equal(ask.questions[0].text, 'Which model should the sub-agent use?');
+  assert.equal(ask.questions[0].header, 'Model');
+  assert.deepEqual(ask.questions[0].options.map((option) => option.label), ['Sonnet', 'Opus']);
+  assert.equal(ask.questions[0].options[0].description, 'Faster, cheaper.');
+  // "Always allow" here would answer questions nobody has read yet.
+  assert.equal(ask.alwaysAllowScope, null);
+});
+
+test('a question with nothing to choose between is dropped rather than drawn', () => {
+  const ask = describeAsk('AskUserQuestion', {
+    questions: [
+      { question: 'Which one?', header: 'Pick', options: [{ label: '' }] },
+      { question: '', header: 'Empty', options: [{ label: 'Yes' }] },
+    ],
+  });
+
+  // A sheet whose only job is to be answerable must not be handed a question that cannot be.
+  assert.deepEqual(ask.questions, []);
+});
+
+test('an answer becomes the tool’s own input, with the answers filled in', () => {
+  const input = question();
+  const answered = answeredInput('AskUserQuestion', input, {
+    'Which model should the sub-agent use?': 'Opus',
+  });
+
+  assert.deepEqual(answered.answers, { 'Which model should the sub-agent use?': 'Opus' });
+  // The questions ride along untouched: this is the same call, now carrying its answer.
+  assert.deepEqual(answered.questions, input.questions);
+  assert.notEqual(answered, input);
+});
+
+test('an answer to a question that was never asked is dropped, not passed on', () => {
+  // The app can be older or newer than the guest image. An answer keyed to a question this call
+  // did not ask would otherwise reach the model looking exactly like one somebody gave.
+  assert.equal(answeredInput('AskUserQuestion', question(), { 'Some other question?': 'Opus' }), null);
+  assert.equal(answeredInput('AskUserQuestion', question(), {}), null);
+  assert.equal(answeredInput('AskUserQuestion', question(), undefined), null);
+  assert.equal(answeredInput('Bash', { command: 'ls' }, { 'Which?': 'Opus' }), null);
+});
+
+test('a multi-select answer keeps the shape the tool documents for it', () => {
+  const input = { questions: [{ question: 'Which ones?', header: 'Scope', multiSelect: true, options: [{ label: 'a' }, { label: 'b' }] }] };
+  const answered = answeredInput('AskUserQuestion', input, { 'Which ones?': 'a, b' });
+
+  assert.equal(answered.answers['Which ones?'], 'a, b');
+});
+
+test('a question draws a card saying what was asked, in words', () => {
+  // Under `bypassPermissions` no sheet is ever drawn, so this card is the only record that the
+  // agent asked at all.
+  const tool = describeTool('AskUserQuestion', question());
+
+  assert.equal(tool.kind, 'generic');
+  assert.equal(tool.name, 'Asked you');
+  assert.deepEqual(tool.arguments, [['Model', 'Which model should the sub-agent use?']]);
+});
+
+test('a structured argument reaches a key/value card as words, never as JSON', () => {
+  // `ToolCall.Generic` promises "never raw JSON" in as many words, and kept it only for arguments
+  // that happened to be strings.
+  const tool = describeTool('SomeUnmodelledTool', question());
+  const [, value] = tool.arguments[0];
+
+  assert.doesNotMatch(value, /[{}[\]"]/);
+  assert.match(value, /Which model should the sub-agent use\?/);
+  assert.match(value, /options: 2 items/);
+});
+
+test('the same rule holds on the permission sheet a tool Box does not model falls back to', () => {
+  const ask = describeAsk('SomeUnmodelledTool', { plan: { steps: ['one', 'two'], dryRun: true } });
+  const [, value] = ask.details[0];
+
+  assert.doesNotMatch(value, /[{}[\]"]/);
+  assert.equal(value, 'steps: one; two, dryRun: true');
 });

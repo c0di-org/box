@@ -351,6 +351,29 @@ sealed interface PermissionAsk {
         override val headline: String get() = "Reach $host"
     }
 
+    /**
+     * The agent is asking the user something, rather than asking to do something.
+     *
+     * It lives among the permission asks because that is literally where the answer travels: the
+     * question tool's own input carries the field the answer goes in, and the host fills it in by
+     * answering the permission request. Modelling it as a separate channel would have meant two
+     * round trips racing over one tool call.
+     *
+     * The sheet owes this one a real answer or none at all. Denying and abandoning both stay
+     * meaningful — "I would rather not say" and "I never saw it" are different, and the agent can
+     * tell them apart — but there is no allow: nothing here is being permitted.
+     */
+    data class Questions(
+        val questions: List<Question>,
+        override val alwaysAllowScope: String? = null,
+    ) : PermissionAsk {
+        override val headline: String get() = when (questions.size) {
+            0 -> "A question for you"
+            1 -> questions.first().text
+            else -> "${questions.size} questions for you"
+        }
+    }
+
     data class Generic(
         val title: String,
         val description: String,
@@ -361,9 +384,49 @@ sealed interface PermissionAsk {
     }
 }
 
+/**
+ * One question, and the answers it will take.
+ *
+ * [text] is the question itself and doubles as its identity: the answer travels back keyed by it,
+ * because that is the key the tool's own input uses. [header] is the two-or-three-word chip the
+ * question is filed under — "Auth method", "Approach" — and is the label a card shows when there
+ * is no room for the whole sentence.
+ */
+@Immutable
+data class Question(
+    val text: String,
+    val header: String,
+    val options: List<QuestionOption>,
+    val multiSelect: Boolean = false,
+)
+
+/**
+ * One answer on offer.
+ *
+ * [description] is what the option means, and it is the reason this is a sheet rather than a row
+ * of buttons: a choice between "Sonnet" and "Opus" with nothing said about either is not a choice
+ * anyone can make from a phone.
+ */
+@Immutable
+data class QuestionOption(val label: String, val description: String? = null)
+
 @Immutable
 sealed interface PermissionDecision {
     data object Allow : PermissionDecision
+
+    /**
+     * The user answered a [PermissionAsk.Questions], keyed by question text.
+     *
+     * Separate from [Allow] because it says something [Allow] cannot: that a person read the
+     * question and chose. An answered question that came back as a bare allow would tell the agent
+     * it may proceed while telling it nothing about what to proceed *with* — which is the exact
+     * failure this whole path exists to end.
+     *
+     * A multi-select answer is its chosen labels joined by ", ", which is the shape the tool
+     * documents for its own `answers` field. Box does not invent a richer one: the value is read by
+     * a model, not parsed by a program, and matching the tool's own convention costs nothing.
+     */
+    data class Answered(val answers: Map<String, String>) : PermissionDecision
 
     /** [scope] echoes [PermissionAsk.alwaysAllowScope] so the log records what was widened. */
     data class AllowAlways(val scope: String) : PermissionDecision

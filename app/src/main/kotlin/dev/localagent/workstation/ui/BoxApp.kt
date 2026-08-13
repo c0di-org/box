@@ -63,6 +63,7 @@ import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.GuestAuth
+import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopTransport
@@ -140,12 +141,22 @@ fun BoxApp(
      * asked, on a phone, over whatever the user was doing: the keyboard went down as it arrived
      * and came back up after the answer, so a request that landed mid-sentence cost them their
      * place twice, and a request they had already decided about from the card still had to be
-     * dismissed. Every unanswered request draws its own Allow and Deny in the transcript, next to
-     * the work it is about, so nothing needs a modal to be answerable — the sheet is for the one
-     * case the card cannot serve, which is wanting to read a whole diff before deciding, and that
-     * is a thing the user asks for by tapping the card.
+     * dismissed. Every unanswered request draws its own decision in the transcript, next to the
+     * work it is about, so nothing needs a modal to be answerable — the sheet is for the cases the
+     * card cannot serve, and a person asks for it by tapping the card.
+     *
+     * A question is the exception, and it raises itself; see [sheetTarget].
      */
     var reviewingRequestId by remember { mutableStateOf<String?>(null) }
+    /**
+     * Questions the user closed without answering.
+     *
+     * Only questions, because they are the only thing that comes up on its own — and something
+     * that reappears the instant it is swiped away is not dismissable. Not saved across process
+     * death: an agent is still holding its turn open behind it, so asking again is the safe way
+     * to be wrong.
+     */
+    var dismissedQuestions by remember { mutableStateOf(emptySet<String>()) }
     val progress = rememberBoxProgress(state)
     // The app is handed back on press. Only a box holding the whole window keeps the chrome off,
     // which is the first-run splash and the one arrival — never a closed box with work under it.
@@ -181,9 +192,23 @@ fun BoxApp(
     }
 
     val waiting = state.transcript?.pendingPermissions.orEmpty()
-    // Answered elsewhere in the meantime — from the card, or by an "always allow" that covered it
-    // — is the same as never having been asked for, so the sheet closes with it.
+    /*
+     * What the sheet is about, if anything: the one the user tapped, or a question.
+     *
+     * Answered elsewhere in the meantime — from the card, or by an "always allow" that covered it
+     * — is the same as never having been asked for, so the sheet closes with it.
+     *
+     * The question is the exception to the sheet waiting to be asked for, and for the reason the
+     * rest of the rule is built on. A permission card carries its own answer, so raising a modal
+     * over it duplicates a decision that is already on screen; a question card carries none —
+     * the options, their descriptions and the free-text answer only exist in the sheet — so
+     * "answer this" and "open the sheet" are the same instruction, and making the person tap
+     * twice for it is the app being coy about what it wants.
+     */
     val sheetTarget = waiting.firstOrNull { it.requestId == reviewingRequestId }
+        ?: waiting.firstOrNull {
+            it.ask is PermissionAsk.Questions && it.requestId !in dismissedQuestions
+        }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -237,7 +262,10 @@ fun BoxApp(
                     onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                     onCloseSession = onCloseSession,
                     onPermissionDecision = onPermissionDecision,
-                    onReviewRequest = { requestId -> reviewingRequestId = requestId },
+                    onReviewRequest = { requestId ->
+                        dismissedQuestions = dismissedQuestions - requestId
+                        reviewingRequestId = requestId
+                    },
                     modifier = modifier,
                     showComputerAction = showComputerAction,
                     // In `Wide` the task list is beside this, and the box's own state is the
@@ -340,9 +368,13 @@ fun BoxApp(
                         reviewingRequestId = null
                         onPermissionDecision(sheetTarget.requestId, decision)
                     },
-                    // Closing it answers nothing, and now costs nothing either: the request is
-                    // still standing in the transcript with both buttons on it.
-                    onDismiss = { reviewingRequestId = null },
+                    // Closing answers nothing. For a permission that costs nothing either — the
+                    // request is still standing in the transcript with its buttons on it — and for
+                    // a question it means the card, which says what was asked and opens this again.
+                    onDismiss = {
+                        reviewingRequestId = null
+                        dismissedQuestions = dismissedQuestions + sheetTarget.requestId
+                    },
                 )
             }
         }
