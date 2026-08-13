@@ -1,4 +1,6 @@
 <resources>
     <color name="box_background">#F6F7F2</color>
-    <color name="box_launcher_background">#181B19</color>
+    <!-- The ground the app icon's cube sits on, so the splash screen the icon flies into
+         is the same black. Keep in step with VOID in tools/gen-icon.py. -->
+    <color name="box_void">#0A0B0C</color>
 </resources>

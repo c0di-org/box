@@ -97,7 +97,7 @@ fun RuntimeGlyph(state: RuntimeState, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.semantics { contentDescription = presentation.shortLabel },
         shape = RoundedCornerShape(28.dp),
-        color = if (state == RuntimeState.Ready) BoxInk else MaterialTheme.colorScheme.surface,
+        color = if (state == RuntimeState.Ready) BoxVoid else MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
