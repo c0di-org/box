@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -71,22 +72,28 @@ class FakeSubAgentTest {
             val backend = FakeAgentBackend(scope, pace = 0f)
             val session = backend.sessions.value.first { it.title == "Audit the public API" }.id
 
-            val both = withTimeout(TIMEOUT) {
+            val waiting = withTimeout(TIMEOUT) {
                 backend.transcripts(session).first { it.pendingPermissions.size == 2 }
-            }.pendingPermissions
+            }
+            val both = waiting.pendingPermissions
             assertTrue(both.all { it.ask is PermissionAsk.RunCommand })
+            // Two outstanding, and the run names the older of them: the one the sheet raises.
+            assertEquals(AgentActivity.AwaitingPermission(both[0].requestId), waiting.activity)
 
             backend.resolvePermission(session, both[1].requestId, PermissionDecision.Deny)
             val one = withTimeout(TIMEOUT) {
-                backend.transcripts(session).first { it.pendingPermissions.size == 1 }
+                backend.transcripts(session).first { it.answered(both[1].requestId) }
             }
-            // The survivor is the one nobody answered, and the run still says it is waiting on it.
+            // The survivor is the one nobody answered.
             assertEquals(both[0].requestId, one.pendingPermissions.single().requestId)
-            assertEquals(AgentActivity.AwaitingPermission(both[0].requestId), one.activity)
+            // And the run is still waiting on it. Not necessarily `AwaitingPermission`: the script
+            // carries on working while both asks are outstanding, so whichever line landed last is
+            // what it reports. Idle is the one thing it cannot be while it owes an answer.
+            assertNotEquals(AgentActivity.Idle, one.activity)
 
             backend.resolvePermission(session, both[0].requestId, PermissionDecision.Allow)
             val cleared = withTimeout(TIMEOUT) {
-                backend.transcripts(session).first { it.pendingPermissions.isEmpty() }
+                backend.transcripts(session).first { it.answered(both[0].requestId) }
             }
             assertTrue(cleared.pendingPermissions.isEmpty())
         } finally {
@@ -94,7 +101,15 @@ class FakeSubAgentTest {
         }
     }
 
-    /** Folded the same way `BoxViewModel` folds it, so this is watching what the UI would draw. */
+    /**
+     * Folded the same way `BoxViewModel` folds it, so this is watching what the UI would draw.
+     *
+     * Replayed, though, where the UI's fold is live: every collection starts a fresh builder at the
+     * first event. So a wait placed after a call has to name a state the run had not already been
+     * in — `first { pendingPermissions.size == 1 }` matches the moment before the second request
+     * was even asked, and would be satisfied by history rather than by the answer just given.
+     * [answered] is that marker for a decision.
+     */
     private fun FakeAgentBackend.transcripts(sessionId: String) =
         TranscriptBuilder(sessionId).let { builder ->
             events(sessionId).map { event ->
@@ -104,6 +119,11 @@ class FakeSubAgentTest {
         }
 
     private fun Transcript.subAgent() = items.filterIsInstance<TranscriptItem.SubAgent>().firstOrNull()
+
+    /** True once [requestId] has been decided — a state no earlier point in the run can pass for. */
+    private fun Transcript.answered(requestId: String) =
+        items.filterIsInstance<TranscriptItem.Permission>()
+            .any { it.requestId == requestId && it.decision != null }
 
     private companion object {
         const val TIMEOUT = 5_000L
