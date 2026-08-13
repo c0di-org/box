@@ -158,9 +158,43 @@ The degradation rule has one deliberate exception here. Everywhere else an unkno
 a labelled card; an artifact this build cannot open is **dropped**, because an artifact is a
 button, and a row offering to open something that opens nothing is worse than no row.
 
-**No harness emits these yet.** The parser exists and the UI draws all three, but the guest side
-has no way to offer one — see *Not built* in [ui-handoff.md](ui-handoff.md). `FakeAgentBackend`
-offers all three, which is what keeps the path honest.
+The offer half is a tool the agent calls, `mcp__box__show`, hosted in-process by the Claude
+harness through the Agent SDK's `createSdkMcpServer`. One tool for all three kinds, taking exactly
+one of `path`, `port` or `desktop`, because to the person they are one thing — a button that
+appears in the conversation — and three tools would make the model pick a mechanism before it had
+decided what it wanted to say.
+
+A tool rather than a line the agent is told to print, and that is the load-bearing choice: the
+harness emits the event, so a path is refused *before* it becomes a button and the agent is told
+why in a result it can act on. An agent echoing its own protocol lines would be writing
+unvalidated events into the log the app trusts, with no way to learn it got one wrong.
+
+Two rules the harness enforces, both following from an artifact being a button whose label the
+agent chooses and whose target the person cannot see before tapping:
+
+- **A document is resolved with `realpath` and must land under `/workspace`, outside
+  `/workspace/.config`, and be a regular file that exists.** Tighter than the inbox bound on
+  attachments rather than looser — the app draws the agent's `name`, so a row reading "report.md"
+  that opens the GitHub token is exactly what this refuses. Resolution rather than a prefix test
+  because a symlink defeats the prefix test; existence because a button that opens nothing is
+  worse than no button. There is deliberately no size check: the panel reads the path through the
+  same reader the Files panel uses, so "too big" keeps having one answer.
+- **A preview's port must already have a listener,** checked in `/proc/net/tcp`. Same reasoning:
+  offering a port nothing serves hands the user a WebView full of connection error, and the honest
+  place to fail is a tool result the agent reads. An unreadable table means an unknowable answer
+  and the agent is believed.
+
+`show` is passed in `allowedTools`, so it is the one tool that is never asked about. A sheet
+reading "allow the agent to show you a file?" has one honest answer, and the artifact is itself a
+button nobody has to press — the consent is the tap, and a prompt in front of it asks the same
+question twice. It draws no tool card either: the artifact row is what happened, and a card beside
+it saying so is the same sentence twice.
+
+An artifact carries no `subAgentId` even when a delegate offered it. That is a choice, not an
+omission: a button is addressed to the person, and the person is reading the main thread — one
+buried inside a collapsed sub-agent fold is one they will not find.
+
+`FakeAgentBackend` offers all three too, which is what keeps the path exercised without a VM.
 
 ### Attachments ride on the turn
 
