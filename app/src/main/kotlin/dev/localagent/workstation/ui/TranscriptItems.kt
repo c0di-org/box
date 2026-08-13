@@ -961,6 +961,14 @@ private fun EndedRow(item: TranscriptItem.Ended, modifier: Modifier = Modifier) 
             style = MaterialTheme.typography.bodyMedium,
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // One line, hard. This is a rule across the conversation, and a summary is a caption
+            // on it — never a second copy of the answer. Box's own harness sends none at all now,
+            // for exactly that reason: it used to pass the SDK's `result`, which *is* the final
+            // message, and printed the agent's whole reply again underneath itself in small grey
+            // type. A harness that says something short still gets to; one that says too much is
+            // cut here rather than allowed to become a second transcript.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Box(
             Modifier
