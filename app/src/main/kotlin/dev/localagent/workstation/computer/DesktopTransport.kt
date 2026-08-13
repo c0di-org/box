@@ -19,6 +19,18 @@ interface DesktopTransport {
     val state: StateFlow<DesktopState>
 
     /**
+     * The screen size the guest ought to have, from whichever attached view is largest.
+     *
+     * Reported rather than acted on, because the transport cannot act on it: the guest is resized
+     * from inside itself, over a channel that only `:computer` holds. This is the one thing that
+     * knows how big every view of the desktop is, so it is where the question is answered; who
+     * carries the answer across the process boundary is [dev.localagent.workstation.BoxViewModel].
+     *
+     * Null until a view large enough to be worth resizing for has attached. See [GuestScreenFit].
+     */
+    val wantedGuestScreen: StateFlow<GuestScreen?>
+
+    /**
      * Renders guest output into [surface] until [detach].
      *
      * More than one surface may be attached at once, and they all show the same screen. That is not

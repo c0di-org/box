@@ -81,6 +81,83 @@ CREDS-SURVIVED
 That single line settles three things at once: input arrives, the machine is a real arm64 Linux
 6.1, and `/workspace` came through the image swap intact.
 
+## The guest's screen now follows the window
+
+**Fixed 12 Aug 2026, and verified on the phone.** The desktop was a fixed 1280×800 landscape
+rectangle letterboxed into every shape. On the cover screen it used about 31% of the pane and the
+terminal in it could not be read. It is now portrait, edge to edge, and legible.
+
+`docs/assets/screenshots/device/phone-computer-letterboxed.png` and `phone-computer-fitted.png` are
+the same machine before and after.
+
+### The route this document proposed does not exist
+
+The plan above was the obvious one: Box's RFB client already decodes `DesktopSize`, so have it ask.
+It cannot. `DesktopSize` (-223) is server-to-client only — a client asks with `SetDesktopSize`
+(message 251) and the server answers with `ExtendedDesktopSize` (-308) — and **this build's QEMU
+does not implement either**. The prebuilt `libqemu-system-aarch64.so` is 5.1.0 and is not stripped,
+so it can simply be asked:
+
+```
+$ nm libqemu-system-aarch64.so | grep -iE 'desktop_resize|ui_info'
+0000000000a08c74 t vnc_desktop_resize      # server tells client the size changed
+0000000000836164 t virtio_gpu_ui_info      # virtio-gpu can be told a size
+00000000009e8ad4 T dpy_set_ui_info         # and this is how
+```
+
+`vnc_desktop_resize` and no `vnc_desktop_resize_ext`, and no handler for message 251 anywhere. The
+negotiation runs one way only: QEMU can announce a resize, and nothing on the phone can request
+one. Sending a `SetDesktopSize` would have been read as an unknown message type and desynchronised
+the stream — a worse failure than the letterboxing.
+
+### What works instead: the guest resizes itself
+
+`virtio_gpu_ui_info` and `dpy_set_ui_info` exist, so the machine *can* change shape; the VNC server
+is just not wired to ask it. But the guest can ask itself, and Box already has a channel into the
+guest — agentd, which runs as `agent` with `DISPLAY=:0` already set so that `scrot` can see the
+session. `x11-xserver-utils` is already installed. So:
+
+- `GuestScreenFit` (app) decides what size the screen should be, from the views showing it.
+- `IRuntimeControl.setDisplaySize` carries it to `:computer`, the only process that reaches the VM.
+- `GuestDisplayMode` (runtime) builds an `xrandr` invocation and agentd runs it.
+- QEMU notices the console changed shape and sends the `DesktopSize` rectangle **that the RFB
+  client has always decoded**. The receiving half was already correct and untouched.
+
+**No guest image rebuild.** Everything above is host-side; the guest needed nothing it did not
+already have. This was checked before any code was written, by driving `xrandr` by hand in the
+guest's own `xterm` through the app — the screen went portrait and stayed drivable.
+
+### Things that were not obvious
+
+- **`virtio-gpu` takes a mode it has never heard of.** It reports `maximum 8192 x 8192` and the
+  modesetting driver accepts an invented modeline, so there is no need to pick from a list. The
+  timings are made up and consistent rather than real — no cable, nothing clocking these pixels.
+- **The output is `Virtual-1` but must not be assumed.** That name comes from the kernel's
+  virtio-gpu driver; the script discovers it.
+- **agentd refuses a working directory outside `/workspace` and `/home/agent`.** A resize does not
+  touch a file, so `/` looked harmless — and was rejected with the message a real escape attempt
+  gets, leaving the screen silently the wrong shape.
+- **A mode set on an emulated GPU is slow.** 15 seconds looked generous and expired on a freshly
+  booted guest; it takes 30–60s cold. It is now retried, because the usual reason it fails is that
+  the desktop session had not started yet — `local-agent-desktop.service` restarts every five
+  seconds and can lose a race with udev, and a half-started X accepts the connection and then does
+  not answer.
+- **The soft keyboard is not a window resize.** `BoxApp` applies `safeDrawingPadding`, which
+  includes the IME, so opening the keyboard shrank the pane and the guest dutifully followed it to
+  1080×1360. The keyboard's inset is now added back before the size is reported: the machine
+  follows the window, not the keyboard.
+- **Thumbnails must not count.** The task list's live computer row is a surface too, and following
+  the largest attached surface naively would resize the guest down to 230px whenever the user left
+  the computer. A surface under 400×300 is understood as a preview of a screen, not a screen.
+
+### The screen no longer blanks
+
+Opening the computer after a while showed a phone-sized field of black with `Guest disabled
+display.` in 8px type in the middle — QEMU's text, not anything Box chose to say. X blanks an idle
+screen and drops DRM scanout with it. Blanking exists to save a backlight and this machine has
+none, so the same script now turns the screensaver and DPMS off and forces the display on. It lives
+there rather than in the image because it then also reaches a box that is already running.
+
 ## Cross-cutting, every shape
 
 ### The same thing is said twice, in two places, at once
@@ -209,13 +286,8 @@ Also good, and worth keeping: the header adapts properly — the pill shortens f
 
 ## The bigger changes, in the order I would do them
 
-1. **Let the guest's screen follow the window.** One fixed 1280×800 desktop is letterboxed into
-   every shape, and it gets worse the smaller the screen: bars on DeX, ~45% of the panel wasted on
-   the unfolded Fold, and **~70% wasted on the phone**, where what is left is too small to read.
-   Box's RFB client already offers `DesktopSize` and the guest side is `virtio-gpu` with
-   `xres`/`yres`, so both ends of the negotiation exist and nothing drives them. This is the single
-   change that would most improve the computer in all three shapes — and on the phone it is closer
-   to a fix than an improvement.
+1. ~~**Let the guest's screen follow the window.**~~ **Done — 12 Aug 2026.** Not by the route this
+   proposed, which turned out to be closed; see *The guest's screen now follows the window* below.
 2. **Decide who owns a permission request per layout.** Today `Wide` shows the inline card and the
    bottom sheet at once, with the sheet covering the hint that points at the card. Pick one per
    layout rather than rendering both.
@@ -242,7 +314,8 @@ In `docs/assets/screenshots/device/`, all taken on the Fold 7:
 | `tablet-wide.png` | `Wide` on the inner screen, and the "↓ Latest" pill over the text |
 | `phone-tasks.png` | `Single` task list: computer row, live thumbnail, no box-state card |
 | `phone-conversation.png` | `Single` conversation, and the "↓ Latest" pill over a full line |
-| `phone-computer-letterboxed.png` | The computer on a phone — ~70% of the pane is black bar |
+| `phone-computer-letterboxed.png` | The computer on a phone, before — ~70% of the pane is black bar |
+| `phone-computer-fitted.png` | The same machine after: portrait, edge to edge, terminal legible |
 
 Two of these (`dex-permission-asked-twice.png`, `tablet-wide.png`) contain real conversation text
 from the device they were taken on. They are fine as evidence in this document; check them before

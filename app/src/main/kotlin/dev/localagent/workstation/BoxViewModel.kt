@@ -41,11 +41,18 @@ import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.computer.ControlHolder
+import dev.localagent.workstation.computer.GuestScreen
+import dev.localagent.workstation.computer.GuestScreenFit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -174,6 +181,7 @@ class BoxViewModel @JvmOverloads constructor(
         resyncRuntimeState()
         observeAgents()
         watchSharedFolder()
+        followWindowWithGuestScreen()
         mutableUiState.update { it.copy(signedInBefore = signIns.hasSignedIn()) }
         viewModelScope.launch {
             auth.state.collect { signIn ->
@@ -720,6 +728,54 @@ class BoxViewModel @JvmOverloads constructor(
      * key held down when the desktop goes away would otherwise stay held in the guest forever. A
      * composable cannot do this — its own scope is cancelled as it leaves, before the call runs.
      */
+    /**
+     * The size the guest last agreed to be. Null means "assume it is at whatever it boots with",
+     * which is the honest state both before the first resize and after any guest restart.
+     */
+    private var appliedGuestScreen: GuestScreen? = null
+
+    /**
+     * Keep the guest's screen the same shape as the window showing it.
+     *
+     * The size is decided by the transport, which is the only thing that can see every view of the
+     * desktop at once ([DesktopTransport.wantedGuestScreen]); this carries it to `:computer`,
+     * which is the only process that can reach the guest. Neither half is a good home for both
+     * jobs, which is why the trip exists at all.
+     *
+     * Two things are being defended against here. A fold, a rotation or a DeX window drag emits a
+     * run of sizes ending at the one that matters, so [collectLatest] plus a settle delay lets
+     * every intermediate size be cancelled by its successor — an X mode set costs a full
+     * framebuffer over an emulated link, and paying that per frame of a window drag would be
+     * worse than the letterboxing. And a guest that has restarted is back at its built-in
+     * 1280x800 with no idea Box ever asked for anything else, so leaving `Ready` forgets what was
+     * applied and the size is asked for again on the way back.
+     */
+    private fun followWindowWithGuestScreen() {
+        val desktop = BoxContainer.desktop(getApplication())
+        viewModelScope.launch {
+            combine(
+                desktop.wantedGuestScreen,
+                mutableUiState.map { it.runtimeState }.distinctUntilChanged(),
+            ) { wanted, state -> wanted to (state == RuntimeState.Ready) }
+                .collectLatest { (wanted, ready) ->
+                    if (!ready) {
+                        appliedGuestScreen = null
+                        return@collectLatest
+                    }
+                    // Cancelled outright if another size arrives first, which is the point.
+                    delay(SCREEN_SETTLE_MILLIS)
+                    val target = wanted ?: return@collectLatest
+                    if (!GuestScreenFit.changeIsWorthIt(appliedGuestScreen, target)) return@collectLatest
+                    val runtime = control ?: return@collectLatest
+                    // Recorded before the call rather than after: it is oneway, so there is no
+                    // "after", and a second identical request is worse than a missed one.
+                    appliedGuestScreen = target
+                    runCatching { runtime.setDisplaySize(target.width, target.height) }
+                        .onFailure { appliedGuestScreen = null }
+                }
+        }
+    }
+
     fun setDesktopControl(holder: ControlHolder) {
         mutableUiState.update { it.copy(desktopControl = holder) }
         viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(holder) }
@@ -1136,6 +1192,13 @@ class BoxViewModel @JvmOverloads constructor(
 
     private companion object {
         const val COMMAND_TIMEOUT_SECONDS = 120
+
+        /**
+         * How long a window size has to hold still before the guest is asked to match it. Long
+         * enough to swallow a fold or a rotation, short enough that letting go of a DeX window
+         * edge and the desktop filling it read as one action.
+         */
+        const val SCREEN_SETTLE_MILLIS = 450L
 
         /** Matches what `:computer` allows a guest preview, so the two places read the same. */
         const val MAX_PREVIEW_CHARS = 128 * 1024

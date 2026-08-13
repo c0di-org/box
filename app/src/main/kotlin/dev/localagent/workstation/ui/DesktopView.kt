@@ -55,6 +55,19 @@ class DesktopView(context: Context) : SurfaceView(context) {
 
     private var buttons = 0
 
+    /**
+     * Say again how big this surface is, without waiting for it to change.
+     *
+     * There is a second thing that decides how much of the window the desktop really has — the
+     * soft keyboard — and it does not arrive through `surfaceChanged`. The caller that knows about
+     * it needs a way to re-state the size when only its half moved.
+     */
+    fun reportSize() {
+        val surface = holder.surface
+        if (!surface.isValid || width <= 0 || height <= 0) return
+        onSurfaceReady?.invoke(surface, width, height)
+    }
+
     init {
         holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) = Unit
