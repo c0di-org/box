@@ -292,7 +292,7 @@ class GuestAgentBackend(
         val record = Record(
             id = id,
             harnessId = harnessId,
-            title = prompt?.toTitle() ?: "New conversation",
+            title = prompt?.toTitle() ?: "New task",
             workingDirectory = WORKSPACE,
         )
         records[id] = record
@@ -532,7 +532,7 @@ class GuestAgentBackend(
     }
 
     private fun String.toTitle(): String =
-        trim().lineSequence().firstOrNull()?.take(60)?.ifBlank { null } ?: "New conversation"
+        trim().lineSequence().firstOrNull()?.take(60)?.ifBlank { null } ?: "New task"
 
     private companion object {
         const val TAG = "BoxAgentBackend"

@@ -400,7 +400,7 @@ class BoxViewModel @JvmOverloads constructor(
         mutableUiState.update { it.copy(startingSession = true) }
         viewModelScope.launch {
             val id = runCatching { agents.startSession(harnessId, prompt) }
-                .onFailure { error -> showNotice(error.message ?: "Box could not start that session.") }
+                .onFailure { error -> showNotice(error.message ?: "Box could not start that task.") }
                 .getOrNull()
             mutableUiState.update { state ->
                 state.copy(

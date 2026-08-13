@@ -198,7 +198,7 @@ private fun ConversationHeader(
     ) {
         if (onBack != null) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to conversations")
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to tasks")
             }
         } else {
             Spacer(Modifier.width(8.dp))
@@ -239,12 +239,12 @@ private fun ConversationHeader(
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "Session options")
+                Icon(Icons.Outlined.MoreVert, contentDescription = "Task options")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 if (onCloseSession != null) {
                     DropdownMenuItem(
-                        text = { Text("Close session") },
+                        text = { Text("Close task") },
                         onClick = {
                             menuOpen = false
                             onCloseSession()

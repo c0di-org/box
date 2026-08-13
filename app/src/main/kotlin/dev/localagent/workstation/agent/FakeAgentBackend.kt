@@ -88,7 +88,7 @@ class FakeAgentBackend(
 
     override suspend fun startSession(harnessId: String, prompt: String?): String {
         val id = "s-${ids.incrementAndGet()}"
-        val title = prompt?.take(48)?.ifBlank { null } ?: "New conversation"
+        val title = prompt?.take(48)?.ifBlank { null } ?: "New task"
         sessionList.update {
             listOf(
                 SessionSummary(

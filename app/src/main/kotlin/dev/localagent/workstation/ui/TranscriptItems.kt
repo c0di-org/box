@@ -803,9 +803,9 @@ private fun ErrorCard(
 @Composable
 private fun EndedRow(item: TranscriptItem.Ended, modifier: Modifier = Modifier) {
     val text = when (val outcome = item.outcome) {
-        is SessionOutcome.Completed -> outcome.summary?.let { "Session finished · $it" } ?: "Session finished"
-        is SessionOutcome.Failed -> "Session failed · ${outcome.message}"
-        SessionOutcome.Interrupted -> "Session stopped"
+        is SessionOutcome.Completed -> outcome.summary?.let { "Task finished · $it" } ?: "Task finished"
+        is SessionOutcome.Failed -> "Task failed · ${outcome.message}"
+        SessionOutcome.Interrupted -> "Task stopped"
     }
     Row(
         modifier.fillMaxWidth().padding(vertical = 6.dp),
