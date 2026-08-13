@@ -48,6 +48,20 @@ class QemuProcessLifetimeTest {
     }
 
     @Test
+    fun `a suspended box spends the process too`() {
+        // Suspending is not pausing something that is still there. QEMU wrote the guest into its
+        // own disk and exited, so this process has used its one run and must make way — the saved
+        // box is reopened by the next process, which is the whole point of saving it.
+        assertTrue(lifetime(hasRun = true, isRunning = false).isSpent(RuntimeState.Suspended))
+    }
+
+    @Test
+    fun `saving a box does not retire the process mid-save`() {
+        // Suspending still has a VM in it, and the snapshot is written by that VM.
+        assertFalse(lifetime(hasRun = true, isRunning = true).isSpent(RuntimeState.Suspending))
+    }
+
+    @Test
     fun `a process that never reached qemu keeps its run`() {
         // Provisioning ends in Stopped without ever touching QEMU. Retiring here would throw away
         // a perfectly good process between "set up" and "start" — which is one gesture in the UI.

@@ -49,10 +49,13 @@ internal class QemuProcessLifetime(
          */
         val RuntimeState.isSettled: Boolean
             get() = when (this) {
-                RuntimeState.Stopped, is RuntimeState.Failed -> true
+                // Suspended counts, and it is the interesting one. A saved box is not a running
+                // box being held somewhere — QEMU has written the guest out and exited, so this
+                // process has spent its one run and has nothing left to host. The state persists
+                // on disk instead, which is what lets the *next* process reopen it in seconds.
+                RuntimeState.Stopped, RuntimeState.Suspended, is RuntimeState.Failed -> true
                 RuntimeState.NotProvisioned, RuntimeState.Ready, RuntimeState.Starting,
                 RuntimeState.Connecting, RuntimeState.Stopping, RuntimeState.Suspending,
-                RuntimeState.Suspended,
                 -> false
 
                 is RuntimeState.Provisioning -> false

@@ -2,6 +2,7 @@ package dev.localagent.runtime.qemu
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.os.SystemClock
 import android.util.Log
 import dev.localagent.runtime.api.ComputerRuntime
 import dev.localagent.runtime.api.DesktopSession
@@ -82,6 +83,13 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     private var exitMonitor: Job? = null
     private var serialLogger: SerialConsoleLogger? = null
 
+    init {
+        // A box that was put away is not a box that was closed, and this process is not the one
+        // that put it away — that process ended with the QEMU it was hosting. The note it left is
+        // the only thing that can tell the user their box is paused rather than shut.
+        if (storage.suspendedVm() != null) runtimeState.value = RuntimeState.Suspended
+    }
+
     override fun state(): StateFlow<RuntimeState> = runtimeState.asStateFlow()
 
     /**
@@ -160,9 +168,21 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             return@withLock Result.success(Unit)
         }
 
+        // Refused before anything is announced, and deliberately not through [fail]. This process
+        // has spent its one QEMU run and is on its way out; the next startService lands in a fresh
+        // one that can serve this. Publishing Failed here would turn an ordinary retirement into
+        // "your box didn't open" over a box that is sitting saved on disk, unharmed — and saving
+        // boxes is exactly what makes a start arrive during a retirement in the first place.
+        if (!processLifetime.canStart()) {
+            return@withLock Result.failure(
+                IllegalStateException("This computer process has already been used once and must be replaced"),
+            )
+        }
+
         val callerJob = currentCoroutineContext()[Job]
         startingJob = callerJob
         var nativeStarted = false
+        val launchedAt = SystemClock.elapsedRealtime()
         try {
             storage.ensureDirectories()
             // QEMU's own data files, refreshed from the APK every start. Not part of provisioning:
@@ -172,18 +192,21 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             check(storage.hasHeadlessBootSet() || storage.hasUefiBootSet()) {
                 "No complete verified guest image is installed yet"
             }
-            // A process that has already hosted a VM run cannot host another; see
-            // [QemuProcessLifetime]. `:computer` retires itself after a run, so reaching this is a
-            // bug rather than a user's problem — but saying so beats aborting the process.
-            check(processLifetime.canStart()) {
-                "This computer process has already been used once and must be replaced"
-            }
             runtimeState.value = RuntimeState.Starting
+
+            // A box that was put away rather than closed. The note is spent here, before QEMU is
+            // handed the snapshot rather than after it has loaded it, so a saved guest is loaded
+            // at most once — see [RuntimeStorage.clearSuspendedVm] for why that direction.
+            val resuming = pendingResume()
+            if (resuming != null) {
+                Log.i(TAG, "Reopening a box saved ${System.currentTimeMillis() - resuming.savedAtMillis}ms ago")
+                storage.clearSuspendedVm()
+            }
 
             if (!NativeQemu.isRunning()) {
                 storage.removeStaleSockets()
                 NativeQemu.start(
-                    QemuCommand.boot(storage).toTypedArray(),
+                    QemuCommand.boot(storage, resuming?.tag).toTypedArray(),
                     storage.privateRoot.absolutePath,
                 )?.let { error(it) }
                 nativeStarted = true
@@ -194,10 +217,18 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             check(NativeQemu.isRunning() && qmpStatus.running) {
                 "QEMU status is ${qmpStatus.status}"
             }
-            Log.i(TAG, "QMP confirmed running guest")
+            Log.i(TAG, "QMP confirmed running guest in ${SystemClock.elapsedRealtime() - launchedAt}ms")
+            // Either the snapshot that was just loaded, or one left behind by a box that was saved
+            // and then started cold. Both are dead weight from here: nothing holds a note pointing
+            // at it any more, and it is a copy of the guest's memory sitting inside the system disk.
+            deleteSnapshot(SuspendedVm.TAG)
             startDebugSerialLogger()
             awaitAgent()
-            Log.i(TAG, "Guest agent confirmed ready")
+            Log.i(
+                TAG,
+                "Guest agent confirmed ready ${SystemClock.elapsedRealtime() - launchedAt}ms after launch " +
+                    if (resuming != null) "(resumed)" else "(cold boot)",
+            )
 
             runtimeState.value = RuntimeState.Ready
             startExitMonitor(generation.incrementAndGet())
@@ -339,8 +370,6 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
 
     override suspend fun desktopStart(): DesktopSession = unavailable("Desktop")
     override suspend fun desktopStop(): Unit = unavailable("Desktop")
-    override suspend fun snapshot(): SnapshotId = unavailable("Snapshots")
-    override suspend fun restore(snapshot: SnapshotId): Unit = unavailable("Snapshot restore")
     /**
      * Opens a loopback port on the phone that reaches [request]'s port inside the guest.
      *
@@ -404,8 +433,245 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         }
     }
 
-    override suspend fun suspendRuntime(): Unit = unavailable("Suspend")
-    override suspend fun resumeRuntime(): Unit = unavailable("Resume")
+
+    /**
+     * Puts the box away without throwing it away.
+     *
+     * The whole product cost of a fully emulated ARM64 guest is here. A cold boot measured 86 s and
+     * 116 s on a Fold 7 from launch to a ready agent, nearly all of it the guest waiting on
+     * emulated udev, and that was the price of the box not already running — which put "close it
+     * when idle" in direct opposition to "have it there when you want it".
+     *
+     * `savevm` writes the guest's memory into its own qcow2 and QEMU exits, so nothing is left
+     * running and nothing is left resident; the next start hands the snapshot back to a fresh
+     * QEMU with `-loadvm` and the guest carries on from the instruction it was on. Measured on the
+     * same device that gives the numbers above: 0.6–3.6 s to save, and 0.94–1.12 s to reopen.
+     *
+     * What does *not* survive is any agent that was mid-task. See [quiesceGuest].
+     */
+    override suspend fun suspendRuntime() {
+        startingJob?.cancel(CancellationException("Linux workspace suspend requested"))
+        lifecycleMutex.withLock {
+            check(NativeQemu.isRunning()) { "Your box is not open" }
+            val image = storage.installedIdentity()?.toString()
+                ?: error("Cannot suspend a guest whose image is unknown")
+
+            // Announced before any of the work, so everything else that talks to the guest —
+            // the shared-folder pump above all — stops on its own. Otherwise it can reconnect the
+            // agent channel in the gap between the disconnect below and the snapshot, and what
+            // gets written out is a guest mid-transfer with a host that will not exist.
+            runtimeState.value = RuntimeState.Suspending
+            var saved = false
+            try {
+                quiesceGuest()
+                generation.incrementAndGet()
+                exitMonitor?.cancelAndJoin()
+                exitMonitor = null
+
+                val started = SystemClock.elapsedRealtime()
+                withContext(Dispatchers.IO) {
+                    QmpClient(storage.qmpSocket).open().use { qmp ->
+                        // Stop the CPUs first. `savevm` would do it anyway, but doing it here means
+                        // the guest is definitely not writing to the disks that are about to be
+                        // snapshotted alongside its memory.
+                        qmp.command("stop")
+                        saveSnapshot(qmp, SuspendedVm.TAG)
+                        val elapsed = SystemClock.elapsedRealtime() - started
+                        Log.i(TAG, "Saved the guest in ${elapsed}ms")
+                        // Recorded before the quit, so a process killed between the two still
+                        // leaves a note pointing at a snapshot that is complete on disk.
+                        storage.writeSuspendedVm(
+                            SuspendedVm(SuspendedVm.TAG, image, System.currentTimeMillis(), elapsed),
+                        )
+                        qmp.quit()
+                    }
+                }
+                check(awaitNativeExit(STOP_TIMEOUT_MILLIS)) {
+                    "QEMU did not exit within ${STOP_TIMEOUT_MILLIS / 1_000} seconds"
+                }
+                runtimeState.value = RuntimeState.Suspended
+                saved = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                throw IllegalStateException(
+                    error.message?.takeIf(String::isNotBlank)?.let { "Could not pause your box: $it" }
+                        ?: "Could not pause your box",
+                    error,
+                )
+            } finally {
+                // Every way out that is not a saved box, cancellation included. Leaving the state
+                // at Suspending is the one outcome that must not happen: the VM is still there and
+                // still costing battery, and the user is looking at a box that says it is closing
+                // and never will. A cancelled save is exactly how that was reached.
+                if (!saved) withContext(NonCancellable) { recoverFromFailedSave() }
+            }
+        }
+    }
+
+    /**
+     * Reopening a suspended box is an ordinary [start]; this only names it.
+     *
+     * It cannot be anything else. The saved guest is loaded by a *new* QEMU in a new process —
+     * this one has either never run QEMU or can never run it again — so there is no live VM here
+     * to un-pause, and the resume is decided by the note on disk that [start] already reads.
+     */
+    override suspend fun resumeRuntime() {
+        start().getOrThrow()
+    }
+
+    /**
+     * Writes the running guest's memory into its own disk, and leaves it running.
+     *
+     * The primitive under [suspendRuntime], exposed because it is the same operation with the
+     * ending left off. Note the cost of the two things it does not do: the guest's agent channel
+     * is left connected, so a guest restored from this snapshot will see that host disappear and
+     * kill whatever it was running, exactly as it does across a suspend.
+     */
+    override suspend fun snapshot(): SnapshotId = lifecycleMutex.withLock {
+        check(NativeQemu.isRunning()) { "Your box is not open" }
+        withContext(Dispatchers.IO) {
+            QmpClient(storage.qmpSocket).open().use { qmp ->
+                saveSnapshot(qmp, SuspendedVm.TAG)
+            }
+        }
+        SnapshotId(SuspendedVm.TAG)
+    }
+
+    /**
+     * Puts the running guest back to a snapshot, in place.
+     *
+     * The agent channel is dropped first and rebuilt afterwards, because the guest coming back has
+     * no idea it went anywhere: its agentd holds a connection to a host that no longer exists, and
+     * the protocol on it cannot be resumed from either end. Dropping the connection first is what
+     * turns that into the case the guest already handles — the host went away — rather than a
+     * silent desync.
+     */
+    override suspend fun restore(snapshot: SnapshotId): Unit = lifecycleMutex.withLock {
+        check(NativeQemu.isRunning()) { "Your box is not open" }
+        val previous = runtimeState.value
+        runtimeState.value = RuntimeState.Starting
+        try {
+            closeGuestChannels()
+            withContext(Dispatchers.IO) {
+                QmpClient(storage.qmpSocket).open().use { qmp ->
+                    qmp.command("stop")
+                    val output = qmp.monitor("loadvm ${snapshot.value}", SNAPSHOT_TIMEOUT_MILLIS)
+                    check(output.isBlank()) { "QEMU could not load ${snapshot.value}: $output" }
+                    qmp.command("cont")
+                }
+            }
+            startDebugSerialLogger()
+            awaitAgent()
+            runtimeState.value = RuntimeState.Ready
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            runtimeState.value = previous
+            throw error
+        }
+    }
+
+    /**
+     * Puts a box back on its feet after a save that did not finish.
+     *
+     * A box that could not be saved is still a working box, so the CPUs go back on rather than the
+     * machine going away: closing it would turn "we could not save you three minutes" into "we
+     * threw away what you were doing". What it cannot put back is anything agentd was running —
+     * [quiesceGuest] has already happened by this point, and that is not undoable.
+     */
+    private suspend fun recoverFromFailedSave() {
+        if (!NativeQemu.isRunning()) {
+            // The quit landed after all, or QEMU died on its own. Which of those it was decides
+            // what the user is looking at, and the note on disk is the only thing that knows.
+            closeGuestChannels()
+            runtimeState.value =
+                if (storage.suspendedVm() != null) RuntimeState.Suspended else RuntimeState.Stopped
+            return
+        }
+        runCatching {
+            withContext(Dispatchers.IO) {
+                QmpClient(storage.qmpSocket).open().use { it.command("cont") }
+            }
+        }.onFailure { Log.e(TAG, "Could not restart the guest after a failed save", it) }
+        runtimeState.value = RuntimeState.Ready
+        startExitMonitor(generation.incrementAndGet())
+    }
+
+    /**
+     * Leaves the guest in the state a snapshot should catch it in: nothing in flight.
+     *
+     * The disconnect is deliberate and it is not free. agentd kills every child when its host goes
+     * away, so an agent that was working when the box was put away does not come back with it —
+     * and that would happen either way, because QEMU tells a restored guest that the host it
+     * remembers is gone. Doing it here means the teardown runs on a healthy guest with a real
+     * clock, instead of on a restored one waking up minutes or days later.
+     *
+     * The `sync` is insurance for the path where the snapshot is never loaded — a failed resume,
+     * or an app update that replaces the disks. The snapshot itself captures the page cache along
+     * with the rest of memory and does not need it.
+     */
+    private suspend fun quiesceGuest() {
+        runCatching {
+            withTimeoutOrNull(SYNC_TIMEOUT_MILLIS) {
+                agentd.exec(ExecRequest(listOf("/bin/sh", "-lc", "sync"), timeoutSeconds = 20)).collect { }
+            }
+        }.onFailure { Log.w(TAG, "Could not flush the guest before saving it", it) }
+        closeGuestChannels()
+        // Long enough for the guest to notice the closed port and reap its children, so what is
+        // written out is an idle agentd waiting for a connection rather than a teardown mid-flight.
+        delay(QUIESCE_SETTLE_MILLIS)
+    }
+
+    /** `savevm` has no QMP form in QEMU 5.1, and reports failure by printing it. See [QmpClient]. */
+    private fun saveSnapshot(qmp: QmpClient.Session, tag: String) {
+        val output = qmp.monitor("savevm $tag", SNAPSHOT_TIMEOUT_MILLIS)
+        check(output.isBlank()) { "QEMU could not save the guest: $output" }
+    }
+
+    /**
+     * Drops a snapshot that has been loaded, or was left behind by a box that never reopened.
+     *
+     * Best effort on purpose: the snapshot holds a copy of the guest's memory inside the system
+     * disk and is worth reclaiming, but failing to reclaim it is not a reason to refuse a box the
+     * user is already looking at.
+     */
+    private suspend fun deleteSnapshot(tag: String) = withContext(Dispatchers.IO) {
+        runCatching {
+            QmpClient(storage.qmpSocket).open().use { qmp ->
+                qmp.monitor("delvm $tag", SNAPSHOT_TIMEOUT_MILLIS)
+            }
+        }.onSuccess { output ->
+            // `delvm` succeeds silently when it finds nothing, so a blank answer says only that no
+            // saved guest is left in the disks — not that one was there to remove. Anything else is
+            // worth a warning: it means a copy of the guest's memory is still sitting in the system
+            // disk with nothing left pointing at it.
+            if (output.isBlank()) Log.i(TAG, "No saved guest left in the disks")
+            else Log.w(TAG, "Could not discard the saved guest: $output")
+        }.onFailure { Log.w(TAG, "Could not reach QEMU to discard the saved guest", it) }
+    }
+
+    /**
+     * The saved guest this device may reopen, or null to boot cold.
+     *
+     * The image check is what keeps a note from outliving what it describes. The snapshot lives
+     * inside the guest's own qcow2 disks, so an app update carrying a newer image installs new
+     * ones and the note is left pointing at memory that belongs to a Debian this device no longer
+     * has. Booting cold is always safe; loading the wrong snapshot is not.
+     */
+    private fun pendingResume(): SuspendedVm? {
+        val saved = storage.suspendedVm() ?: return null
+        val installed = storage.installedIdentity()?.toString()
+        if (saved.image != installed) {
+            Log.w(
+                TAG,
+                "Discarding a box saved from ${saved.image}; this device now runs ${installed ?: "no image"}",
+            )
+            storage.clearSuspendedVm()
+            return null
+        }
+        return saved
+    }
 
     private suspend fun awaitQmp(): QmpClient.Status = withContext(Dispatchers.IO) {
         var lastError: Exception? = null
@@ -540,5 +806,17 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         const val MAX_LIST_ENTRIES = 2_000
         const val EXIT_POLL_MILLIS = 250L
         const val STOP_TIMEOUT_MILLIS = 15_000L
+
+        /**
+         * How long `savevm` and `loadvm` are given. Generous because the work is real — the
+         * guest's memory, written to or read from phone flash — and because QEMU's main loop is
+         * held for the whole of it, so nothing arrives on the monitor until it is finished.
+         */
+        const val SNAPSHOT_TIMEOUT_MILLIS = 300_000
+
+        const val SYNC_TIMEOUT_MILLIS = 30_000L
+
+        /** Time for the guest to notice its host has gone and reap what it was running. */
+        const val QUIESCE_SETTLE_MILLIS = 1_500L
     }
 }

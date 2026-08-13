@@ -8,7 +8,7 @@ local.properties
 
 # Generated VM artifacts. base-system.qcow2 alone is 425 MB, over GitHub's 100 MB
 # per-file limit. Reproduce them with guest/build-image.sh on an ARM64 runner.
-guest/image/out/
+guest/image/out
 .idea/
 *.iml
 .DS_Store

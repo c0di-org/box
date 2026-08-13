@@ -516,13 +516,21 @@ private fun HeroFrame(content: @Composable () -> Unit) {
 @Composable
 private fun ClosedRow(state: BoxUiState, onOpen: () -> Unit) {
     val failure = (state.runtimeState as? RuntimeState.Failed)?.reason
+    // A box that was put away is not off; it is exactly where it was left, and reopening it costs
+    // about a second rather than a boot. Saying "closed" for both is the difference between an
+    // errand and a commitment, so the row says which one this is.
+    val putAway = state.runtimeState == RuntimeState.Suspended
 
     RowFrame(onClick = onOpen) {
         BoxMark(34.dp, Modifier.padding(start = 6.dp))
         Spacer(Modifier.width(20.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (failure != null) "Your box didn’t open" else "Your box is closed",
+                when {
+                    failure != null -> "Your box didn’t open"
+                    putAway -> "Your box is paused"
+                    else -> "Your box is closed"
+                },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -530,7 +538,7 @@ private fun ClosedRow(state: BoxUiState, onOpen: () -> Unit) {
             Text(
                 // The reason, when there is one: a row that only ever says "closed" turns a
                 // failure into a button that appears to do nothing when pressed twice.
-                failure?.message ?: "Nothing is running.",
+                failure?.message ?: if (putAway) "Just as you left it." else "Nothing is running.",
                 style = MaterialTheme.typography.bodyMedium,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
