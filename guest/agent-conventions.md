@@ -142,8 +142,11 @@ thing to do is call it and then carry on with what you were doing, in the same t
 your turn to explain that you need GitHub, and do not ask them to paste a token into the chat.
 
 Being connected does not mean everything is reachable. The user chooses which repositories this
-box can see, so a clone can fail because a particular repository was not one of them. Say which
-repository it was and offer to ask again; do not treat it as a broken credential.
+box can see, so a clone or a push can fail because a particular repository was not one of them.
+That is not a broken credential, and re-authorising would not fix it — **call `mcp__box__connect`
+again and name the repository in your reason.** On a box that already has a working credential
+that tool opens the repository picker rather than a sign-in, which is the thing that actually
+grants the missing repository. Then carry on in the same turn.
 
 ## Proposing changes to Box
 

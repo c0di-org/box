@@ -137,30 +137,38 @@ class BoxViewModel @JvmOverloads constructor(
         // Whether the guest already holds a credential is only answerable once there is a guest to
         // ask. Until then the sign-in state is honestly Unknown.
         auth.check(bound)
-        // And the same question about GitHub, which used to be asked only if somebody went looking
-        // for it in diagnostics. A box that is connected should be able to say so without being
-        // interrogated — and Box knowing the answer is what lets an agent's request be met with
-        // the repository picker rather than a whole fresh authorisation.
-        github.check(bound)
         // A sheet raised while the box was still starting has been sitting on "Waiting for your
         // box…". It can answer now, so the code it was meant to be showing arrives without the
         // person having to press anything.
-        resumeWaitingConnection()
+        //
+        // Asked before the status check, and *instead* of it when it fires: the connect program
+        // reads the stored credential itself and decides between a device flow and the repository
+        // picker on what it finds. A status check racing alongside would only be a second opinion
+        // about the same file, arriving in whichever order the guest happened to answer.
+        if (!resumeWaitingConnection()) {
+            // Whether this box already reaches GitHub, which used to be asked only if somebody
+            // went looking for it in diagnostics. A box that is connected should be able to say so
+            // without being interrogated.
+            github.check(bound)
+        }
     }
 
     /**
-     * Starts a flow the box was not up for when it was asked for.
+     * Starts a flow the box was not up for when it was asked for, if there is one.
      *
      * Narrow on purpose: only where a sheet is already open against an agent that is still
      * waiting, and only where nothing else has since taken the flow somewhere. Anything wider
-     * would restart a device flow underneath somebody who is halfway through one.
+     * would restart a device flow underneath somebody halfway through one.
      */
-    private fun resumeWaitingConnection() {
+    private fun resumeWaitingConnection(): Boolean {
         val state = mutableUiState.value
-        if (!state.githubVisible || state.connectRequest == null || !state.computerReady) return
-        when (state.github) {
-            GitHubAuth.State.Unknown, GitHubAuth.State.Disconnected -> connectGitHub(state.connectRequest.reason)
-            else -> Unit
+        if (!state.githubVisible || state.connectRequest == null || !state.computerReady) return false
+        return when (state.github) {
+            GitHubAuth.State.Unknown, GitHubAuth.State.Disconnected -> {
+                connectGitHub(state.connectRequest.reason)
+                true
+            }
+            else -> false
         }
     }
 

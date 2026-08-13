@@ -330,6 +330,9 @@ private fun GitHubRow(github: GitHubAuth.State, onGitHub: () -> Unit) {
     val value = when (github) {
         is GitHubAuth.State.Connected -> when {
             github.needsRepositories -> "No repositories yet"
+            // Connected, and the count could not be refreshed. "@codi" is the part that was never
+            // in doubt; a number nobody just confirmed is not.
+            github.stale -> "Connected"
             github.repositories != null ->
                 "${github.repositories} ${if (github.repositories == 1) "repository" else "repositories"}"
             else -> "@${github.login}"
@@ -366,7 +369,18 @@ private fun GitHubRow(github: GitHubAuth.State, onGitHub: () -> Unit) {
                     }
                     // Only when the line above is a count: "3 repositories" is the answer, and
                     // whose they are is the footnote rather than a second row.
-                    if (settled?.repositories != null) {
+                    //
+                    // A stale row says so instead. The count is the last one anybody saw and the
+                    // box could not be asked for a fresh one — a phone in a tunnel, not a revoked
+                    // credential — and printing the old number flat would be asserting something
+                    // this row does not currently know.
+                    if (settled?.stale == true) {
+                        Text(
+                            "@${settled.login} · not checked just now",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (settled?.repositories != null) {
                         Text(
                             "@${settled.login}",
                             style = MaterialTheme.typography.bodySmall,
