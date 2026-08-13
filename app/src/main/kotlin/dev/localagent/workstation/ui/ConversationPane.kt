@@ -141,6 +141,9 @@ fun ConversationPane(
     // request is a scroll and not a modal. See [waitingAction].
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Ticks on a question that has not been sent yet, kept above the list that draws it. See
+    // [AnswerStore] for why they cannot live in the card.
+    val answers = remember { AnswerStore() }
 
     Column(modifier.fillMaxSize()) {
         ConversationHeader(
@@ -223,10 +226,16 @@ fun ConversationPane(
                     queued = queued,
                     harness = harness,
                     listState = listState,
+                    answers = answers,
                     onOpenArtifact = onOpenArtifact,
                     onRetry = onStartComputer,
                     onStopSubAgent = onStopSubAgent,
-                    onPermissionDecision = onPermissionDecision,
+                    onPermissionDecision = { requestId, decision ->
+                        // Answered is answered: the ticks have gone to the agent and holding a copy
+                        // would only wait to be inherited by whatever reuses the id.
+                        answers.forget(requestId)
+                        onPermissionDecision(requestId, decision)
+                    },
                     onReviewPermission = onReviewRequest,
                 )
             }
@@ -240,26 +249,40 @@ fun ConversationPane(
          * took the keyboard down with it and gave it back afterwards — a request answered in the
          * middle of typing cost the user their draft's place twice. The card in the transcript is
          * already a complete decision, so this only has to *go* there. The sheet is still one tap
-         * further in, on the card itself, for a diff nobody would decide on from one line.
+         * further in, on a permission's card, for a diff nobody would decide on from one line.
          */
         val waitingAction: (() -> Unit)? = waiting.firstOrNull()?.let { oldest ->
             {
-                val index = state.transcript?.items.orEmpty()
-                    .indexOfFirst { it is TranscriptItem.Permission && it.requestId == oldest.requestId }
+                val index = state.transcript?.items.orEmpty().indexOfFirst { it.holds(oldest.requestId) }
                 if (index >= 0) {
                     scope.launch { listState.animateScrollToItem(index) }
                 } else {
-                    // Asked from inside a sub-agent's card, where there is no row of the outer
-                    // list to scroll to. The sheet is the only surface that can raise it.
+                    // Nothing in the list to scroll to. The sheet is the only surface left, and
+                    // it is the right one: this can only be a permission, since a question with
+                    // no card is a question with no answer either.
                     onReviewRequest(oldest.requestId)
                 }
             }
         }
         Composer(
             enabled = state.harnesses.isNotEmpty(),
+            /*
+             * Not a gate. A pending request used to switch send off, which was the sheet's
+             * urgency left behind after the sheet: the field still took typing, so a thought went
+             * in, send did nothing, and the only sign was a line of small text.
+             *
+             * Box already holds a message through a three-minute boot, and the guest holds this
+             * one the same way — a prompt written while a tool call is blocked sits in the
+             * harness's queue and is picked up the moment the turn moves. So the message goes,
+             * and this says what is still waiting rather than standing in front of it.
+             */
+            notice = when {
+                waiting.size > 1 -> "${waiting.size} requests are waiting on you."
+                waiting.isNotEmpty() -> "A request is waiting on you."
+                else -> null
+            },
+            onNotice = waitingAction,
             blockedReason = when {
-                waiting.size > 1 -> "Answer the ${waiting.size} requests above."
-                waiting.isNotEmpty() -> "Answer the request above."
                 // A booting computer is not a lost connection, and typing into one is supported:
                 // the message waits. Only a session that dropped while the computer was up is a
                 // reason to stop the user mid-thought.
@@ -269,7 +292,6 @@ fun ConversationPane(
             },
             placeholder = "Ask Box anything…",
             onSend = onSend,
-            onReview = waitingAction,
             mode = state.permissionMode,
             onModeChange = onSetPermissionMode,
             attachments = state.pendingAttachments,
@@ -506,6 +528,7 @@ private fun TranscriptList(
     queued: List<QueuedPrompt>,
     harness: HarnessDescriptor?,
     listState: LazyListState,
+    answers: AnswerStore,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
     onStopSubAgent: (String) -> Unit,
@@ -537,9 +560,7 @@ private fun TranscriptList(
     val nextRequest = transcript?.pendingPermissions?.firstOrNull()?.requestId
     LaunchedEffect(nextRequest, items.size) {
         val requestId = nextRequest ?: return@LaunchedEffect
-        val index = items.indexOfFirst {
-            it is TranscriptItem.Permission && it.requestId == requestId
-        }
+        val index = items.indexOfFirst { it.holds(requestId) }
         if (index >= 0 && !listState.isFullyVisible(index)) listState.animateScrollToItem(index)
     }
 
@@ -575,6 +596,7 @@ private fun TranscriptList(
                             onStopSubAgent = onStopSubAgent,
                             onPermissionDecision = onPermissionDecision,
                             onReviewPermission = onReviewPermission,
+                            answers = answers,
                             modifier = Modifier.widthIn(max = 760.dp),
                         )
                     }
@@ -598,7 +620,15 @@ private fun TranscriptList(
         JumpToLatest(
             // Tighter than the auto-scroll's own slack, so the affordance is gone by the time
             // following resumes rather than sitting there offering to do what already happens.
-            visible = remember(listState) { derivedStateOf { !listState.isNearEnd(slack = 1) } }.value,
+            //
+            // And never while the list is actually moving. Floating is what a pill like this is,
+            // and the price of floating is that it covers a strip of whatever is under it — which
+            // is worst mid-flick, when it sits still in the middle of text that is streaming past
+            // and reads as a smudge on the glass. Gone while the finger is down, back when things
+            // settle, which is also the only moment anyone wants to press it.
+            visible = remember(listState) {
+                derivedStateOf { !listState.isNearEnd(slack = 1) && !listState.isScrollInProgress }
+            }.value,
             // Scrolled away from the end is exactly when a working agent is invisible: the
             // activity line trails the transcript, so it is off the bottom of the screen. The
             // pill is on screen by definition, so it is where that fact can still be told.
@@ -681,6 +711,19 @@ internal fun WorkingDot(size: Dp = 9.dp, modifier: Modifier = Modifier) {
         label = "pulse",
     )
     StatusDot(MaterialTheme.colorScheme.primary.copy(alpha = pulse), size, modifier)
+}
+
+/**
+ * Whether this row is where a given request is answered — including inside a sub-agent's card.
+ *
+ * A delegate's questions and permissions are drawn nested in the card that spawned it, so the row
+ * to bring on screen is the sub-agent's, not one of its own. Recursive because a sub-agent can
+ * send a sub-agent, and the answer is still "whichever top-level row contains it".
+ */
+private fun TranscriptItem.holds(requestId: String): Boolean = when (this) {
+    is TranscriptItem.Permission -> this.requestId == requestId
+    is TranscriptItem.SubAgent -> items.any { it.holds(requestId) }
+    else -> false
 }
 
 /**
@@ -864,11 +907,18 @@ private fun EmptyState(title: String) {
 @Composable
 internal fun Composer(
     enabled: Boolean,
+    /** Something that genuinely stops a message going: send is off while this is set. */
     blockedReason: String?,
     placeholder: String,
     onSend: (String) -> Unit,
-    onReview: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    /**
+     * Something waiting that does not stop a message going. Drawn in the same strip and worded
+     * the same way, and deliberately *not* a second kind of block: the difference between the two
+     * is whether tapping send does anything.
+     */
+    notice: String? = null,
+    onNotice: (() -> Unit)? = null,
     footer: Boolean = true,
     mode: AgentPermissionMode = AgentPermissionMode.Ask,
     /** Null where the setting has nowhere to go — the opening hero shares this composer. */
@@ -905,7 +955,7 @@ internal fun Composer(
             .padding(top = 8.dp, bottom = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        blockedReason?.let { reason ->
+        (blockedReason ?: notice)?.let { reason ->
             Row(
                 Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -924,8 +974,12 @@ internal fun Composer(
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.weight(1f),
                 )
-                onReview?.let {
-                    TextButton(onClick = it) { Text("Review") }
+                // "Show me" rather than "Review": it scrolls the transcript to the card, and a
+                // word that promises a closer look would be describing the sheet this replaced.
+                if (blockedReason == null) {
+                    onNotice?.let {
+                        TextButton(onClick = it) { Text("Show me") }
+                    }
                 }
             }
         }

@@ -316,7 +316,6 @@ private fun OpeningHero(
             blockedReason = null,
             placeholder = "Ask Box anything…",
             onSend = onSend,
-            onReview = null,
             footer = false,
             modifier = Modifier.widthIn(max = 520.dp),
         )

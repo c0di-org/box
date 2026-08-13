@@ -88,6 +88,42 @@ export function query({ prompt }) {
 }
 `;
 
+/**
+ * A stub that blocks on a permission and then takes another turn.
+ *
+ * The shape the queueing rule is about: a tool call is parked on a person, and a message typed
+ * while it is parked has to survive to the next turn rather than being dropped on the floor.
+ */
+const QUEUEING_SDK = `
+export function query({ prompt, options }) {
+  const stream = (async function* () {
+    yield { type: 'system', subtype: 'init', session_id: 's1', cwd: options.cwd, tools: [] };
+    const turns = prompt[Symbol.asyncIterator]();
+    const first = await turns.next();
+    await options.canUseTool(
+      'Bash',
+      { command: 'npm install', cwd: options.cwd },
+      { signal: new AbortController().signal, suggestions: [] },
+    );
+    yield {
+      type: 'assistant',
+      uuid: 'a1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'first was ' + first.value.message.content }] },
+    };
+    yield { type: 'result', subtype: 'success', result: 'ok', num_turns: 1 };
+    const second = await turns.next();
+    yield {
+      type: 'assistant',
+      uuid: 'a2',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'second was ' + second.value.message.content }] },
+    };
+    yield { type: 'result', subtype: 'success', result: 'ok', num_turns: 2 };
+  })();
+  stream.setPermissionMode = async () => {};
+  return stream;
+}
+`;
+
 function stubbedHarness(sdk = STUB_SDK) {
   const root = mkdtempSync(join(tmpdir(), 'box-session-'));
   const pkg = join(root, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
@@ -287,4 +323,50 @@ test('a mode this harness does not know leaves it asking', async () => {
   assert.match(said.text, /in default/);
   // The failure mode that matters: an unreadable setting must never widen what is allowed.
   assert.ok(events.some((event) => event.type === 'permission_requested'));
+});
+
+test('a message typed while a request is waiting is queued, not lost', async () => {
+  /*
+   * The composer no longer switches off while an agent is blocked on a permission, so this is the
+   * promise behind that: the prompt goes now, waits behind the tool call the person has not
+   * answered yet, and is picked up the moment the turn moves. Nothing about it is special-cased —
+   * it is the same queue a message typed during a three-minute boot goes through.
+   */
+  const { root, harness } = stubbedHarness(QUEUEING_SDK);
+  const child = spawn(process.execPath, [harness], {
+    cwd: root,
+    env: { ...process.env, BOX_SESSION_CWD: root, ANTHROPIC_API_KEY: 'stub-key-unused' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const events = await new Promise((resolve, reject) => {
+    const seen = [];
+    child.stdin.write(JSON.stringify({ type: 'prompt', text: 'clone it' }) + '\n');
+    const reader = createInterface({ input: child.stdout });
+    reader.on('line', (line) => {
+      const event = JSON.parse(line);
+      seen.push(event);
+      if (event.type === 'permission_requested') {
+        // Typed while the agent is parked, and sent before anyone answers.
+        child.stdin.write(JSON.stringify({ type: 'prompt', text: 'and run the tests' }) + '\n');
+        child.stdin.write(JSON.stringify({
+          type: 'decision', requestId: event.requestId, decision: 'allow',
+        }) + '\n');
+      }
+      if (event.type === 'session_ended') child.stdin.end();
+    });
+    child.on('error', reject);
+    child.on('close', () => resolve(seen));
+    setTimeout(() => { child.kill(); reject(new Error('harness did not finish')); }, 15000);
+  });
+
+  // It reached the log the moment it was sent, so the transcript never looked like it swallowed it.
+  const echo = events.filter((event) => event.type === 'user_message').map((event) => event.text);
+  assert.deepEqual(echo, ['clone it', 'and run the tests']);
+
+  // And it reached the model, on the turn after the one it was typed during.
+  const said = events.filter((event) => event.type === 'message').map((event) => event.text);
+  assert.equal(said.length, 2);
+  assert.match(said[0], /first was clone it/);
+  assert.match(said[1], /second was and run the tests/);
 });

@@ -89,16 +89,16 @@ renders as a completed call rather than disappearing.
 
 ### Permission is a first-class event
 
-`PermissionAsk` carries everything the sheet needs to explain the risk without a round trip — a
-parsed diff, a command line plus working directory, a hostname. `alwaysAllowScope` is a
+`PermissionAsk` carries everything the card needs to explain the risk without a round trip — a
+parsed diff, a command line plus working directory, a hostname, a question and its options. `alwaysAllowScope` is a
 human-readable string ("edits in this project"); `null` hides the always-allow button entirely.
 Decisions are `Allow` / `AllowAlways(scope)` / `Deny` / `Abandoned`, and `Abandoned` is what a
 dismissed sheet produces — dismissing never approves.
 
 **Several requests can be outstanding at once.** One turn can ask for two commands and block on
 both. `Transcript.pendingPermissions` is therefore a list, oldest first — `pendingPermission` is
-just its head, the one the sheet raises — and each request is answered by id, in any order. Two
-rules fall out of that and both were once broken:
+just its head, the one the composer's hint points at — and each request is answered by id, in any
+order. Two rules fall out of that and both were once broken:
 
 - Only a `PermissionResolved` for *that* id, or the session ending, stops a request from being
   outstanding. Nothing else may clear one. An `ActivityChanged` used to, so a parallel turn
@@ -122,6 +122,28 @@ unanswered request is brought onto the screen when it *changes*, which covers bo
 while the transcript is scrolled back and the next coming up behind each answer. It stays put when
 the card is already fully on screen, so answering several that are visible together does not move
 the list once per tap. See `TranscriptList` in `ui/ConversationPane.kt`.
+
+**A question is answered on its card, and never opens the sheet at all.** `AskUserQuestion` is an
+ordinary permission ask — the answer travels back as `PermissionDecision.Answered` inside the
+permission round trip, because the tool's own `answers` field is where it goes — and its options,
+their descriptions, the multi-select rule and the free-text reply are all drawn inline by
+`ui/QuestionForm.kt`. The form briefly lived in the sheet, on the reasoning that a card carried no
+answer to duplicate so raising a modal cost nothing. It cost the same thing every modal costs: a
+question already stops the work, so the card *is* the interruption, and a sheet over it interrupts
+the same person twice about the same thing. `BoxApp` filters questions out of `sheetTarget`, so the
+sheet can state plainly that it never draws one.
+
+Half-finished ticks live in an `AnswerStore` held by the conversation pane, not in the card. The
+card is a row in a `LazyColumn` and would lose them the moment someone scrolled up to re-read the
+paragraph the question is about — which is the most likely thing they will do.
+
+**An outstanding request does not stop the composer.** Send used to switch off with a line reading
+"Answer the request above", which was the sheet's urgency left behind after the sheet: the field
+still took typing, so a thought went in, send did nothing, and the only sign was small grey text.
+A prompt written while a tool call is parked goes into the harness's queue and is picked up when
+the turn moves — the same queue that holds a message through a three-minute boot — so the message
+goes, and the strip above the composer says what is still waiting with a way to scroll to it.
+`test_harness_session.mjs` pins the round trip.
 
 ## 2. What the UI needs from a harness driver — `agent/AgentBackend.kt`
 

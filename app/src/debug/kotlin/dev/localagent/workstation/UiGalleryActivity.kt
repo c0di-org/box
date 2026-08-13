@@ -135,6 +135,7 @@ val SCENES = listOf(
     "tasks",
     "chat",
     "permission",
+    "question",
     "subagent",
     "github-ask",
     "github-code",
@@ -238,6 +239,17 @@ private class GalleryModel(private val scope: CoroutineScope) {
 
             "permission" -> {
                 select(headline)
+                awaitPending()
+            }
+
+            // An agent asking rather than asking permission, answered where it was asked. The
+            // generic script is the only one that puts a question up, and it only runs for a turn
+            // the gallery starts itself — so this scene sends one.
+            "question" -> {
+                select(headline)
+                allowPending()
+                settle()
+                backend.send(headline, "Now do the same for the API client.")
                 awaitPending()
             }
 
