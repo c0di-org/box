@@ -204,8 +204,10 @@ permission prompt sits directly beneath it asking the user to approve something.
 true. Whatever the underlying flag means, as written it describes the app's behaviour, and the
 behaviour visibly differs.
 
-*Better:* say what it will do next rather than what it is — and suppress or restate it entirely
-while a request is outstanding.
+*Better:* the banner should not exist. Nothing sets this mode by accident — the user opened the
+menu and picked the row that says "Nothing stops" — so a permanent strip is telling somebody
+something they chose, in the space the conversation was using. A caution sign on the mode control
+in the composer says which mode is in force, at a glance, for free.
 
 ### Two banners stack before any content
 
@@ -334,14 +336,16 @@ place the layout is known; that costs nothing, since a `ModalBottomSheet` is its
 positioned against the screen rather than against whatever contains it.
 
 The banners were a stack of up to four, none dismissable. They are ranked now and only the first is
-drawn: no credential, then no computer, then a dropped connection, then a standing setting. Each
-condition had to be spelled out rather than left to the banner's own early return — a `when` that
-picks a branch which then draws nothing would silently hide the banner underneath it.
+drawn: no credential, then no computer, then a dropped connection. Each condition had to be spelled
+out rather than left to the banner's own early return — a `when` that picks a branch which then
+draws nothing would silently hide the banner underneath it.
 
 Two related things fell out of doing it:
 
-- **"Approving everything" is silent while a request is outstanding.** It was being drawn directly
-  above a prompt asking the user to approve something, and both cannot be true.
+- **The permission mode is not a banner at all.** It was fourth in that rank, and it was the one
+  that could be true for the whole session — a strip that never goes away, above every message,
+  reminding the user of a switch they threw on purpose. It is a caution sign beside the mode icon
+  in the composer now, which is where the setting is changed and costs no vertical space.
 - **The box's state is no longer said twice in `Wide`.** The task list beside the transcript already
   leads with the box and its Open button; repeating it as a banner said the same sentence twice,
   about six inches apart, with the same button on both. `Single` still says it, because there the

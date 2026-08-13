@@ -15,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentActivity
+import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.ConnectService
 import dev.localagent.workstation.agent.GitHubAuth
@@ -105,6 +106,7 @@ class UiGalleryActivity : ComponentActivity() {
                     onOpenInPhoneFiles = {},
                     onNoticeShown = {},
                     onDismissGreeting = model::dismissGreeting,
+                    onSetPermissionMode = model::setPermissionMode,
                     // The gallery is usable by hand as well as photographed, so the sheet it can
                     // reach has to be closable. Nothing behind it connects to anything: there is
                     // no box here to hold a credential.
@@ -414,6 +416,10 @@ private class GalleryModel(private val scope: CoroutineScope) {
     fun control(holder: ControlHolder) = mutable.update { it.copy(desktopControl = holder) }
 
     fun dismissGreeting() = mutable.update { it.copy(readyGreeting = false) }
+
+    // Nothing here obeys the setting — there is no agent to skip asking. It is held so the
+    // composer's mode control shows the choice, which is the only place that state is now drawn.
+    fun setPermissionMode(mode: AgentPermissionMode) = mutable.update { it.copy(permissionMode = mode) }
 }
 
 /** What the shell tools would be showing if a box were open. */

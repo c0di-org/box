@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,7 +48,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.LockOpen
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
@@ -174,7 +175,6 @@ fun ConversationPane(
          * because a `when` that picks a branch which then draws nothing would silently hide the
          * banner underneath it.
          */
-        val requests = state.transcript?.pendingPermissions.orEmpty()
         val connectionTrouble = state.computerReady &&
             state.connection !is SessionConnection.Live &&
             state.connection !is SessionConnection.Ended
@@ -195,13 +195,6 @@ fun ConversationPane(
                 ConnectBanner(connectRequest, onConnectGitHub, onDeclineConnection)
 
             connectionTrouble -> ConnectionBanner(state.connection)
-
-            // Last, and silent while anything is actually being asked. "Box is not asking before
-            // the agent acts" was being drawn directly above a prompt asking the user to approve
-            // something: both cannot be true, and of the two the request is the one they have to
-            // deal with. It comes back the moment nothing is outstanding.
-            state.permissionMode != AgentPermissionMode.Ask && requests.isEmpty() ->
-                PermissionModeBanner(state.permissionMode, onSetPermissionMode)
         }
 
         val nothingToShow = (state.transcript == null || state.transcript.items.isEmpty()) &&
@@ -417,32 +410,6 @@ private fun permissionModeLabel(mode: AgentPermissionMode): String = when (mode)
     AgentPermissionMode.Ask -> "Ask every time"
     AgentPermissionMode.AcceptEdits -> "Accept file edits"
     AgentPermissionMode.Everything -> "Approve everything"
-}
-
-/**
- * What is being skipped, while it is being skipped.
- *
- * Not a chip in the corner and not a line in a menu nobody opens: an agent working unsupervised
- * looks identical to an agent with nothing to ask about, so the only honest place for this is the
- * same strip that says the computer is booting — present in every conversation, carrying the way
- * out, and coloured like the risk it describes.
- */
-@Composable
-private fun PermissionModeBanner(mode: AgentPermissionMode, onSet: (AgentPermissionMode) -> Unit) {
-    if (mode == AgentPermissionMode.Ask) return
-    Banner(
-        tint = when (mode) {
-            AgentPermissionMode.Everything -> MaterialTheme.colorScheme.error
-            else -> MaterialTheme.colorScheme.tertiary
-        },
-        icon = { Icon(Icons.Outlined.LockOpen, null, Modifier.size(17.dp)) },
-        title = when (mode) {
-            AgentPermissionMode.Everything -> "Approving everything"
-            else -> "Accepting file edits"
-        },
-        body = "Box is not asking before the agent acts.",
-        action = "Ask again" to { onSet(AgentPermissionMode.Ask) },
-    )
 }
 
 @Composable
@@ -1025,6 +992,10 @@ internal fun Composer(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         ) {
+            // Bottom rather than centre because the field grows: past one line the controls
+            // belong beside the line being typed, not floating in the middle of the block. On the
+            // one line that is nearly always there, the sizes below make bottom *be* centre —
+            // every control is 44.dp and the field's padding brings it to the same height.
             Row(
                 Modifier.padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.Bottom,
@@ -1037,7 +1008,7 @@ internal fun Composer(
                         IconButton(
                             onClick = { attachMenuOpen = true },
                             enabled = enabled,
-                            modifier = Modifier.size(40.dp),
+                            modifier = Modifier.size(44.dp),
                         ) {
                             Icon(
                                 Icons.Outlined.Add,
@@ -1075,7 +1046,7 @@ internal fun Composer(
                 BasicTextField(
                     value = draft,
                     onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f).padding(vertical = 14.dp),
+                    modifier = Modifier.weight(1f).padding(vertical = 12.dp),
                     enabled = enabled,
                     maxLines = 6,
                     textStyle = TextStyle(
@@ -1115,8 +1086,7 @@ internal fun Composer(
                 // makes the mode findable, and a gesture nobody discovers cannot be the only way in.
                 Box(
                     Modifier
-                        .padding(4.dp)
-                        .size(40.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .combinedClickable(
                             enabled = canSend || onModeChange != null,
@@ -1195,6 +1165,12 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
  * "stop asking me about this", which is a thing people want *while* being asked, and a setting
  * nobody finds is a setting that turns into fatigue at the sheet instead. The label lives in the
  * menu; the trigger is an icon, because the composer's row is not where a sentence fits.
+ *
+ * It is also the *only* place unsupervised mode is shown, and the caution sign beside the icon is
+ * what carries that. A banner said the same thing in a whole strip above the composer, on every
+ * screen, forever — but nothing turns this on by accident: the user opened this menu and picked
+ * the row that says "Nothing stops". Once told, they do not need telling again in the space the
+ * conversation was using; they need to be able to see, at a glance, which mode is in force.
  */
 @Composable
 private fun ModeControl(
@@ -1204,23 +1180,35 @@ private fun ModeControl(
     onDismiss: () -> Unit,
     onPick: (AgentPermissionMode) -> Unit,
 ) {
+    val unsupervised = mode != AgentPermissionMode.Ask
+    val tint = if (unsupervised) modeTint(mode) else MaterialTheme.colorScheme.onSurfaceVariant
     Box {
         Row(
             Modifier
+                .height(44.dp)
                 .clip(RoundedCornerShape(14.dp))
+                // Tinted only when it has something to say. In Ask it is a plain glyph on the
+                // composer's own surface, which is what a default should look like.
+                .background(if (unsupervised) tint.copy(alpha = 0.12f) else Color.Transparent)
                 .clickable(onClick = onOpen)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (unsupervised) {
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                    tint = tint,
+                )
+                Spacer(Modifier.width(3.dp))
+            }
             Icon(
                 modeIcon(mode),
-                contentDescription = "Permission: ${permissionModeLabel(mode)}",
-                modifier = Modifier.size(17.dp),
-                tint = if (mode == AgentPermissionMode.Ask) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    modeTint(mode)
-                },
+                contentDescription = "Permission: ${permissionModeLabel(mode)}" +
+                    if (unsupervised) ". Box is not asking before the agent acts." else "",
+                modifier = Modifier.size(19.dp),
+                tint = tint,
             )
             Icon(
                 Icons.Outlined.ArrowDropDown,
