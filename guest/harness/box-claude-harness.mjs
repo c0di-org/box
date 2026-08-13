@@ -115,6 +115,29 @@ let activeQuery = null;
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
 let permissionMode = 'default';
 
+/**
+ * What the person is reading this on, as last reported by the app. Null until it says.
+ *
+ * Deliberately not a device: the app derives it from its own window, because a fold changes class
+ * mid-process and a DeX window is resized by dragging a corner. An agent holds an answer for a
+ * whole session, so a device type told once would go stale in a way a layout never does -- which
+ * is why this arrives again on every change and is re-stated to the model whenever it differs.
+ */
+const VIEWPORT_LAYOUTS = new Set(['compact', 'wide']);
+let viewport = null;
+let viewportTold = null;
+
+/** Prefixed to the next prompt when it has changed. Never emitted: a resize is not conversation. */
+function viewportNote(view) {
+  const where = view.layout === 'wide'
+    ? `a wide window, ${view.widthDp}dp across`
+    : `a compact window, ${view.widthDp}dp across`;
+  const typing = view.hardwareKeyboard
+    ? 'with a hardware keyboard'
+    : "typing on the phone's on-screen keyboard";
+  return `[box] The person is reading you on ${where}, ${typing}.`;
+}
+
 function handleCommand(line) {
   let command;
   try {
@@ -171,6 +194,20 @@ function handleCommand(line) {
       // Into the log as well as into the SDK. The transcript is the record of what happened, and
       // "nothing asked for the next hour" is only honest if the log says why.
       emit({ type: 'permission_mode', mode });
+      break;
+    }
+    case 'viewport': {
+      const layout = String(command.layout ?? '');
+      const widthDp = Number(command.widthDp);
+      if (!VIEWPORT_LAYOUTS.has(layout) || !Number.isFinite(widthDp) || widthDp <= 0) {
+        diagnostic(`ignoring an unreadable viewport: ${line}`);
+        return;
+      }
+      viewport = {
+        layout,
+        widthDp: Math.round(widthDp),
+        hardwareKeyboard: command.hardwareKeyboard === true,
+      };
       break;
     }
     case 'interrupt':
@@ -577,9 +614,17 @@ async function* prompts() {
   while (true) {
     const text = await nextPrompt();
     if (text === null) return;
+    // The viewport rides with the turn rather than arriving as one of its own. A turn of its own
+    // would cost a model round trip on a machine that is fully emulated, and would do it every
+    // time someone rotated the phone. Only sent when it differs from what was last said, so a
+    // session that never changes shape mentions it exactly once.
+    const note = viewport && JSON.stringify(viewport) !== viewportTold ? viewportNote(viewport) : null;
+    if (note) viewportTold = JSON.stringify(viewport);
     yield {
       type: 'user',
-      message: { role: 'user', content: text },
+      // The event log already carries the user's own words, emitted by `prompt` above; this is the
+      // only copy the note appears in, so nothing draws it in the transcript as something they said.
+      message: { role: 'user', content: note ? `${note}\n\n${text}` : text },
       parent_tool_use_id: null,
     };
   }

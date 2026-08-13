@@ -30,6 +30,7 @@ import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
@@ -227,6 +228,18 @@ class BoxViewModel @JvmOverloads constructor(
      */
     fun setPermissionMode(mode: AgentPermissionMode) {
         viewModelScope.launch { agents.setPermissionMode(mode) }
+    }
+
+    /**
+     * Reported by the composition every time the window it measured changes shape.
+     *
+     * Called far more often than it does anything — a drag across a DeX corner is a stream of
+     * widths — so the backend drops the ones that repeat rather than the UI trying to guess which
+     * are worth sending. Nothing in [BoxUiState] holds it: no pixel on screen depends on what the
+     * agent was told, and the window itself is the only honest source for what the window is.
+     */
+    fun setViewport(viewport: AgentViewport) {
+        viewModelScope.launch { agents.setViewport(viewport) }
     }
 
     /**

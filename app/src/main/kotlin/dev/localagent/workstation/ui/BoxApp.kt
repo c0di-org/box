@@ -56,6 +56,7 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
@@ -107,6 +108,7 @@ fun BoxApp(
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
+    onViewportChanged: (AgentViewport) -> Unit = {},
     desktop: DesktopTransport? = null,
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
@@ -156,6 +158,12 @@ fun BoxApp(
         ) {
             val layout = rememberBoxLayout(maxWidth, maxHeight)
             val compact = layout == BoxLayout.Single
+
+            // The one place in Box that knows how much room there is. Reported rather than stored:
+            // this is the same measurement the layout above is drawn from, so an agent writing for
+            // a wide window and a UI drawing one can never disagree about which it is.
+            val viewport = rememberViewport(maxWidth, maxHeight)
+            LaunchedEffect(viewport) { onViewportChanged(viewport) }
 
             val home: @Composable (Modifier, Boolean) -> Unit = { modifier, showSelection ->
                 SessionsPane(

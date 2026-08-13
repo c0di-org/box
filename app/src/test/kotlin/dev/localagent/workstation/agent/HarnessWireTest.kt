@@ -230,6 +230,44 @@ class HarnessWireTest {
         assertEquals("Clone project and run", event.title)
     }
 
+    // ---- the other direction -----------------------------------------------
+
+    @Test
+    fun `a command keeps its types on the wire`() {
+        val line = HarnessWire.encode(
+            mapOf(
+                "type" to "viewport",
+                "layout" to "wide",
+                "widthDp" to 1280,
+                "hardwareKeyboard" to true,
+            ),
+        )
+
+        // Quoting the number would push the decision about what it means into the harness, which
+        // is the half of the pair that ships in the guest image and cannot be corrected from here.
+        assertEquals(
+            """{"type":"viewport","layout":"wide","widthDp":1280,"hardwareKeyboard":true}""",
+            line,
+        )
+    }
+
+    @Test
+    fun `a command survives a round trip through a real parser`() {
+        val line = HarnessWire.encode(mapOf("type" to "prompt", "text" to "say \"hi\"\nthen stop"))
+        val parsed = org.json.JSONObject(line)
+
+        assertEquals("prompt", parsed.getString("type"))
+        assertEquals("say \"hi\"\nthen stop", parsed.getString("text"))
+    }
+
+    @Test
+    fun `a viewport reaches the harness as something it will accept`() {
+        // The one command whose reader validates before acting: the guest drops a viewport whose
+        // layout it does not know, so the two vocabularies have to agree here and not just compile.
+        val wire = ViewportLayout.entries.map { it.wire }.toSet()
+        assertEquals(setOf("compact", "wide"), wire)
+    }
+
     @Test
     fun `an error carries its detail and whether the session can continue`() {
         val event = parse(

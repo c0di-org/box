@@ -99,6 +99,7 @@ interface AgentBackend {
     val sessions: StateFlow<List<SessionSummary>>
     val permissionMode: StateFlow<AgentPermissionMode>
     suspend fun setPermissionMode(mode: AgentPermissionMode)
+    suspend fun setViewport(viewport: AgentViewport)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
     suspend fun startSession(harnessId: String, prompt: String?): String
@@ -132,6 +133,31 @@ The control for it sits on the composer, next to send, with the same menu on a l
 itself. It started in the header's overflow menu and moved because of where it is wanted: "stop
 asking me about this" is a thought someone has *while* being asked, and a setting nobody finds is
 one that turns into fatigue at the sheet instead.
+
+`setViewport` tells the agent what it is being read on, so it can write for a phone in one hand or
+for a keyboard and a monitor rather than splitting the difference forever. On the wire it is
+`{"type": "viewport", "layout": "wide", "widthDp": 1280, "hardwareKeyboard": true}`, and it follows
+`permission_mode` exactly: stated to a session before its first prompt, and again whenever it
+changes.
+
+What it deliberately does **not** carry is a device type. "Is this DeX" is the question this
+contract already refuses, and it refuses it harder here — a layout that goes stale is corrected by
+the next frame, while an agent told once that it is talking to a phone believes that for the rest
+of the session, through the fold opening and the window being dragged wider. So every field is
+derived from the window that `BoxWindowSize` measures, re-sent on change, and `hardwareKeyboard` —
+the one fact that comes from the configuration rather than the window — earns its place only
+because it is re-sent too. It is carried apart from `widthDp` because it answers a different
+question: not how much can be shown, but what it is reasonable to ask the *person* to type.
+
+It is a new command type rather than a field on an existing one, for the `stop_subagent` reason: a
+harness that has never heard of `viewport` drops it with a diagnostic and goes on writing as it
+always has, which is a harmless failure. Values keep their JSON types — `widthDp` is a number —
+because the half of the pair that would otherwise have to be lenient about `"1280"` is the half
+that ships inside the guest image, where Box cannot reach it to settle the disagreement.
+
+Nothing about it is persisted, unlike the permission mode. A window size restored from disk
+describes a window that no longer exists, and a backend that has never been told is in an honest
+state: it says nothing, and the agent writes the way it always has.
 
 `interruptSubAgent` is not `interrupt` with an argument. Stopping the session throws away
 everything in flight; stopping a sub-agent asks one delegate to stand down and lets the agent that

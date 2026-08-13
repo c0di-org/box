@@ -130,6 +130,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onSubmitSignInCode = boxViewModel::submitSignInCode,
             onCancelSignIn = boxViewModel::cancelSignIn,
             onSetPermissionMode = boxViewModel::setPermissionMode,
+            onViewportChanged = boxViewModel::setViewport,
         )
     }
 }

@@ -57,6 +57,18 @@ class FakeAgentBackend(
         modeState.value = mode
     }
 
+    /**
+     * Kept, and read by nothing. The scripted flows say the same words at every size — a fake that
+     * rewrote itself for a wide window would be demonstrating a behaviour no real agent has yet.
+     * It is stored rather than dropped so a test can ask what the UI reported.
+     */
+    @Volatile var lastViewport: AgentViewport? = null
+        private set
+
+    override suspend fun setViewport(viewport: AgentViewport) {
+        lastViewport = viewport
+    }
+
     private val sessionList = MutableStateFlow(seedSessions())
     override val sessions: StateFlow<List<SessionSummary>> = sessionList.asStateFlow()
 

@@ -292,6 +292,42 @@ internal object HarnessWire {
         else -> TaskState.Pending
     }
 
+    // ---- the other direction -----------------------------------------------
+
+    /**
+     * One command from Box to the harness, as a line of JSON.
+     *
+     * Values keep their types on the wire. It would be simpler to quote everything and let the
+     * other end coerce, and that is exactly the leniency worth refusing: a `widthDp` of `"1280"`
+     * puts the decision about what it means in the harness, which is the half of the pair that
+     * ships in the guest image and is therefore the half Box cannot update to fix a disagreement.
+     * Numbers go as numbers, booleans as booleans, everything else as an escaped string.
+     */
+    fun encode(command: Map<String, Any>): String =
+        command.entries.joinToString(",", "{", "}") { (key, value) ->
+            val encoded = when (value) {
+                is Boolean -> value.toString()
+                is Int, is Long -> value.toString()
+                else -> jsonString(value.toString())
+            }
+            "${jsonString(key)}:$encoded"
+        }
+
+    private fun jsonString(value: String): String = buildString {
+        append('"')
+        value.forEach { character ->
+            when (character) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (character < ' ') append("\\u%04x".format(character.code)) else append(character)
+            }
+        }
+        append('"')
+    }
+
     // ---- json helpers ------------------------------------------------------
 
     /** org.json turns a missing string into "", which is not the same thing as absent. */
