@@ -570,8 +570,11 @@ let planId = 0;
 /**
  * Calls whose result must not become a tool card either, because their start never did.
  *
- * Only `mcp__box__show` so far. The set is keyed by tool_use id rather than being a name test on
- * the way out, because a `tool_result` carries no name — only the id of the call it answers.
+ * `mcp__box__show` and `TodoWrite`: one is an artifact row, the other a checklist, and both say
+ * what happened somewhere other than a tool card. The set is keyed by tool_use id rather than
+ * being a name test on the way out, because a `tool_result` carries no name — only the id of the
+ * call it answers. Dropping only the start is not enough: the app builds a placeholder card out
+ * of a `tool_finished` whose beginning it never saw, which is the stray "Tool" row.
  */
 const silentCalls = new Set();
 
@@ -662,14 +665,12 @@ function translateAssistant(message) {
       if (block.name === SHOW_TOOL) {
         // No tool card. The artifact row *is* what happened, and a card beside it reading "showed
         // you the thing" is the same sentence twice.
-        //
-        // Both halves are dropped, unlike TodoWrite below. Dropping only the start leaves the app
-        // building a placeholder card out of a `tool_finished` whose beginning it never saw, which
-        // is the stray "Tool" row that costs nothing to avoid here.
         silentCalls.add(block.id);
         continue;
       }
       if (block.name === 'TodoWrite') {
+        // No tool card either: the plan block is where a checklist update shows up.
+        silentCalls.add(block.id);
         emit({
           type: 'task_progress',
           planId: `plan-${++planId}`,
