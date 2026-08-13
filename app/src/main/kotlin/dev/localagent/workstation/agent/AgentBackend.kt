@@ -48,9 +48,20 @@ interface AgentBackend {
     /** Transport health for [sessionId]. Independent of whether the agent is busy. */
     fun connection(sessionId: String): StateFlow<SessionConnection>
 
-    suspend fun startSession(harnessId: String, prompt: String?): String
+    suspend fun startSession(
+        harnessId: String,
+        prompt: String?,
+        attachments: List<Attachment> = emptyList(),
+    ): String
 
-    suspend fun send(sessionId: String, text: String)
+    /**
+     * The user's turn: what they typed, and anything they showed.
+     *
+     * [attachments] are already in the box by the time this is called — they are files in the
+     * shared folder, not bytes to be carried here — so this only has to name them. A backend that
+     * ignores them still delivers the text, which is the whole reason they are a field.
+     */
+    suspend fun send(sessionId: String, text: String, attachments: List<Attachment> = emptyList())
 
     /** Answers the outstanding [AgentEvent.PermissionRequested]. Idempotent per request id. */
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)

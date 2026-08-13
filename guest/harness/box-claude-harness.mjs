@@ -19,7 +19,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
@@ -62,18 +62,24 @@ const clip = (text, limit = MAX_TEXT) =>
 /** Resolvers for permission requests the user has not answered yet, keyed by requestId. */
 const pendingPermissions = new Map();
 
-/** Prompts waiting to be fed into the SDK, and whoever is waiting for the next one. */
+/**
+ * Turns waiting to be fed into the SDK, and whoever is waiting for the next one.
+ *
+ * A turn is `{ text, attachments }` rather than a bare string, because what the person said and
+ * what they showed arrive together and have to stay together — the attachment belongs to the turn
+ * it was sent with, not to whichever turn happens to be running when the file lands.
+ */
 const promptQueue = [];
 let promptWaiter = null;
 let inputClosed = false;
 
-function pushPrompt(text) {
+function pushPrompt(turn) {
   if (promptWaiter) {
     const resolve = promptWaiter;
     promptWaiter = null;
-    resolve(text);
+    resolve(turn);
   } else {
-    promptQueue.push(text);
+    promptQueue.push(turn);
   }
 }
 
@@ -138,6 +144,108 @@ function viewportNote(view) {
   return `[box] The person is reading you on ${where}, ${typing}.`;
 }
 
+/**
+ * The one directory inside the shared folder that files from the phone land in.
+ *
+ * This is the wire contract and it is fixed: it is the prefix the app sends, the prefix every
+ * attachment is checked against, and the path the agent is told. It does not move.
+ *
+ * [INBOX_ON_DISK] is where this process looks for those files, which is the same place on a
+ * device and somewhere writable under test — off a device there is no `/workspace` to create.
+ * Keeping the two apart matters more than it looks: it means a test exercises the real paths the
+ * app puts on the wire, rather than proving the harness accepts whatever it is pointed at.
+ */
+const INBOX = '/workspace/shared/inbox/';
+const INBOX_ON_DISK = process.env.BOX_INBOX ?? INBOX;
+
+/** Where to look for something the agent will be told is at [guestPath]. */
+const onDisk = (guestPath) => INBOX_ON_DISK + guestPath.slice(INBOX.length);
+
+/**
+ * How long to wait for a file the app says it has sent.
+ *
+ * It is already written on the phone by the time the prompt is sent; what is being waited for is
+ * the copy into this box, which is driven by an inotify watch on the other side and normally takes
+ * about a second. The ceiling is generous because the alternative failure is the expensive one:
+ * an agent that looked too early tells the user it cannot see the picture they are looking at.
+ */
+const ATTACHMENT_WAIT_MS = Number(process.env.BOX_ATTACHMENT_WAIT_MS ?? 30_000);
+
+/**
+ * What the app said it attached, keeping only what this harness is willing to act on.
+ *
+ * The path is checked rather than trusted. It arrives over a pipe from the app, which is not a
+ * hostile party — but "read whatever path you are sent" is a capability worth not having, and
+ * confining it to the inbox costs one comparison. Anything else is dropped with a diagnostic.
+ */
+function readAttachments(value) {
+  if (!Array.isArray(value)) return [];
+  const kept = [];
+  for (const item of value) {
+    const guestPath = String(item?.guestPath ?? '');
+    if (!guestPath.startsWith(INBOX) || guestPath.slice(INBOX.length).includes('/')) {
+      diagnostic(`ignoring an attachment outside the inbox: ${guestPath}`);
+      continue;
+    }
+    kept.push({
+      guestPath,
+      name: String(item?.name ?? guestPath.slice(INBOX.length)),
+      mimeType: String(item?.mimeType ?? 'application/octet-stream'),
+      bytes: Number.isFinite(Number(item?.bytes)) ? Number(item.bytes) : 0,
+    });
+  }
+  return kept;
+}
+
+/** Resolves once every file is on this side, or once waiting has stopped being worth it. */
+async function awaitAttachments(attachments) {
+  const deadline = Date.now() + ATTACHMENT_WAIT_MS;
+  const arrived = [];
+  const missing = [];
+  for (const attachment of attachments) {
+    const path = onDisk(attachment.guestPath);
+    let here = false;
+    while (true) {
+      // Size as well as existence: the copy is not atomic, so a file can be visible while it is
+      // still being written, and an agent reading half a screenshot is worse than one waiting.
+      here = existsSync(path) && settled(path, attachment.bytes);
+      if (here || Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    (here ? arrived : missing).push(attachment);
+  }
+  return { arrived, missing };
+}
+
+/**
+ * True when the whole file is here, not just the start of it.
+ *
+ * The app sends the size it actually wrote, so this is a real completeness check rather than a
+ * guess. Zero means it did not say, which an older app or a stream of unknown length can both
+ * produce, and there is nothing better to do then than believe the file exists.
+ */
+function settled(path, expected) {
+  let size;
+  try { size = statSync(path).size; } catch { return false; }
+  return expected > 0 ? size >= expected : true;
+}
+
+/** What the model is told about the files, in the turn they came with. */
+function attachmentNote({ arrived, missing }) {
+  const lines = [];
+  if (arrived.length > 0) {
+    lines.push(arrived.length === 1
+      ? '[box] They attached a file, which is now at:'
+      : `[box] They attached ${arrived.length} files, which are now at:`);
+    for (const one of arrived) lines.push(`  ${one.guestPath}  (${one.name}, ${one.mimeType})`);
+  }
+  if (missing.length > 0) {
+    lines.push('[box] These were attached but have not reached this box; say so rather than guessing:');
+    for (const one of missing) lines.push(`  ${one.name}`);
+  }
+  return lines.join('\n');
+}
+
 function handleCommand(line) {
   let command;
   try {
@@ -149,11 +257,13 @@ function handleCommand(line) {
   switch (command.type) {
     case 'prompt': {
       const text = String(command.text ?? '');
+      const attachments = readAttachments(command.attachments);
       // Echoed into the log so the transcript has one source of truth in one order. The app could
       // record what the user typed itself, but then a replay would have to interleave two logs and
-      // guess where each turn belonged.
-      emit({ type: 'user_message', text });
-      pushPrompt(text);
+      // guess where each turn belonged. The attachments ride in that echo for the same reason: the
+      // thumbnail on a restored transcript is drawn from this line, not from anything the app kept.
+      emit(attachments.length > 0 ? { type: 'user_message', text, attachments } : { type: 'user_message', text });
+      pushPrompt({ text, attachments });
       break;
     }
     case 'decision': {
@@ -612,8 +722,13 @@ function translateToolResults(message) {
 
 async function* prompts() {
   while (true) {
-    const text = await nextPrompt();
-    if (text === null) return;
+    const turn = await nextPrompt();
+    if (turn === null) return;
+    const { text, attachments = [] } = turn;
+    // Blocking here is the point: this generator *is* the model's queue, so waiting for the file
+    // holds the turn rather than the whole harness, and everything else — a decision, an
+    // interrupt, a viewport — keeps being read off stdin while it waits.
+    const files = attachments.length > 0 ? attachmentNote(await awaitAttachments(attachments)) : '';
     // The viewport rides with the turn rather than arriving as one of its own. A turn of its own
     // would cost a model round trip on a machine that is fully emulated, and would do it every
     // time someone rotated the phone. Only sent when it differs from what was last said, so a
@@ -623,8 +738,8 @@ async function* prompts() {
     yield {
       type: 'user',
       // The event log already carries the user's own words, emitted by `prompt` above; this is the
-      // only copy the note appears in, so nothing draws it in the transcript as something they said.
-      message: { role: 'user', content: note ? `${note}\n\n${text}` : text },
+      // only copy the notes appear in, so nothing draws them in the transcript as something they said.
+      message: { role: 'user', content: [note, files, text].filter(Boolean).join('\n\n') },
       parent_tool_use_id: null,
     };
   }

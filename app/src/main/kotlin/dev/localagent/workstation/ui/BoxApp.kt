@@ -57,6 +57,7 @@ import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.AgentViewport
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
@@ -109,6 +110,9 @@ fun BoxApp(
     onCancelSignIn: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     onViewportChanged: (AgentViewport) -> Unit = {},
+    onAttachPhoto: (() -> Unit)? = null,
+    onAttachFile: (() -> Unit)? = null,
+    onRemoveAttachment: (Attachment) -> Unit = {},
     desktop: DesktopTransport? = null,
     onSetDesktopControl: (ControlHolder) -> Unit = {},
 ) {
@@ -208,6 +212,9 @@ fun BoxApp(
                     showComputerAction = showComputerAction,
                     onSignIn = onShowSignIn,
                     onSetPermissionMode = onSetPermissionMode,
+                    onAttachPhoto = onAttachPhoto,
+                    onAttachFile = onAttachFile,
+                    onRemoveAttachment = onRemoveAttachment,
                 )
             }
 

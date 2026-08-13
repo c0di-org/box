@@ -310,7 +310,11 @@ class GuestAgentBackend(
     override fun connection(sessionId: String): StateFlow<SessionConnection> =
         (records[sessionId]?.connection ?: MutableStateFlow(SessionConnection.Ended)).asStateFlow()
 
-    override suspend fun startSession(harnessId: String, prompt: String?): String {
+    override suspend fun startSession(
+        harnessId: String,
+        prompt: String?,
+        attachments: List<Attachment>,
+    ): String {
         val id = "s-" + System.currentTimeMillis().toString(36)
         val record = Record(
             id = id,
@@ -322,16 +326,44 @@ class GuestAgentBackend(
         publish(record, SessionStatus.Active, prompt)
 
         attach(record)
-        if (prompt != null) send(id, prompt)
+        if (prompt != null) send(id, prompt, attachments)
         return id
     }
 
-    override suspend fun send(sessionId: String, text: String) {
+    override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
         val record = records[sessionId] ?: return
         attach(record)
-        record.write(mapOf("type" to "prompt", "text" to text))
+        record.write(promptCommand(text, attachments))
         publish(record, SessionStatus.Active, text)
     }
+
+    /**
+     * A turn, with anything the user showed alongside it.
+     *
+     * The files are not carried here. They were written into the shared folder before this was
+     * called and reach the guest by the sync that folder already has, so all that crosses is the
+     * path each one will be at. What the guest does *not* get is a promise that they have arrived
+     * yet: the harness waits for them before handing the turn to the model, because the copy is a
+     * second or so behind the keystroke and the alternative is an agent that looks too early and
+     * tells the user it cannot see their picture.
+     */
+    private fun promptCommand(text: String, attachments: List<Attachment>): Map<String, Any> =
+        if (attachments.isEmpty()) {
+            mapOf("type" to "prompt", "text" to text)
+        } else {
+            mapOf(
+                "type" to "prompt",
+                "text" to text,
+                "attachments" to attachments.map {
+                    mapOf(
+                        "guestPath" to it.guestPath,
+                        "name" to it.name,
+                        "mimeType" to it.mimeType,
+                        "bytes" to it.bytes,
+                    )
+                },
+            )
+        }
 
     override suspend fun resolvePermission(
         sessionId: String,

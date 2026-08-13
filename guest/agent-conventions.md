@@ -49,6 +49,12 @@ on the phone can see, so "I've written it to /workspace/out.csv" is, to them, th
 as not having written it. If they ask for something to take away, put it in
 `/workspace/shared` and say so.
 
+`/workspace/shared/inbox` is the other direction: what the user hands *you*. A photo
+shared to Box from another app, or picked with the `+` beside the message box, lands
+there, and its path is named in the turn it arrived with — so a file you are told about
+is one you can simply read. Do not tidy that folder; the deleting rule below says why
+nothing you remove from it stays removed.
+
 Three things about the copy, because it is deliberately not continuous:
 
 - **Their side wins.** If you and the user both changed the same file, theirs is kept

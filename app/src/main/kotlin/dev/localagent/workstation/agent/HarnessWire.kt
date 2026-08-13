@@ -59,7 +59,12 @@ internal object HarnessWire {
             )
 
             "user_message" -> AgentEvent.UserMessage(
-                eventId, session, at, text = json.optString("text"),
+                eventId, session, at,
+                text = json.optString("text"),
+                // Absent on every turn that carried nothing, and on every turn at all from a
+                // harness older than the feature. Both read as an empty list.
+                attachments = json.optJSONArray("attachments").mapObjects(::attachment)
+                    .filter { it.guestPath.isNotEmpty() },
             )
 
             "message" -> AgentEvent.AgentMessage(
@@ -284,6 +289,13 @@ internal object HarnessWire {
         else -> ChangeKind.Modify
     }
 
+    private fun attachment(json: JSONObject) = Attachment(
+        guestPath = json.optStringOrNull("guestPath").orEmpty(),
+        name = json.optStringOrNull("name") ?: json.optStringOrNull("guestPath")?.substringAfterLast('/').orEmpty(),
+        mimeType = json.optStringOrNull("mimeType") ?: "application/octet-stream",
+        bytes = json.optLong("bytes", 0L),
+    )
+
     private fun taskState(value: String): TaskState = when (value) {
         "in_progress", "running" -> TaskState.Running
         "completed", "done" -> TaskState.Done
@@ -303,15 +315,24 @@ internal object HarnessWire {
      * ships in the guest image and is therefore the half Box cannot update to fix a disagreement.
      * Numbers go as numbers, booleans as booleans, everything else as an escaped string.
      */
-    fun encode(command: Map<String, Any>): String =
-        command.entries.joinToString(",", "{", "}") { (key, value) ->
-            val encoded = when (value) {
-                is Boolean -> value.toString()
-                is Int, is Long -> value.toString()
-                else -> jsonString(value.toString())
-            }
-            "${jsonString(key)}:$encoded"
+    fun encode(command: Map<String, Any>): String = encodeObject(command)
+
+    private fun encodeObject(fields: Map<String, Any>): String =
+        fields.entries.joinToString(",", "{", "}") { (key, value) ->
+            "${jsonString(key)}:${encodeValue(value)}"
         }
+
+    private fun encodeValue(value: Any): String = when (value) {
+        is Boolean -> value.toString()
+        is Int, is Long -> value.toString()
+        is List<*> -> value.filterNotNull().joinToString(",", "[", "]", transform = ::encodeValue)
+        is Map<*, *> -> encodeObject(
+            value.entries.mapNotNull { (key, nested) ->
+                if (key is String && nested != null) key to nested else null
+            }.toMap(),
+        )
+        else -> jsonString(value.toString())
+    }
 
     private fun jsonString(value: String): String = buildString {
         append('"')

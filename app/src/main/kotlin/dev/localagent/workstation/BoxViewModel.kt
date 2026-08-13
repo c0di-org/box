@@ -30,7 +30,9 @@ import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.AgentViewport
+import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
@@ -383,18 +385,86 @@ class BoxViewModel @JvmOverloads constructor(
      */
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        val attachments = mutableUiState.value.pendingAttachments
+        // A picture on its own is a message. "Look at this" is often the whole thought, and
+        // requiring a word alongside it would be Box asking for something it does not need.
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
         wakeComputerIfNeeded()
         val sessionId = mutableUiState.value.selectedSessionId
-        mutableUiState.update { it.copy(queued = it.queued + QueuedPrompt(sessionId, trimmed)) }
+        mutableUiState.update {
+            it.copy(
+                queued = it.queued + QueuedPrompt(sessionId, trimmed),
+                // Cleared here rather than after the send lands: they are on their way with this
+                // turn, and a second tap must not send them twice.
+                pendingAttachments = emptyList(),
+            )
+        }
 
         viewModelScope.launch {
             if (sessionId == null) {
                 val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@launch
-                startSession(harness.id, trimmed)
+                startSession(harness.id, trimmed, attachments)
             } else {
-                agents.send(sessionId, trimmed)
+                agents.send(sessionId, trimmed, attachments)
             }
+        }
+    }
+
+    /**
+     * Takes something the user picked, or shared in from another app, into the box.
+     *
+     * The copy happens now rather than at send, and that is the point: a `content://` uri is a
+     * loan from the app that produced it, revocable and often dead by the time the user has
+     * finished typing. Once it is in the shared folder it is a file, and the rest of Box only ever
+     * deals in paths.
+     */
+    fun attach(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            Inbox.receive(getApplication(), uri)
+                .onSuccess { attachment ->
+                    mutableUiState.update {
+                        it.copy(pendingAttachments = it.pendingAttachments + attachment)
+                    }
+                }
+                .onFailure { failure -> showNotice(failure.message ?: "That file could not be attached.") }
+        }
+    }
+
+    /**
+     * Files another app handed to Box through the share sheet.
+     *
+     * Beyond taking them in, this has to put them somewhere they can be *seen*. A share can reach
+     * Box with nothing open — the home surface has no composer once the box has settled — and an
+     * attachment nobody can see is the same as one that never arrived. So the newest conversation
+     * is selected, or one is started if this box has never had a conversation at all, which is
+     * exactly what someone who just shared a picture to a chat app expects to be looking at.
+     */
+    fun receiveShared(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        uris.forEach(::attach)
+        val state = mutableUiState.value
+        if (state.selectedSessionId != null) return
+        val newest = state.sessions.firstOrNull()
+        if (newest != null) {
+            selectSession(newest.id)
+        } else {
+            state.harnesses.firstOrNull()?.let { startSession(it.id) }
+        }
+    }
+
+    /**
+     * Taken back off the composer before it was sent, and deleted.
+     *
+     * Deleting is right only here. Before sending, the copy exists because Box made one and the
+     * user has changed their mind; after sending it is a file in their own folder, on their phone,
+     * and Box removing it would be tidying up something that is no longer its business.
+     */
+    fun removeAttachment(attachment: Attachment) {
+        mutableUiState.update {
+            it.copy(pendingAttachments = it.pendingAttachments.filterNot { held -> held == attachment })
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            Inbox.phoneFile(getApplication(), attachment.guestPath)?.delete()
         }
     }
 
@@ -408,11 +478,15 @@ class BoxViewModel @JvmOverloads constructor(
         if (needsWaking) start()
     }
 
-    fun startSession(harnessId: String, prompt: String? = null) {
+    fun startSession(
+        harnessId: String,
+        prompt: String? = null,
+        attachments: List<Attachment> = emptyList(),
+    ) {
         if (mutableUiState.value.startingSession) return
         mutableUiState.update { it.copy(startingSession = true) }
         viewModelScope.launch {
-            val id = runCatching { agents.startSession(harnessId, prompt) }
+            val id = runCatching { agents.startSession(harnessId, prompt, attachments) }
                 .onFailure { error -> showNotice(error.message ?: "Box could not start that session.") }
                 .getOrNull()
             mutableUiState.update { state ->

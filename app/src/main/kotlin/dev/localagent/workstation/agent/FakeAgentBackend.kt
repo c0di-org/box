@@ -98,7 +98,11 @@ class FakeAgentBackend(
     override fun connection(sessionId: String): StateFlow<SessionConnection> =
         connections.getOrPut(sessionId) { MutableStateFlow(SessionConnection.Live) }.asStateFlow()
 
-    override suspend fun startSession(harnessId: String, prompt: String?): String {
+    override suspend fun startSession(
+        harnessId: String,
+        prompt: String?,
+        attachments: List<Attachment>,
+    ): String {
         val id = "s-${ids.incrementAndGet()}"
         val title = prompt?.take(48)?.ifBlank { null } ?: "New conversation"
         sessionList.update {
@@ -126,18 +130,25 @@ class FakeAgentBackend(
         scope.launch {
             delay((900 * pace).toLong())
             connections[id]?.value = SessionConnection.Live
-            if (prompt != null) runGenericScript(id, prompt)
+            if (prompt != null) {
+                // The first turn is a turn like any other, and it is the one most likely to be
+                // carrying a picture — someone shares a screenshot and starts a conversation about
+                // it. Going through `send` rather than straight to the script is what puts it in
+                // the transcript with whatever came with it.
+                send(id, prompt, attachments)
+            }
         }
         return id
     }
 
-    override suspend fun send(sessionId: String, text: String) {
+    override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
         emit(
             AgentEvent.UserMessage(
                 eventId = next(),
                 sessionId = sessionId,
                 at = System.currentTimeMillis(),
                 text = text,
+                attachments = attachments,
             ),
         )
         touch(sessionId, SessionStatus.Active)

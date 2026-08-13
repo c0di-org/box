@@ -69,6 +69,7 @@ sealed interface AgentEvent {
         override val sessionId: String,
         override val at: Long,
         val text: String,
+        val attachments: List<Attachment> = emptyList(),
     ) : AgentEvent
 
     /**
@@ -374,6 +375,30 @@ sealed interface AgentActivity {
     /** The agent asked a question and is parked until the user replies. */
     data object AwaitingInput : AgentActivity
     data object Ended : AgentActivity
+}
+
+/**
+ * Something the user showed the agent, alongside what they typed.
+ *
+ * A field on the turn rather than a sentence in it, because the UI has to draw a thumbnail and the
+ * contract's rule is that it must never do that by parsing prose. On the wire it is one optional
+ * field, following [subAgentId]'s precedent: a harness that has never heard of attachments ignores
+ * it and the agent simply gets the text. Degraded, and never wrong — which is what separates this
+ * from `interrupt`, where an ignored field would have stopped the whole session.
+ *
+ * [guestPath] is where the file actually is, inside the box, and it is the only address that means
+ * anything to the agent. The phone-side copy is derived from it where the UI needs pixels; nothing
+ * outside the box ever sees an Android `content://` uri, which would be meaningless in there and
+ * revoked by the time anything tried.
+ */
+@Immutable
+data class Attachment(
+    val guestPath: String,
+    val name: String,
+    val mimeType: String,
+    val bytes: Long,
+) {
+    val isImage: Boolean get() = mimeType.startsWith("image/")
 }
 
 @Immutable

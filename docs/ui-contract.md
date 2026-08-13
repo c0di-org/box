@@ -134,6 +134,31 @@ itself. It started in the header's overflow menu and moved because of where it i
 asking me about this" is a thought someone has *while* being asked, and a setting nobody finds is
 one that turns into fatigue at the sheet instead.
 
+### Attachments ride on the turn
+
+`UserMessage` carries an `Attachment` list beside its text — `guestPath`, `name`, `mimeType`,
+`bytes` — because the UI has to draw a thumbnail and rule 2 above says it must never do that by
+parsing prose. On the wire it is one optional field on `prompt`, following `subAgentId`'s
+precedent: a harness that has never heard of attachments ignores it and the agent gets the text.
+Degraded, never wrong, which is what makes a field acceptable here where `stop_subagent` needed a
+type of its own.
+
+Nothing is carried in that field but a path. The file itself goes into the shared folder under
+`inbox/`, so it reaches the guest by the sync that folder already has, and `/workspace/shared/inbox`
+is the only place a harness will look — an attachment naming anything else is dropped with a
+diagnostic. Two consequences worth stating rather than discovering:
+
+- **The copy is about a second behind the keystroke,** so the harness waits for each file to be
+  whole before handing the turn to the model. Without that, the failure is the one the feature
+  exists to remove: the user shows the agent a picture and the agent says it cannot see it. If a
+  file never arrives the model is told *that*, rather than a path with nothing at it.
+- **Deleting is one-way in both directions.** A file the user deletes on the phone leaves the
+  box's copy where it is, so there is no unsend. The composer says so; do not quietly imply
+  otherwise.
+
+The harness echoes the attachments back into the log with the `user_message` it emits, which is
+what a restored transcript draws from. The app keeps no second record.
+
 `setViewport` tells the agent what it is being read on, so it can write for a phone in one hand or
 for a keyboard and a monitor rather than splitting the difference forever. On the wire it is
 `{"type": "viewport", "layout": "wide", "widthDp": 1280, "hardwareKeyboard": true}`, and it follows

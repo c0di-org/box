@@ -3,6 +3,7 @@ package dev.localagent.workstation
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentPermissionMode
+import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
@@ -137,6 +138,16 @@ data class BoxUiState(
      * message sent to a booting computer is visibly waiting rather than apparently lost.
      */
     val queued: List<QueuedPrompt> = emptyList(),
+
+    /**
+     * Files picked or shared in, waiting on the next thing the user sends.
+     *
+     * They are already written into the box's shared folder by the time they are in here — this
+     * list is what the composer draws, not a staging area. Held on the box rather than inside the
+     * composer because a file can arrive from outside it: the share sheet reaches Box with no
+     * conversation open and nothing focused, and the picture has to be somewhere when it does.
+     */
+    val pendingAttachments: List<Attachment> = emptyList(),
 
     // ---- signing in ----
     val signIn: GuestAuth.State = GuestAuth.State.Unknown,

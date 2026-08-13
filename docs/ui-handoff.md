@@ -100,7 +100,7 @@ Deliberately inert:
 Not built:
 
 - Persistence. Sessions live in the fake's memory and die with the process.
-- Attachments in the composer, session rename, search, notifications for `NeedsYou`.
+- Session rename, search, notifications for `NeedsYou`.
 
 ## Gotchas
 
