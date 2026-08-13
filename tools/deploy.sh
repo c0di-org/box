@@ -7,14 +7,19 @@ set -euo pipefail
 #   tools/deploy.sh --image         rebuild the guest image first
 #   tools/deploy.sh --wipe          drop the installed guest, workspace included, and start clean
 #   tools/deploy.sh --no-launch     install only
+#   tools/deploy.sh --no-fetch      skip the up-to-date check and deploy this checkout as it stands
 #
-# Two things about this cycle are easy to get wrong, and both are handled here rather than
+# Three things about this cycle are easy to get wrong, and all three are handled here rather than
 # remembered:
 #
 #   1. A git worktree has no local.properties, and Gradle fails on a missing SDK rather than
 #      finding the one two directories up.
 #   2. A phone attached over both USB and Wi-Fi is two adb devices, and every adb command without
 #      -s fails with "more than one device".
+#   3. A checkout that is behind its remote builds and installs perfectly happily. Nothing fails,
+#      and the app on the phone looks right -- it is simply not the code you meant to test, and
+#      you find that out by testing behaviour that was fixed a week ago. The check costs a fetch;
+#      being wrong about it costs the whole cycle, image and 950 MB install included.
 #
 # `--image` used to imply `--wipe`, and no longer does. A guest image now carries an id and a
 # version derived from its own contents, so a rebuilt one is a different image and the app installs
@@ -34,17 +39,52 @@ APK="app/build/outputs/apk/stock/debug/app-stock-debug.apk"
 build_image=0
 wipe=0
 launch=1
+fetch=1
 for argument in "$@"; do
   case "$argument" in
     --image) build_image=1 ;;
     --wipe) wipe=1 ;;
     --no-launch) launch=0 ;;
-    -h|--help) sed -n '3,25p' "$0"; exit 0 ;;
+    --no-fetch) fetch=0 ;;
+    -h|--help) sed -n '3,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $argument" >&2; exit 2 ;;
   esac
 done
 
 say() { printf '\n\033[1;32m==>\033[0m %s\n' "$1"; }
+warn() { printf '\n\033[1;31m!!\033[0m %s\n' "$1"; }
+
+# --- the branch -------------------------------------------------------------------------------
+# Ask the remote before spending ten minutes building. A checkout that is behind produces a
+# perfectly good APK of the wrong code, and the phone gives you no hint: the app launches, the
+# screens render, and only the behaviour you came to check is missing. Offline is not an error
+# here -- a deploy on a train should still work -- so a failed fetch says so and carries on.
+if (( fetch )) && git rev-parse --git-dir >/dev/null 2>&1; then
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  if [[ -z "$upstream" ]]; then
+    say "No upstream for this branch; building $(git rev-parse --short HEAD) as it stands."
+  elif ! git fetch --quiet 2>/dev/null; then
+    say "Could not reach the remote; building $(git rev-parse --short HEAD) as it stands."
+  else
+    behind="$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)"
+    if (( behind > 0 )); then
+      warn "This checkout is $behind commit(s) behind $upstream:"
+      git log --oneline "HEAD..$upstream" | sed 's/^/    /'
+      cat <<EOF
+
+Deploying now installs an APK missing all of that. If any of it touches guest/, the image
+would be behind as well, and a new host against an old guest fails at the handshake rather
+than at the build.
+
+  git merge --ff-only $upstream
+  tools/deploy.sh $* --no-fetch      to deploy this checkout anyway
+
+EOF
+      exit 1
+    fi
+    say "Up to date with $upstream ($(git rev-parse --short HEAD))"
+  fi
+fi
 
 # --- the device -------------------------------------------------------------------------------
 # One phone on both transports answers twice. Prefer USB: it is faster for an 800 MB install and
