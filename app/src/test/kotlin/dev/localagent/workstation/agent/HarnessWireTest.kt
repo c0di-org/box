@@ -324,4 +324,34 @@ class HarnessWireTest {
         assertEquals("Add a key", event.detail)
         assertEquals(false, event.recoverable)
     }
+
+    // ---- an agent asking for an account ------------------------------------
+
+    @Test
+    fun `a request for an account carries the agent's own reason for it`() {
+        val event = parse(
+            """{"type":"connect_requested","requestId":"connect-1","service":"github","reason":"to clone garfbargle/box"}""",
+        ) as AgentEvent.ConnectRequested
+
+        assertEquals("connect-1", event.requestId)
+        assertEquals(ConnectService.GitHub, event.service)
+        // The only explanation the person gets before deciding, so it survives the wire intact.
+        assertEquals("to clone garfbargle/box", event.reason)
+    }
+
+    @Test
+    fun `an agent that gave no reason is still a request, not a dropped line`() {
+        val event = parse(
+            """{"type":"connect_requested","requestId":"connect-2","service":"github","reason":null}""",
+        ) as AgentEvent.ConnectRequested
+
+        assertNull(event.reason)
+    }
+
+    @Test
+    fun `an account this build cannot connect is dropped rather than drawn`() {
+        // The harness in the guest is upgraded on its own schedule, so it can ask for a service
+        // this app has never heard of. A button that opens nothing is worse than no button.
+        assertNull(parse("""{"type":"connect_requested","requestId":"c-3","service":"gitlab"}"""))
+    }
 }

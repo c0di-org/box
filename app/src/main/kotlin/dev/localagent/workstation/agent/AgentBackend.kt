@@ -66,6 +66,14 @@ interface AgentBackend {
     /** Answers the outstanding [AgentEvent.PermissionRequested]. Idempotent per request id. */
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
 
+    /**
+     * Answers the outstanding [AgentEvent.ConnectRequested].
+     *
+     * Carries the outcome, never the credential — the token was written inside the guest by the
+     * program that obtained it, and this only tells the agent that it may now use git.
+     */
+    suspend fun resolveConnect(sessionId: String, requestId: String, outcome: ConnectOutcome)
+
     /** Ctrl-C equivalent: stop what the agent is doing, keep the session. */
     suspend fun interrupt(sessionId: String)
 
@@ -83,6 +91,20 @@ interface AgentBackend {
     /** Tear the session down and forget it. */
     suspend fun closeSession(sessionId: String)
 }
+
+/**
+ * What became of a [AgentEvent.ConnectRequested], in the only terms the agent needs.
+ *
+ * [login] and [repositories] are here because they change what the agent should do next: knowing
+ * the box can reach four repositories and not a fifth is the difference between trying the clone
+ * and explaining why it will not work. The credential itself is deliberately absent and there is
+ * nowhere in this type to put one.
+ */
+data class ConnectOutcome(
+    val connected: Boolean,
+    val login: String? = null,
+    val repositories: Int? = null,
+)
 
 /**
  * Ask, or don't.

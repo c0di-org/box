@@ -431,6 +431,25 @@ class GuestAgentBackend(
         )
     }
 
+    override suspend fun resolveConnect(
+        sessionId: String,
+        requestId: String,
+        outcome: ConnectOutcome,
+    ) {
+        val record = records[sessionId] ?: return
+        record.write(
+            buildMap {
+                put("type", "connect_result")
+                put("requestId", requestId)
+                put("connected", outcome.connected)
+                // Omitted rather than sent as null: the harness reads these to build a sentence,
+                // and "connected as null" is worse than a sentence that does not mention a name.
+                outcome.login?.let { put("login", it) }
+                outcome.repositories?.let { put("repositories", it) }
+            },
+        )
+    }
+
     override suspend fun interrupt(sessionId: String) {
         records[sessionId]?.write(mapOf("type" to "interrupt"))
     }

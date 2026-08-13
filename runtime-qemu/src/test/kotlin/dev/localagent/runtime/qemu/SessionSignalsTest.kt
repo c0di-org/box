@@ -6,9 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * `:computer` reads the harness stream for two facts only. These pin that it stays two facts —
- * and, more importantly, that everything else is silence rather than a crash in the process that
- * is running the VM.
+ * `:computer` reads the harness stream for the few facts a notification can be built from. These
+ * pin that it stays a few — and, more importantly, that everything else is silence rather than a
+ * crash in the process that is running the VM.
  */
 class SessionSignalsTest {
 
@@ -68,5 +68,21 @@ class SessionSignalsTest {
         assertNull(SessionSignals.read("not json at all"))
         assertNull(SessionSignals.read(""))
         assertNull(SessionSignals.read("   "))
+    }
+
+    @Test
+    fun `an agent waiting on an account is worth a notification`() {
+        val signal = SessionSignals.read(
+            """{"type":"connect_requested","requestId":"c-1","service":"github","reason":"to clone garfbargle/box"}""",
+        )
+        assertEquals(SessionSignals.Signal.NeedsYou("It needs you to connect GitHub"), signal)
+    }
+
+    @Test
+    fun `an account this build has no words for still says somebody is needed`() {
+        val signal = SessionSignals.read(
+            """{"type":"connect_requested","requestId":"c-2","service":"gitlab"}""",
+        )
+        assertEquals(SessionSignals.Signal.NeedsYou("It needs you to connect an account"), signal)
     }
 }

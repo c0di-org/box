@@ -50,6 +50,13 @@ HOME = Path("/home/agent")
 # credential on the disk that survives.
 CLAUDE_CONFIG_DIR = WORKSPACE / ".config" / "claude"
 
+# git's own state, on the workspace disk for exactly the reason above: the box's commit identity
+# and its GitHub credential helper are configured once, when the user connects GitHub, and a
+# ~/.gitconfig would be thrown away by the next image update -- signing the user out of git
+# silently and leaving `git commit` failing with "please tell me who you are".
+GIT_CONFIG = WORKSPACE / ".config" / "git" / "config"
+GH_CONFIG_DIR = WORKSPACE / ".config" / "gh"
+
 MAX_FRAME_PAYLOAD = 64 * 1024
 INITIAL_WINDOW_BYTES = 128 * 1024
 MAX_CONCURRENT_STREAMS = 32
@@ -167,6 +174,13 @@ def child_environment(extra: Any) -> dict[str, str]:
         **os.environ,
         "HOME": str(HOME),
         "CLAUDE_CONFIG_DIR": str(CLAUDE_CONFIG_DIR),
+        "GIT_CONFIG_GLOBAL": str(GIT_CONFIG),
+        "GH_CONFIG_DIR": str(GH_CONFIG_DIR),
+        # git asks for a username on the terminal when it has no credential, which on a pty
+        # session is a prompt nobody is looking at and a session that hangs until it is killed.
+        # Off, so an unauthenticated clone fails in a second with a message the agent can read
+        # and act on -- which is what lets it ask the user to connect GitHub instead of stalling.
+        "GIT_TERMINAL_PROMPT": "0",
     }
     if extra is None:
         return environment

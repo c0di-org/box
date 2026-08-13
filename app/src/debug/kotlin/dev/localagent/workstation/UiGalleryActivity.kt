@@ -16,6 +16,8 @@ import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.FakeAgentBackend
+import dev.localagent.workstation.agent.ConnectService
+import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.TranscriptBuilder
@@ -103,6 +105,13 @@ class UiGalleryActivity : ComponentActivity() {
                     onOpenInPhoneFiles = {},
                     onNoticeShown = {},
                     onDismissGreeting = model::dismissGreeting,
+                    // The gallery is usable by hand as well as photographed, so the sheet it can
+                    // reach has to be closable. Nothing behind it connects to anything: there is
+                    // no box here to hold a credential.
+                    onShowGitHub = model::showGitHub,
+                    onResumeConnection = model::showGitHub,
+                    onDismissGitHub = model::hideGitHub,
+                    onDeclineConnection = model::declineConnection,
                     desktop = if (state.destination == BoxDestination.Computer) StubDesktop else null,
                     onSetDesktopControl = model::control,
                 )
@@ -127,6 +136,9 @@ val SCENES = listOf(
     "chat",
     "permission",
     "subagent",
+    "github-ask",
+    "github-code",
+    "github-repos",
     // The machine.
     "computer",
     "computer-chat",
@@ -249,6 +261,51 @@ private class GalleryModel(private val scope: CoroutineScope) {
                 computer(ComputerPanel.Chat)
             }
 
+            // An agent mid-clone, holding its turn open on an account only the user can grant.
+            // Reachable nowhere else: the fake backend never asks, because it has no VM to ask for.
+            "github-ask" -> {
+                select(headline)
+                allowPending()
+                settle()
+                mutable.update { it.copy(connectRequest = CLONE_REQUEST.copy(sessionId = headline)) }
+            }
+
+            // The sheet the ask opens, with the code already on the clipboard.
+            "github-code" -> {
+                select(headline)
+                allowPending()
+                settle()
+                mutable.update {
+                    it.copy(
+                        connectRequest = CLONE_REQUEST.copy(sessionId = headline),
+                        githubVisible = true,
+                        github = GitHubAuth.State.AwaitingApproval(
+                            userCode = "WDJB-MJHT",
+                            url = "https://github.com/login/device?user_code=WDJB-MJHT",
+                            expiresAtElapsedRealtime = SystemClock.elapsedRealtime() + 13 * 60_000L,
+                            reason = CLONE_REQUEST.reason,
+                        ),
+                    )
+                }
+            }
+
+            // The second step, which is the one that is actually about trust.
+            "github-repos" -> {
+                select(headline)
+                allowPending()
+                settle()
+                mutable.update {
+                    it.copy(
+                        connectRequest = CLONE_REQUEST.copy(sessionId = headline),
+                        githubVisible = true,
+                        github = GitHubAuth.State.ChoosingRepositories(
+                            url = "https://github.com/apps/box/installations/new",
+                            login = "codi",
+                        ),
+                    )
+                }
+            }
+
             "terminal" -> computer(ComputerPanel.Terminal)
 
             "files" -> computer(ComputerPanel.Files)
@@ -284,6 +341,12 @@ private class GalleryModel(private val scope: CoroutineScope) {
     // -----------------------------------------------------------------------
     // Interaction — the gallery is meant to be usable by hand, not only photographed
     // -----------------------------------------------------------------------
+
+    fun showGitHub() = mutable.update { it.copy(githubVisible = true) }
+
+    fun hideGitHub() = mutable.update { it.copy(githubVisible = false) }
+
+    fun declineConnection() = mutable.update { it.copy(githubVisible = false, connectRequest = null) }
 
     fun select(sessionId: String?) {
         selection.value = sessionId
@@ -322,6 +385,14 @@ private class GalleryModel(private val scope: CoroutineScope) {
 }
 
 /** What the shell tools would be showing if a box were open. */
+/** The ask the scripted "clone my project" conversation would make on a box with no credential. */
+private val CLONE_REQUEST = ConnectRequest(
+    sessionId = "",
+    requestId = "connect-1",
+    service = ConnectService.GitHub,
+    reason = "to clone garfbargle/awesome-app",
+)
+
 private val SHELL_HISTORY = listOf(
     CommandRecord(
         id = 1,

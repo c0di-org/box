@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.CallMerge
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowDropDown
@@ -85,6 +86,7 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.ConnectRequest
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionDecision
@@ -121,6 +123,8 @@ fun ConversationPane(
      */
     showBoxState: Boolean = true,
     onSignIn: () -> Unit = {},
+    onConnectGitHub: () -> Unit = {},
+    onDeclineConnection: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     onAttachPhoto: (() -> Unit)? = null,
     onAttachFile: (() -> Unit)? = null,
@@ -149,8 +153,10 @@ fun ConversationPane(
          * These were drawn one under another, and two of them together pushed the conversation a
          * fifth of the way down a 1384px pane with neither dismissable. They are also not equally
          * urgent, and stacking them said they were. The order below is "what most stands between
-         * the user and the thing they came here to do": no credential beats no computer beats a
-         * dropped connection beats a standing setting.
+         * the user and the thing they came here to do": no credential beats no computer beats an
+         * agent stopped waiting to be answered beats a dropped connection beats a standing
+         * setting. The first two are Box being unusable, the third is work that has actually
+         * halted, and the last two are noise the user can do nothing about.
          *
          * Each condition is spelled out rather than left to the banner's own early return,
          * because a `when` that picks a branch which then draws nothing would silently hide the
@@ -160,12 +166,21 @@ fun ConversationPane(
         val connectionTrouble = state.computerReady &&
             state.connection !is SessionConnection.Live &&
             state.connection !is SessionConnection.Ended
+        val connectRequest = state.connectRequest?.takeIf { it.sessionId == state.selectedSessionId }
         when {
             state.needsSignIn -> SignInBanner(onSignIn)
             // While the computer is down, its own banner is the true and actionable one. Showing
             // the transport's view as well says the same thing twice, in red, about a normal state.
             showBoxState && state.runtimeState != RuntimeState.Ready ->
                 ComputerBanner(state.runtimeState, onStartComputer)
+
+            // An agent that has stopped and is waiting to be answered, for *this* conversation.
+            // Above the reconnect below it because it is blocking real work and the user can act
+            // on it, where a reconnect is transient and there is nothing to do but wait. Only for
+            // the selected session: an agent in another task asking for an account is that task's
+            // business until the user opens it.
+            connectRequest != null ->
+                ConnectBanner(connectRequest, onConnectGitHub, onDeclineConnection)
 
             connectionTrouble -> ConnectionBanner(state.connection)
 
@@ -412,6 +427,8 @@ private fun Banner(
     title: String,
     body: String?,
     action: Pair<String, () -> Unit>? = null,
+    /** A second, quieter answer. Only for banners where declining is a real thing to say. */
+    secondary: Pair<String, () -> Unit>? = null,
 ) {
     Surface(color = tint.copy(alpha = 0.10f), contentColor = tint, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -429,6 +446,11 @@ private fun Banner(
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+            secondary?.let { (label, onClick) ->
+                TextButton(onClick = onClick) {
+                    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             action?.let { (label, onClick) ->
@@ -621,6 +643,33 @@ private fun QueuedMessage(prompt: QueuedPrompt, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
         )
     }
+}
+
+/**
+ * An agent holding its turn open, waiting for an account only the person can grant.
+ *
+ * It stays until it is answered rather than until it is dismissed, because behind it a tool call
+ * is genuinely blocked — the SDK pauses one indefinitely, which is what lets the same turn carry
+ * on with the clone afterwards. So closing the sheet does not answer it, and the only ways out are
+ * the two written here.
+ *
+ * The agent's own reason is the body. It knows what it was in the middle of, and "to clone
+ * garfbargle/box" is a better sentence than anything this file could have written in advance.
+ */
+@Composable
+private fun ConnectBanner(
+    request: ConnectRequest,
+    onConnect: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Banner(
+        tint = MaterialTheme.colorScheme.tertiary,
+        icon = { Icon(Icons.AutoMirrored.Outlined.CallMerge, null, Modifier.size(17.dp)) },
+        title = "Connect GitHub",
+        body = request.reason,
+        action = "Connect" to onConnect,
+        secondary = "Not now" to onDecline,
+    )
 }
 
 /**

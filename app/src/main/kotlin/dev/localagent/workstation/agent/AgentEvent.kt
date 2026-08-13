@@ -190,6 +190,24 @@ sealed interface AgentEvent {
     ) : AgentEvent
 
     /** "Open computer" / "Open preview" affordances the agent offers mid-transcript. */
+    /**
+     * The agent asking for an account this box does not have, and waiting for an answer.
+     *
+     * A sibling of [PermissionRequested] rather than a kind of it, because the question is not
+     * "may it do this" — it is "will you go and get something only you can get". Nothing is
+     * blocked on a policy; the agent is holding a tool call open while a person visits GitHub, and
+     * the transcript should say so rather than render a sheet nobody can answer from here.
+     */
+    data class ConnectRequested(
+        override val eventId: String,
+        override val sessionId: String,
+        override val at: Long,
+        val requestId: String,
+        val service: ConnectService,
+        /** The agent's own half-line for what it needs the account for, if it gave one. */
+        val reason: String?,
+    ) : AgentEvent
+
     data class ArtifactOffered(
         override val eventId: String,
         override val sessionId: String,
@@ -433,4 +451,21 @@ sealed interface SessionOutcome {
     data class Completed(val summary: String? = null) : SessionOutcome
     data class Failed(val message: String) : SessionOutcome
     data object Interrupted : SessionOutcome
+}
+
+
+/**
+ * Accounts an agent can ask Box to connect.
+ *
+ * An enum with one member, which is the point: the wire carries a name, and a name Box has never
+ * heard of has to be droppable rather than drawable. A future harness asking for something this
+ * version of the app cannot connect must not put an unanswerable button in the conversation.
+ */
+enum class ConnectService(val wire: String) {
+    GitHub("github"),
+    ;
+
+    companion object {
+        fun of(wire: String): ConnectService? = entries.firstOrNull { it.wire == wire }
+    }
 }
