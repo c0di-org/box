@@ -814,16 +814,33 @@ private fun PendingPermissionCard(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             // A command gets room to be read whole. This card is not a summary of
-                            // the decision in the wide layout -- it *is* the decision, now that the
-                            // sheet no longer opens over it -- and "allow this command" with the
-                            // command ellipsized is not a question anyone can answer. Still
-                            // bounded, so one pathological line cannot take the pane.
+                            // the decision -- it *is* the decision, now that the sheet no longer
+                            // opens over it -- and "allow this command" with the command
+                            // ellipsized is not a question anyone can answer. Still bounded, so
+                            // one pathological line cannot take the pane.
                             maxLines = if (item.ask is PermissionAsk.RunCommand) 6 else 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
                 RowChevron()
+            }
+            /*
+             * The diff, in the card, before anything is decided.
+             *
+             * The promise is that nothing is edited without the change being put in front of the
+             * person first, and the sheet used to keep it by arriving uninvited. It no longer
+             * does, so the card has to keep it instead — the same renderer the sheet uses, capped at
+             * the same fourteen lines the transcript's own diff card shows, with the rest a tap
+             * away on the card. That is most real edits whole and enough of a large one to
+             * recognise; "+N more lines" says when it is not.
+             */
+            (item.ask as? PermissionAsk.EditFile)?.let { edit ->
+                DiffView(
+                    diff = edit.diff,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp),
+                    maxLines = 14,
+                )
             }
             Row(
                 Modifier.fillMaxWidth(),
@@ -857,7 +874,9 @@ private fun PendingPermissionCard(
 /** Enough of the ask to answer a familiar one without opening the sheet for the whole story. */
 private fun askOneLiner(ask: PermissionAsk): String? = when (ask) {
     is PermissionAsk.RunCommand -> ask.command
-    is PermissionAsk.EditFile -> ask.diff.path
+    // Nothing: the diff drawn underneath carries the path and the counts in its own header, and
+    // saying it here as well is the file named twice, an inch apart.
+    is PermissionAsk.EditFile -> null
     is PermissionAsk.NetworkAccess -> ask.purpose ?: ask.host
     is PermissionAsk.Generic -> ask.description
 }

@@ -1411,6 +1411,12 @@ async function main() {
       // It is an allowance rather than a mode. On its own it changes nothing: the session still
       // starts and stays in whatever `permissionMode` says, and the only thing this adds is that
       // the answer the user actually chose is now a legal one.
+      //
+      // One dependency worth naming, because breaking it kills every session rather than one
+      // feature: the CLI refuses to run *at all* with bypass in play as uid 0 outside a sandbox.
+      // Box's harness is started by agentd, which systemd runs as `agent` — see
+      // guest/systemd/local-agentd.service. A unit that ever gained `User=root` would take this
+      // with it.
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
       // Showing something is the one tool that is never asked about. A sheet reading "allow the
