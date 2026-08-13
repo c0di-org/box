@@ -112,6 +112,14 @@ fun ConversationPane(
     modifier: Modifier = Modifier,
     onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = true,
+    /**
+     * Whether this pane is the one that reports the box's own state.
+     *
+     * False in `Wide`, where the task list beside it already leads with the box and its Open
+     * button. See the call site in [BoxApp]; the default is true so the pane on its own always
+     * says it.
+     */
+    showBoxState: Boolean = true,
     onSignIn: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     onAttachPhoto: (() -> Unit)? = null,
@@ -156,7 +164,7 @@ fun ConversationPane(
             state.needsSignIn -> SignInBanner(onSignIn)
             // While the computer is down, its own banner is the true and actionable one. Showing
             // the transport's view as well says the same thing twice, in red, about a normal state.
-            state.runtimeState != RuntimeState.Ready ->
+            showBoxState && state.runtimeState != RuntimeState.Ready ->
                 ComputerBanner(state.runtimeState, onStartComputer)
 
             connectionTrouble -> ConnectionBanner(state.connection)
@@ -174,7 +182,7 @@ fun ConversationPane(
 
         Box(Modifier.weight(1f)) {
             when {
-                session == null && queued.isEmpty() -> NoSessionState()
+                session == null && queued.isEmpty() -> NoSessionState(state.tasks.isNotEmpty())
                 // Not while the box is opening: nothing can arrive until it does, the banner
                 // above already says so, and a spinner that has to run for three minutes is the
                 // app pretending to work.
@@ -638,8 +646,18 @@ private fun TranscriptLoading() {
     }
 }
 
+/**
+ * Nothing selected — which is two different situations, and it used to say the same thing about
+ * both.
+ *
+ * "Pick a task" is instruction the reader cannot follow when there is nothing in the list, which
+ * is exactly the state a new box is in. The composer under it is live and does work in both cases:
+ * typing with nothing selected opens a task and sends into it (see `BoxViewModel.sendMessage`), so
+ * the second title is a description of what is already true rather than a new affordance.
+ */
 @Composable
-private fun NoSessionState() = EmptyState("Pick a task")
+private fun NoSessionState(hasTasks: Boolean) =
+    EmptyState(if (hasTasks) "Pick a task" else "Start a task")
 
 @Composable
 private fun EmptyTranscriptState(harness: HarnessDescriptor?) =

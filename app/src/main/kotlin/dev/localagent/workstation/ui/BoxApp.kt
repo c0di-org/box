@@ -257,6 +257,13 @@ fun BoxApp(
                     },
                     modifier = modifier,
                     showComputerAction = showComputerAction,
+                    // In `Wide` the task list is beside this, and the box's own state is the
+                    // first thing on it -- a card reading "Your box is closed / Nothing is
+                    // running / Open". Repeating it as a banner over the transcript said the same
+                    // sentence twice, about six inches apart, with the same button on both. The
+                    // list owns it there. In `Single` they are different screens and never
+                    // collide, so the banner is the only place it can be said at all.
+                    showBoxState = layout == BoxLayout.Single,
                     onSignIn = onShowSignIn,
                     onSetPermissionMode = onSetPermissionMode,
                     onAttachPhoto = onAttachPhoto,

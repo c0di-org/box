@@ -288,16 +288,80 @@ Also good, and worth keeping: the header adapts properly — the pill shortens f
 
 1. ~~**Let the guest's screen follow the window.**~~ **Done — 12 Aug 2026.** Not by the route this
    proposed, which turned out to be closed; see *The guest's screen now follows the window* below.
-2. **Decide who owns a permission request per layout.** Today `Wide` shows the inline card and the
-   bottom sheet at once, with the sheet covering the hint that points at the card. Pick one per
-   layout rather than rendering both.
-3. **Name tasks after their work.** "New conversation · Claude Code · /workspace", repeated, is not
-   a list. Title from the first message; use the subtitle for state, not for a path that never
-   varies.
-4. **Give the desktop shape its own home surface.** "Pick a task" in a 1716×1384 pane is a phone
-   empty state that got stretched. On desktop the computer itself is the obvious default content.
-5. **Make the banners a single, ranked strip.** Two undismissible stacked banners, one of which
-   contradicts the screen beneath it, is where the transcript starts today.
+2. ~~**Decide who owns a permission request per layout.**~~ **Done — 12 Aug 2026.** `Single`
+   keeps the sheet, `Wide` keeps the inline card, and tapping Review still opens the sheet in
+   either. It was the automatic one that was wrong, not the sheet.
+3. ~~**Name tasks after their work.**~~ **Done — 12 Aug 2026.** A task takes its name from the
+   first thing said in it, and the subtitle carries how long ago rather than `/workspace`.
+4. **Give the desktop shape its own home surface.** Partly done: "Pick a task" was instruction
+   nobody could follow with an empty list, and now reads "Start a task" in that case — the
+   composer under it already opens one. The larger DeX-specific move, making the computer itself
+   the default content of a 1716×1384 pane, is still open and has not been photographed on a
+   monitor. See below.
+5. ~~**Make the banners a single, ranked strip.**~~ **Done — 12 Aug 2026.** One banner, ranked,
+   and it goes quiet while a permission request is outstanding.
+
+## What was fixed in the UI, and what it cost to find
+
+All verified on the device, in the shape named. `tablet-wide-one-banner.png` and
+`tablet-tasks-named.png` are the after shots; `dex-tasks.png` and `tablet-wide.png` are the before.
+
+### One owner per permission, one banner
+
+`Wide` drew the inline card *and* the sheet, both live. Each layout owns one now — `Single` the
+sheet, `Wide` the card — and Review still opens the sheet in either, because asking for it is
+different from being given it. The choice is made inside `BoxWithConstraints`, which is the only
+place the layout is known; that costs nothing, since a `ModalBottomSheet` is its own window and is
+positioned against the screen rather than against whatever contains it.
+
+The banners were a stack of up to four, none dismissable. They are ranked now and only the first is
+drawn: no credential, then no computer, then a dropped connection, then a standing setting. Each
+condition had to be spelled out rather than left to the banner's own early return — a `when` that
+picks a branch which then draws nothing would silently hide the banner underneath it.
+
+Two related things fell out of doing it:
+
+- **"Approving everything" is silent while a request is outstanding.** It was being drawn directly
+  above a prompt asking the user to approve something, and both cannot be true.
+- **The box's state is no longer said twice in `Wide`.** The task list beside the transcript already
+  leads with the box and its Open button; repeating it as a banner said the same sentence twice,
+  about six inches apart, with the same button on both. `Single` still says it, because there the
+  two are different screens and never collide.
+
+### Tasks are named after their work
+
+A task started from the button had no prompt to be named after and kept its placeholder forever.
+It now takes its name from the first thing the user says in it — the first only, because a title
+that moves under the reader is worse than a dull one. Restored sessions count as already named:
+renaming a task somebody has been looking at for a week, because a message happened to arrive,
+would be worse than the stale name. That is why the two older rows in the after shot still read
+"New conversation" — they are from before this existed, and that is correct.
+
+The subtitle carried `/workspace`, which is the working directory of every task there has ever
+been. It carries the agent's last line when there is one and how long ago otherwise, which is
+different for every row.
+
+### The two clipped things
+
+- **"↓ Latest" has its own lane** between the transcript and the composer. Padding cannot fix a
+  floating pill: `contentPadding` only pads the ends of a list, and the pill sits over the
+  *viewport* — so any line scrolled under it is covered, and the pill exists precisely when the
+  user is scrolled somewhere in the middle.
+- **The box's row fits its own third line.** It was clipped through the descenders by about a
+  pixel: 40dp of chrome left 60dp for text, and the wrapped three-line case needs 61dp.
+
+  This one bit twice. Relaxing the row from an exact height to a minimum looked like the obvious
+  fix and **took the whole task list off the screen** — `RowFrame` centres its content with
+  `fillMaxHeight`, so with no upper bound the row expanded until it had eaten everything below it.
+  Caught on the device, which is the only place it was visible; nothing about it fails to compile,
+  and every test still passed. The height stays exact and the constant grew instead.
+
+### The empty pane
+
+"Pick a task" is instruction the reader cannot follow when the list is empty, which is the state a
+new box is in. It says "Start a task" then — a description of what the composer under it already
+does, since typing with nothing selected opens a task and sends into it. The bigger desktop
+question, what a 1716×1384 pane should hold instead of a centred icon, is still open.
 
 ## Evidence
 
@@ -316,6 +380,9 @@ In `docs/assets/screenshots/device/`, all taken on the Fold 7:
 | `phone-conversation.png` | `Single` conversation, and the "↓ Latest" pill over a full line |
 | `phone-computer-letterboxed.png` | The computer on a phone, before — ~70% of the pane is black bar |
 | `phone-computer-fitted.png` | The same machine after: portrait, edge to edge, terminal legible |
+| `phone-tasks-dated.png` | `Single` list after: subtitles carry a time, not `/workspace` |
+| `tablet-wide-one-banner.png` | `Wide` after: one banner, and the box's state said once |
+| `tablet-tasks-named.png` | A task named from its first message, beside two older ones |
 
 Two of these (`dex-permission-asked-twice.png`, `tablet-wide.png`) contain real conversation text
 from the device they were taken on. They are fine as evidence in this document; check them before
