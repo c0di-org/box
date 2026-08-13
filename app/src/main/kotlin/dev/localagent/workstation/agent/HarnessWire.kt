@@ -141,6 +141,15 @@ internal object HarnessWire {
                 )
             }
 
+            // Unconditional, unlike the request above: a service this build cannot draw still has
+            // to be able to *stop* being drawn, and a resolution for a request that was never
+            // rendered is harmlessly ignored downstream.
+            "connect_resolved" -> AgentEvent.ConnectResolved(
+                eventId, session, at,
+                requestId = json.optString("requestId"),
+                connected = json.optBoolean("connected"),
+            )
+
             "permission_resolved" -> AgentEvent.PermissionResolved(
                 eventId, session, at,
                 requestId = json.optString("requestId"),

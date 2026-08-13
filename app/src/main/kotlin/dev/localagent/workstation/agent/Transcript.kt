@@ -366,6 +366,12 @@ class TranscriptBuilder(
              */
             is AgentEvent.ConnectRequested -> Unit
 
+            /** Ditto, and its ending is drawn by the card ceasing to exist. */
+            is AgentEvent.ConnectResolved -> Unit
+
+            /** A marker about this reading of the log, not a thing that happened in it. */
+            is AgentEvent.CaughtUp -> Unit
+
             is AgentEvent.AgentError ->
                 put(
                     TranscriptItem.Error(

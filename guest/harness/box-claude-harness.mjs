@@ -1212,6 +1212,13 @@ function connectTool(tool, z) {
         reason: clip(String(args.reason ?? ''), 160) || null,
       });
       const outcome = await settled;
+      // The counterpart to the event above, and the reason it exists is replay: a session log is
+      // read from the beginning every time somebody opens the task, so a request with no recorded
+      // ending is indistinguishable from one still waiting. Without this line, a connection made
+      // last week comes back as a live card — with last week's reason on it — every time the
+      // conversation is opened, and answering it does nothing because this map moved on long ago.
+      // `permission_resolved` has always existed for exactly this reason; this is its sibling.
+      emit({ type: 'connect_resolved', requestId, connected: Boolean(outcome?.connected) });
 
       if (outcome?.connected) {
         const account = outcome.login ? `as ${outcome.login}` : '';

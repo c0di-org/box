@@ -1,6 +1,7 @@
 package dev.localagent.workstation.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -425,5 +426,34 @@ class HarnessWireTest {
         // The harness in the guest is upgraded on its own schedule, so it can ask for a service
         // this app has never heard of. A button that opens nothing is worse than no button.
         assertNull(parse("""{"type":"connect_requested","requestId":"c-3","service":"gitlab"}"""))
+    }
+
+    @Test
+    fun `a request that ended says so, which is what stops a replay reopening it`() {
+        val event = parse(
+            """{"type":"connect_resolved","requestId":"connect-1","connected":true}""",
+        ) as AgentEvent.ConnectResolved
+
+        assertEquals("connect-1", event.requestId)
+        assertEquals(true, event.connected)
+    }
+
+    @Test
+    fun `declining is an ending too, and reads as one`() {
+        val event = parse(
+            """{"type":"connect_resolved","requestId":"connect-2","connected":false}""",
+        ) as AgentEvent.ConnectResolved
+
+        assertEquals(false, event.connected)
+    }
+
+    @Test
+    fun `an ending is read even for a service this build cannot draw`() {
+        // Deliberately unlike the request, which is dropped when the service is unknown. A card
+        // that was never drawn is harmless to take down; one that cannot be taken down is not.
+        val event = parse(
+            """{"type":"connect_resolved","requestId":"c-3","connected":false}""",
+        )
+        assertNotNull(event as? AgentEvent.ConnectResolved)
     }
 }

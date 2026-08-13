@@ -86,6 +86,15 @@ class BoxViewModel @JvmOverloads constructor(
     private var transcriptJob: Job? = null
     private var connectionJob: Job? = null
 
+    /**
+     * The session whose log is still being read back, if one is.
+     *
+     * Null means everything arriving is live. See [AgentEvent.CaughtUp] — the distinction only
+     * matters for events that are a *question*, since a question read out of a log has usually
+     * already been answered further down it.
+     */
+    private var replayingSession: String? = null
+
     /** RuntimeService owns the VM in another process; this is the only source of runtime truth. */
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -128,6 +137,31 @@ class BoxViewModel @JvmOverloads constructor(
         // Whether the guest already holds a credential is only answerable once there is a guest to
         // ask. Until then the sign-in state is honestly Unknown.
         auth.check(bound)
+        // And the same question about GitHub, which used to be asked only if somebody went looking
+        // for it in diagnostics. A box that is connected should be able to say so without being
+        // interrogated — and Box knowing the answer is what lets an agent's request be met with
+        // the repository picker rather than a whole fresh authorisation.
+        github.check(bound)
+        // A sheet raised while the box was still starting has been sitting on "Waiting for your
+        // box…". It can answer now, so the code it was meant to be showing arrives without the
+        // person having to press anything.
+        resumeWaitingConnection()
+    }
+
+    /**
+     * Starts a flow the box was not up for when it was asked for.
+     *
+     * Narrow on purpose: only where a sheet is already open against an agent that is still
+     * waiting, and only where nothing else has since taken the flow somewhere. Anything wider
+     * would restart a device flow underneath somebody who is halfway through one.
+     */
+    private fun resumeWaitingConnection() {
+        val state = mutableUiState.value
+        if (!state.githubVisible || state.connectRequest == null || !state.computerReady) return
+        when (state.github) {
+            GitHubAuth.State.Unknown, GitHubAuth.State.Disconnected -> connectGitHub(state.connectRequest.reason)
+            else -> Unit
+        }
     }
 
     @Volatile private var control: IRuntimeControl? = null
@@ -367,9 +401,16 @@ class BoxViewModel @JvmOverloads constructor(
                 transcript = null,
                 transcriptLoading = sessionId != null,
                 connection = SessionConnection.Connecting,
+                // Only the observed session's events reach this class, so an outstanding request
+                // belonging to the task being left has nobody left to keep it honest. Dropped
+                // rather than carried: coming back replays the log, which is what will say
+                // whether it is still outstanding.
+                connectRequest = null,
             )
         }
         val id = sessionId ?: return
+        // Everything until [AgentEvent.CaughtUp] is history being read back, not news.
+        replayingSession = id
 
         connectionJob = viewModelScope.launch {
             agents.connection(id).collect { connection ->
@@ -384,6 +425,11 @@ class BoxViewModel @JvmOverloads constructor(
                 builder.accept(event)
                 if (event is AgentEvent.PermissionRequested) autoApprove(id, event)
                 if (event is AgentEvent.ConnectRequested) offerConnection(id, event)
+                if (event is AgentEvent.ConnectResolved) settleConnection(event.requestId)
+                if (event is AgentEvent.CaughtUp && replayingSession == id) {
+                    replayingSession = null
+                    raiseOutstandingConnection(id)
+                }
                 // The harness echoing a prompt is the proof it arrived, so the queued copy the UI
                 // was showing in its place can go. One echo clears one copy, so the same message
                 // sent twice stays visible twice.
@@ -709,14 +755,51 @@ class BoxViewModel @JvmOverloads constructor(
      */
     private fun offerConnection(sessionId: String, event: AgentEvent.ConnectRequested) {
         mutableUiState.update {
-            it.copy(
-                connectRequest = ConnectRequest(sessionId, event.requestId, event.service, event.reason),
-                // Only for the conversation actually on screen. Raising a sheet over a different
-                // task because a backgrounded one reached this point is somebody else's interruption.
-                githubVisible = it.selectedSessionId == sessionId,
-            )
+            it.copy(connectRequest = ConnectRequest(sessionId, event.requestId, event.service, event.reason))
         }
-        if (mutableUiState.value.githubVisible) connectGitHub(event.reason)
+        // A replayed request is remembered and nothing more. The log has not finished speaking:
+        // the very next line may be the [AgentEvent.ConnectResolved] saying this was answered
+        // weeks ago, and acting now would open a sheet and start a device flow on a box that is
+        // already connected — which is what merely opening an old task used to do.
+        if (replayingSession == null) raiseOutstandingConnection(sessionId)
+    }
+
+    /**
+     * A request that is over, whoever ended it.
+     *
+     * Matched by id rather than cleared wholesale, because a log can hold several: an earlier
+     * request that was answered must not take down a later one that is genuinely still waiting.
+     */
+    private fun settleConnection(requestId: String) {
+        val outstanding = mutableUiState.value.connectRequest ?: return
+        if (outstanding.requestId != requestId) return
+        // Deliberately leaves the sheet alone. If it is open it is because somebody is looking at
+        // it, and dropping the request is enough: the "Not now" button belongs to a waiting agent
+        // and goes with it, while the rest of the sheet is still a useful thing to be looking at.
+        mutableUiState.update { it.copy(connectRequest = null) }
+    }
+
+    /**
+     * The sheet, for a request that is still waiting once everything is known.
+     *
+     * The flow is started here rather than waiting for a tap, and that is the whole difference
+     * between this and a banner. The person asked for a private repository to be cloned; the agent
+     * is holding its turn open; opening a sheet that says "press to begin" would spend the one
+     * moment where everything is already in context on a button. So the sheet arrives with eight
+     * characters in it, and the only thing left to do is the part only they can do.
+     */
+    private fun raiseOutstandingConnection(sessionId: String) {
+        val request = mutableUiState.value.connectRequest ?: return
+        if (request.sessionId != sessionId) return
+        // Only for the conversation actually on screen. Raising a sheet over a different task
+        // because a backgrounded one reached this point is somebody else's interruption.
+        if (mutableUiState.value.selectedSessionId != sessionId) return
+        mutableUiState.update { it.copy(githubVisible = true) }
+        // The manual button has always been gated on the box being up; this path never was, and
+        // the first thing the flow does is an outbound request. Started against a box whose
+        // network has not come up yet, that fails instantly and paints the sheet red. The sheet
+        // says "Waiting for your box…" instead, and [connectGitHub] runs when it is.
+        if (mutableUiState.value.computerReady) connectGitHub(request.reason)
     }
 
     private fun answerConnectRequest(outcome: ConnectOutcome) {
