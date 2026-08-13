@@ -408,6 +408,24 @@ sealed interface Artifact {
 
     /** A forwarded guest port. Inert until port forwarding lands. */
     data class Preview(val url: String, val guestPort: Int) : Artifact
+
+    /**
+     * A file in the guest worth looking at — a report, a diagram, a screenshot.
+     *
+     * Separate from [Preview] because most of what an agent makes needs no server. Requiring one
+     * to show a picture would mean the agent starting a web server to hand over a PNG, which is
+     * absurd on a machine this size; this is the variant for everything that is just a file.
+     *
+     * It carries no bytes. The path is read when the user asks for it, through the same file
+     * reader the Files panel uses — so a document artifact obeys the same size ceiling as
+     * everything else Box shows from the guest, rather than inventing a second answer to
+     * "too big".
+     */
+    data class Document(
+        val guestPath: String,
+        val name: String,
+        val mimeType: String,
+    ) : Artifact
 }
 
 @Immutable

@@ -575,6 +575,22 @@ class FakeAgentBackend(
                         artifact = Artifact.Preview("http://localhost:5173/", 5173),
                     ),
                 )
+                emit(
+                    AgentEvent.ArtifactOffered(
+                        eventId = next(),
+                        sessionId = sessionId,
+                        at = System.currentTimeMillis(),
+                        // The third kind, and the one that needs no transport at all: a file the
+                        // agent wrote, opened in the panel that already reads guest paths. It is
+                        // in the demo script because a variant nothing ever offers is a variant
+                        // nobody notices is broken.
+                        artifact = Artifact.Document(
+                            guestPath = "/workspace/awesome-app/NOTES.md",
+                            name = "NOTES.md",
+                            mimeType = "text/markdown",
+                        ),
+                    ),
+                )
                 activity(sessionId, AgentActivity.Idle)
                 touch(sessionId, SessionStatus.Idle, "The dev server is up on port 5173.")
             }

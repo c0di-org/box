@@ -67,6 +67,14 @@ internal object HarnessWire {
                     .filter { it.guestPath.isNotEmpty() },
             )
 
+            // The offer half of the artifact contract. Nothing in the guest emits these yet — see
+            // docs/ui-handoff.md — but the parser is the piece that was missing entirely: without
+            // it a harness *could* not offer one, and `ArtifactOffered` was reachable only from
+            // the in-process fake.
+            "artifact" -> artifact(json)?.let {
+                AgentEvent.ArtifactOffered(eventId, session, at, it)
+            }
+
             "message" -> AgentEvent.AgentMessage(
                 eventId, session, at,
                 messageId = json.optString("messageId", eventId),
@@ -287,6 +295,31 @@ internal object HarnessWire {
         "delete" -> ChangeKind.Delete
         "rename" -> ChangeKind.Rename
         else -> ChangeKind.Modify
+    }
+
+    /**
+     * One offered artifact, or null for a kind this build cannot draw.
+     *
+     * Null rather than a placeholder, because an artifact is a *button*: a row saying "open the
+     * thing" that opens nothing is worse than no row. That is the one place this file's usual
+     * degrade-to-a-labelled-card rule does not apply — there is nothing to label.
+     */
+    private fun artifact(json: JSONObject): Artifact? = when (json.optString("kind")) {
+        "computer" -> Artifact.Computer
+
+        "preview" -> json.optStringOrNull("url")?.let { url ->
+            Artifact.Preview(url = url, guestPort = json.optInt("guestPort"))
+        }
+
+        "document" -> json.optStringOrNull("guestPath")?.let { path ->
+            Artifact.Document(
+                guestPath = path,
+                name = json.optStringOrNull("name") ?: path.substringAfterLast('/'),
+                mimeType = json.optStringOrNull("mimeType") ?: "text/plain",
+            )
+        }
+
+        else -> null
     }
 
     private fun attachment(json: JSONObject) = Attachment(

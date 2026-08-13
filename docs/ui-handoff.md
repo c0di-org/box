@@ -101,6 +101,10 @@ Not built:
 
 - Persistence. Sessions live in the fake's memory and die with the process.
 - Session rename, search, notifications for `NeedsYou`.
+- **Anything in the guest that offers an artifact.** `AgentEvent.ArtifactOffered` is parsed from
+  the wire and all three kinds draw, but no harness emits an `artifact` line — so today they come
+  only from `FakeAgentBackend`. What is missing is the agent-facing half: a way for an agent to
+  say "look at this", which is a design question the artifact contract does not answer.
 
 ## Gotchas
 

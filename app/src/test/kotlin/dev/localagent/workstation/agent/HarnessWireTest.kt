@@ -230,6 +230,52 @@ class HarnessWireTest {
         assertEquals("Clone project and run", event.title)
     }
 
+    // ---- artifacts ----------------------------------------------------------
+
+    @Test
+    fun `a document artifact carries the path the agent wrote`() {
+        val event = parse(
+            """{"type":"artifact","kind":"document","guestPath":"/workspace/report.md","name":"report.md","mimeType":"text/markdown"}""",
+        ) as AgentEvent.ArtifactOffered
+        val document = event.artifact as Artifact.Document
+
+        assertEquals("/workspace/report.md", document.guestPath)
+        assertEquals("report.md", document.name)
+        assertEquals("text/markdown", document.mimeType)
+    }
+
+    @Test
+    fun `a document with no name is named after its path`() {
+        val event = parse(
+            """{"type":"artifact","kind":"document","guestPath":"/workspace/out/chart.png","mimeType":"image/png"}""",
+        ) as AgentEvent.ArtifactOffered
+
+        assertEquals("chart.png", (event.artifact as Artifact.Document).name)
+    }
+
+    @Test
+    fun `the computer and a forwarded port still parse`() {
+        assertEquals(
+            Artifact.Computer,
+            (parse("""{"type":"artifact","kind":"computer"}""") as AgentEvent.ArtifactOffered).artifact,
+        )
+        assertEquals(
+            Artifact.Preview("http://localhost:5173/", 5173),
+            (parse("""{"type":"artifact","kind":"preview","url":"http://localhost:5173/","guestPort":5173}""")
+                as AgentEvent.ArtifactOffered).artifact,
+        )
+    }
+
+    @Test
+    fun `an artifact this build cannot open is dropped rather than drawn`() {
+        // Unlike a tool call, an artifact is a button. A row offering to open something Box has no
+        // way to open is worse than no row, so this is the one place the labelled-card rule does
+        // not apply.
+        assertNull(parse("""{"type":"artifact","kind":"hologram","url":"x"}"""))
+        assertNull(parse("""{"type":"artifact","kind":"document"}"""))
+        assertNull(parse("""{"type":"artifact","kind":"preview","guestPort":5173}"""))
+    }
+
     // ---- the other direction -----------------------------------------------
 
     @Test

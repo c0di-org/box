@@ -134,6 +134,27 @@ itself. It started in the header's overflow menu and moved because of where it i
 asking me about this" is a thought someone has *while* being asked, and a setting nobody finds is
 one that turns into fatigue at the sheet instead.
 
+### Artifacts
+
+`ArtifactOffered` carries an `Artifact`: `Computer`, `Preview(url, guestPort)`, or
+`Document(guestPath, name, mimeType)`. On the wire it is
+`{"type": "artifact", "kind": "document", "guestPath": …, "name": …, "mimeType": …}`.
+
+`Document` exists because most of what an agent makes needs no server. Requiring one to show a
+picture would mean starting a web server to hand over a PNG — absurd on a machine this size. It
+carries no bytes: the path is read when the user asks for it, through the same reader the Files
+panel uses, so it obeys the same size ceiling as everything else Box shows from the guest rather
+than inventing a second answer to "too big". Opening one puts it in the Files panel — a view onto
+the machine that floats over it, one at a time, which is what the panel already is.
+
+The degradation rule has one deliberate exception here. Everywhere else an unknown kind renders as
+a labelled card; an artifact this build cannot open is **dropped**, because an artifact is a
+button, and a row offering to open something that opens nothing is worse than no row.
+
+**No harness emits these yet.** The parser exists and the UI draws all three, but the guest side
+has no way to offer one — see *Not built* in [ui-handoff.md](ui-handoff.md). `FakeAgentBackend`
+offers all three, which is what keeps the path honest.
+
 ### Attachments ride on the turn
 
 `UserMessage` carries an `Attachment` list beside its text — `guestPath`, `name`, `mimeType`,

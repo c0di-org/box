@@ -32,6 +32,7 @@ import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.AgentViewport
+import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.PermissionDecision
@@ -779,6 +780,32 @@ class BoxViewModel @JvmOverloads constructor(
             mutableUiState.update { it.copy(filesLoading = false) }
             showNotice(error.message ?: "Box could not read that folder.")
         }
+    }
+
+    /**
+     * Opens an artifact the agent offered, in the panel that already knows how to show a file.
+     *
+     * Not a new surface. The Files panel is a view onto the machine that floats over it one at a
+     * time — exactly what a document is — and it already reads a guest path, truncates the same
+     * way, and closes the same way. Adding a second viewer would be two places to keep right about
+     * what "too big" means.
+     */
+    fun openDocument(artifact: Artifact.Document) {
+        mutableUiState.update {
+            it.copy(
+                destination = BoxDestination.Computer,
+                computerPanel = ComputerPanel.Files,
+                filesPlace = FilesPlace.InTheBox,
+            )
+        }
+        openFile(
+            FileEntry(
+                path = artifact.guestPath,
+                name = artifact.name,
+                isDirectory = false,
+                size = 0L,
+            ),
+        )
     }
 
     fun openFile(entry: FileEntry) {

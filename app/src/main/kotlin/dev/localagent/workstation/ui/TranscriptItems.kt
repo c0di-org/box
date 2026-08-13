@@ -874,6 +874,12 @@ private fun ArtifactRow(
                     when (artifact) {
                         Artifact.Computer -> Icons.Outlined.Computer
                         is Artifact.Preview -> Icons.Outlined.Language
+                        is Artifact.Document ->
+                            if (artifact.mimeType.startsWith("image/")) {
+                                Icons.Outlined.Image
+                            } else {
+                                Icons.Outlined.Description
+                            }
                     },
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
@@ -883,7 +889,12 @@ private fun ArtifactRow(
                     when (artifact) {
                         Artifact.Computer -> "Open computer"
                         is Artifact.Preview -> "Open preview"
+                        // Named, unlike the other two: there is only ever one computer and one
+                        // preview to open, and there can be any number of documents.
+                        is Artifact.Document -> "Open ${artifact.name}"
                     },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

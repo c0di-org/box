@@ -176,6 +176,8 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
                     dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openComputer()
                     is dev.localagent.workstation.agent.Artifact.Preview ->
                         boxViewModel.openPreview("The preview")
+                    is dev.localagent.workstation.agent.Artifact.Document ->
+                        boxViewModel.openDocument(artifact)
                 }
             },
             onCloseSession = boxViewModel::closeSession,
