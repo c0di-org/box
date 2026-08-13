@@ -150,6 +150,18 @@ guest's own `xterm` through the app — the screen went portrait and stayed driv
   the largest attached surface naively would resize the guest down to 230px whenever the user left
   the computer. A surface under 400×300 is understood as a preview of a screen, not a screen.
 
+### Still to do: the windows inside the desktop do not follow it
+
+Verified in both shapes — `phone-computer-fitted.png` and `tablet-computer-fitted.png`. The
+*screen* now matches the pane in each. What does not follow is the `xterm` on it: X clients keep
+the size they were mapped at, so a terminal that filled a decent share of a 1280×800 desktop is a
+small window in the corner of a 1968×1960 one. The guest gains the room and nothing spends it.
+
+Box should not be moving the user's windows around in general, but the opening state of a fresh
+session is fair game: mapping the first terminal maximised, or nudging it with the window manager
+after a mode set, would put the space to use. Not attempted here — it is a guest-image change and
+the screen-size work deliberately needed none.
+
 ### The screen no longer blanks
 
 Opening the computer after a while showed a phone-sized field of black with `Guest disabled
@@ -383,6 +395,7 @@ In `docs/assets/screenshots/device/`, all taken on the Fold 7:
 | `phone-tasks-dated.png` | `Single` list after: subtitles carry a time, not `/workspace` |
 | `tablet-wide-one-banner.png` | `Wide` after: one banner, and the box's state said once |
 | `tablet-tasks-named.png` | A task named from its first message, beside two older ones |
+| `tablet-computer-fitted.png` | The inner screen after: the desktop fills the pane, no band |
 
 Two of these (`dex-permission-asked-twice.png`, `tablet-wide.png`) contain real conversation text
 from the device they were taken on. They are fine as evidence in this document; check them before
