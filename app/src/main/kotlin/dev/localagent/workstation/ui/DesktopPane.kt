@@ -1,5 +1,6 @@
 package dev.localagent.workstation.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,11 +19,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -31,6 +37,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.localagent.workstation.computer.DesktopState
 import dev.localagent.workstation.computer.DesktopTransport
+import dev.localagent.workstation.computer.GuestPointer
+import dev.localagent.workstation.computer.GuestScreen
 import kotlinx.coroutines.launch
 
 /**
@@ -45,16 +53,22 @@ import kotlinx.coroutines.launch
  * Control is deliberately not handed back here. This composable leaves the tree constantly — the
  * row scrolls off, a panel covers it — and none of that means the user has finished driving. The
  * handover belongs to leaving the computer; see `BoxViewModel.showTasks`.
+ *
+ * @param pointer the cursor this surface steers, shared with the on-screen keyboard so the two
+ * cannot disagree about where it is. A view that is only ever looked at — the thumbnail — gets one
+ * of its own, which nothing will ever move.
  */
 @Composable
-fun DesktopSurface(
+internal fun DesktopSurface(
     transport: DesktopTransport,
     interactive: Boolean,
     modifier: Modifier = Modifier,
+    pointer: GuestPointer? = null,
     onViewReady: (DesktopView) -> Unit = {},
 ) {
     val current by transport.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val steered = pointer ?: remember { GuestPointer {} }
 
     /**
      * How much of this pane the soft keyboard is currently sitting on.
@@ -68,11 +82,19 @@ fun DesktopSurface(
      * Only the *reported* height is adjusted. What is painted is still the real surface, which is
      * why this is safe: the transport uses these numbers to decide how big the machine's screen
      * should be, and reads the actual pixel dimensions off the `Surface` when it draws.
+     *
+     * Box's own on-screen keyboard needs none of this. It is a sibling in the layout rather than an
+     * inset, so the pane it leaves behind is the pane the guest should fill, and the mode set that
+     * follows is one the user asked for by dragging the bar.
      */
     val keyboard = WindowInsets.ime.getBottom(LocalDensity.current)
     val keyboardInset = remember { mutableIntStateOf(0) }
     keyboardInset.intValue = keyboard
     val reported = remember { mutableIntStateOf(0) }
+
+    /** Where Box's own cursor is, in this pane's pixels, and whether it is Box's job to draw one. */
+    var cursor by remember { mutableStateOf(Offset.Zero) }
+    var cursorShown by remember { mutableStateOf(false) }
 
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         AndroidView(
@@ -83,13 +105,21 @@ fun DesktopSurface(
                     }
                     onSurfaceGone = { surface -> scope.launch { transport.detach(surface) } }
                     onInput = { input -> scope.launch { transport.send(input) } }
+                    onCursor = { x, y, shown ->
+                        cursor = Offset(x, y)
+                        cursorShown = shown
+                    }
                     onViewReady(this)
                 }
             },
             modifier = Modifier.fillMaxSize(),
             update = { view ->
+                // Assigned before `interactive`, because taking control repaints the cursor and the
+                // cursor is this object's to report.
+                view.pointer = steered
                 view.interactive = interactive
-                view.guestSize = (current as? DesktopState.Live)?.let { it.widthPx to it.heightPx }
+                view.guestSize =
+                    (current as? DesktopState.Live)?.let { GuestScreen(it.widthPx, it.heightPx) }
                 // The keyboard's inset and the surface's own resize come from two different
                 // systems and not in a fixed order. Whichever settles second has to re-report, or
                 // the guest is left sized to a pane the keyboard was covering at the moment the
@@ -101,6 +131,8 @@ fun DesktopSurface(
                 }
             },
         )
+
+        if (cursorShown) TouchCursor(cursor)
 
         when (val snapshot = current) {
             DesktopState.Starting, DesktopState.Unavailable -> DesktopPlaceholder(
@@ -117,6 +149,38 @@ fun DesktopSurface(
 
             is DesktopState.Live -> Unit
         }
+    }
+}
+
+/**
+ * The pointer a finger is steering, drawn by Box.
+ *
+ * The guest draws a cursor of its own and this is deliberately a second one, for the reason
+ * [DesktopView] gives at length: this one is where the hand has got to, the guest's is however far
+ * behind the emulated machine currently is, and the gap between them is the only honest reading
+ * available of how far behind that is. With a mouse, Android's own arrow plays this part and Box
+ * draws nothing at all.
+ *
+ * A white arrow with a dark outline rather than a filled shape in one colour: it has to stay
+ * findable over a terminal, over a white text editor and over a photograph, and only an outlined
+ * one survives all three.
+ */
+@Composable
+private fun TouchCursor(at: Offset) {
+    val size = with(LocalDensity.current) { 20.dp.toPx() }
+    Canvas(Modifier.fillMaxSize()) {
+        val arrow = Path().apply {
+            moveTo(at.x, at.y)
+            lineTo(at.x, at.y + size)
+            lineTo(at.x + size * 0.27f, at.y + size * 0.74f)
+            lineTo(at.x + size * 0.46f, at.y + size * 1.11f)
+            lineTo(at.x + size * 0.62f, at.y + size * 1.03f)
+            lineTo(at.x + size * 0.43f, at.y + size * 0.67f)
+            lineTo(at.x + size * 0.71f, at.y + size * 0.65f)
+            close()
+        }
+        drawPath(arrow, Color.White)
+        drawPath(arrow, Color.Black.copy(alpha = 0.85f), style = Stroke(width = 1.5f))
     }
 }
 
@@ -147,4 +211,3 @@ private fun DesktopPlaceholder(title: String, body: String, busy: Boolean) {
         )
     }
 }
-

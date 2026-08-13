@@ -59,6 +59,13 @@ absolute coordinates and `DesktopView.toGuest` maps a touch straight to a guest 
 drift from where the finger is. The guest already ships `xserver-xorg-input-libinput`, so it can
 bind the device without an image change.
 
+> **Later, 13 Aug 2026.** Touch no longer maps straight to a guest pixel: a finger drives a
+> trackpad, and `GuestPointer` integrates its deltas into the absolute coordinate that goes on the
+> wire. The choice of `virtio-tablet` is unchanged and is, if anything, more clearly right — the
+> acceleration model now lives in Box, on the side that knows how big a fingertip is and how much
+> of the guest's screen a phone panel is showing, rather than in a device driver that knows
+> neither. See "Driving it" in `docs/ui-contract.md`.
+
 **This change also needed a guard.** `-loadvm` restores a guest's memory into a machine that has to
 match the one it left, device for device, and it fails *after* rolling the disks back toward the
 snapshot. `pendingResume()` only compared the image identity, which catches a new Debian but not a
