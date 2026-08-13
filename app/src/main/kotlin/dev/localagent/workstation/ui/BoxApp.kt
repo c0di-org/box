@@ -115,6 +115,14 @@ fun BoxApp(
     onOpenSignInUrl: (String) -> Unit = {},
     onSubmitSignInCode: (String) -> Unit = {},
     onCancelSignIn: () -> Unit = {},
+    onShowGitHub: () -> Unit = {},
+    onResumeConnection: () -> Unit = {},
+    onDismissGitHub: () -> Unit = {},
+    onConnectGitHub: () -> Unit = {},
+    onGitHubRepositoriesChosen: () -> Unit = {},
+    onSubmitGitHubToken: (String) -> Unit = {},
+    onDeclineConnection: () -> Unit = {},
+    onDisconnectGitHub: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
     onViewportChanged: (AgentViewport) -> Unit = {},
     onAttachPhoto: (() -> Unit)? = null,
@@ -235,6 +243,8 @@ fun BoxApp(
                     modifier = modifier,
                     showComputerAction = showComputerAction,
                     onSignIn = onShowSignIn,
+                    onConnectGitHub = onResumeConnection,
+                    onDeclineConnection = onDeclineConnection,
                     onSetPermissionMode = onSetPermissionMode,
                     onAttachPhoto = onAttachPhoto,
                     onAttachFile = onAttachFile,
@@ -347,10 +357,27 @@ fun BoxApp(
         )
     }
 
+    if (state.githubVisible) {
+        ConnectGitHubSheet(
+            state = state.github,
+            computerReady = state.computerReady,
+            reason = state.connectRequest?.reason,
+            agentWaiting = state.connectRequest != null,
+            onConnect = onConnectGitHub,
+            onOpenUrl = onOpenSignInUrl,
+            onRepositoriesChosen = onGitHubRepositoriesChosen,
+            onSubmitToken = onSubmitGitHubToken,
+            onDecline = onDeclineConnection,
+            onDisconnect = onDisconnectGitHub,
+            onDismiss = onDismissGitHub,
+        )
+    }
+
     if (showDiagnostics) {
         DiagnosticsSheet(
             state = state.runtimeState,
             signIn = state.signIn,
+            github = state.github,
             onDismiss = { showDiagnostics = false },
             onOpenBox = {
                 showDiagnostics = false
@@ -367,6 +394,10 @@ fun BoxApp(
             onSignIn = {
                 showDiagnostics = false
                 onShowSignIn()
+            },
+            onGitHub = {
+                showDiagnostics = false
+                onShowGitHub()
             },
         )
     }

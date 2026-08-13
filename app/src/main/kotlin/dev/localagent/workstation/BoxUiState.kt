@@ -4,6 +4,8 @@ import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
+import dev.localagent.workstation.agent.ConnectService
+import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.SessionConnection
@@ -181,6 +183,19 @@ data class BoxUiState(
     /** The hint that survives a restart. See [SignInHistory]. */
     val signedInBefore: Boolean = false,
 
+    // ---- GitHub ----
+    val github: GitHubAuth.State = GitHubAuth.State.Unknown,
+    val githubVisible: Boolean = false,
+    /**
+     * An agent waiting on an account, if one is.
+     *
+     * Held on the box rather than in the transcript because the agent's tool call outlives the
+     * screen: it blocks until somebody answers, and somebody may answer from the box sheet, from
+     * the card in the conversation, or after switching to another task and coming back. One place
+     * to look means the answer reaches the session that asked wherever it was given.
+     */
+    val connectRequest: ConnectRequest? = null,
+
     // ---- computer ----
     /**
      * Who the guest's input belongs to. Walking into the computer takes it, unless an agent is
@@ -338,3 +353,13 @@ data class BoxUiState(
 
 /** A forwarded guest port, and the address on the phone that reaches it. */
 data class OpenedPreview(val url: String, val guestPort: Int)
+
+
+/** An agent's outstanding request for an account, and the session that is waiting on it. */
+data class ConnectRequest(
+    val sessionId: String,
+    val requestId: String,
+    val service: ConnectService,
+    /** The agent's own half-line for what it needs the account for. */
+    val reason: String?,
+)

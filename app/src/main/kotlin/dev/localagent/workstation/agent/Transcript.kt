@@ -334,6 +334,18 @@ class TranscriptBuilder(
                 }
             }
 
+            /**
+             * Nothing in the transcript.
+             *
+             * A request for an account is a live thing, not a thing that happened: it is drawn
+             * from the outstanding request on the box — see `BoxUiState.connectRequest` — so that
+             * one card can be answered from wherever the person happens to be looking, and so a
+             * transcript replayed a week later does not offer a button for a question already
+             * settled. What it led to is in the agent's own next sentence, which is the account
+             * that ages correctly.
+             */
+            is AgentEvent.ConnectRequested -> Unit
+
             is AgentEvent.AgentError ->
                 put(
                     TranscriptItem.Error(

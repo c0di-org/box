@@ -278,6 +278,18 @@ function handleCommand(line) {
       resolve(command);
       break;
     }
+    case 'connect_result': {
+      const resolve = pendingConnects.get(command.requestId);
+      if (!resolve) {
+        diagnostic(`connect result for unknown request ${command.requestId}`);
+        return;
+      }
+      pendingConnects.delete(command.requestId);
+      // Deliberately not the credential: this says whether it worked and who it worked as, which
+      // is everything the agent needs and nothing it should be holding.
+      resolve(command);
+      break;
+    }
     case 'auth_code': {
       // Never echoed. This is the one command whose payload is credential material, so unlike
       // `prompt` it does not get mirrored into the event log.
@@ -662,9 +674,9 @@ function translateAssistant(message) {
         type: 'thinking', messageId: message.uuid, text: clip(block.thinking), complete: true, ...from,
       });
     } else if (block.type === 'tool_use') {
-      if (block.name === SHOW_TOOL) {
-        // No tool card. The artifact row *is* what happened, and a card beside it reading "showed
-        // you the thing" is the same sentence twice.
+      if (block.name === SHOW_TOOL || block.name === CONNECT_TOOL) {
+        // No tool card. The artifact row and the connect card *are* what happened, and a card
+        // beside either one reading "showed you the thing" is the same sentence twice.
         silentCalls.add(block.id);
         continue;
       }
@@ -995,6 +1007,86 @@ const shown = (what) => ({
 /** The full name the model calls [showTool] by, and the name the log has to recognise it under. */
 const SHOW_TOOL = 'mcp__box__show';
 
+/** The full name of [connectTool], suppressed in the transcript for the same reason as show. */
+const CONNECT_TOOL = 'mcp__box__connect';
+
+/** Connection requests the person has not finished yet, keyed by requestId. */
+const pendingConnects = new Map();
+let nextConnectId = 0;
+
+/**
+ * `mcp__box__connect` — the agent asking for an account it does not have.
+ *
+ * This box can clone a public repository and nothing else until somebody connects GitHub, and the
+ * agent is the first to find that out: it is holding a 403 from a `git clone` the person asked
+ * for. The question is what it does next, and every answer other than this one is bad. Stopping to
+ * say "you need to connect GitHub" ends the turn and loses the thread. Reading a token out of a
+ * file — which this box's conventions used to describe — puts a credential in the agent's context
+ * and one echo away from a session log kept on disk.
+ *
+ * So it asks, and *waits*. The SDK pauses a tool call for as long as it takes and does not time
+ * out — the same property that makes a permission sheet on a pocketed phone legitimate — so the
+ * person can go to GitHub, pick their repositories, and come back to an agent that carries on with
+ * the same clone in the same turn.
+ *
+ * A tool rather than a printed line, on the `show` precedent: the harness emits the event, so the
+ * app is never parsing an agent's prose for an intent, and the agent is told what happened in a
+ * result it can act on.
+ */
+function connectTool(tool, z) {
+  return tool(
+    'connect',
+    [
+      'Ask the person to connect an account this box does not have yet. Use it when work you were',
+      'asked to do needs GitHub — a private clone, a push, a pull request — rather than stopping to',
+      'explain that you cannot.',
+      '',
+      'It waits while they do it, so call it and carry on with what you were doing when it returns.',
+      'You never see the credential: git and gh are simply authenticated afterwards.',
+    ].join('\n'),
+    {
+      service: z.enum(['github']).describe('The account to connect. GitHub is the only one so far.'),
+      reason: z.string().optional()
+        .describe('Half a line on what you need it for, in their words — "to clone garfbargle/box". It is shown above the button, so it is the only explanation they get before deciding.'),
+    },
+    async (args) => {
+      const requestId = `connect-${++nextConnectId}`;
+      const settled = new Promise((resolve) => pendingConnects.set(requestId, resolve));
+      emit({
+        type: 'connect_requested',
+        requestId,
+        service: args.service ?? 'github',
+        // Clipped rather than refused: this is a caption, and a long one is a formatting problem
+        // rather than a reason to fail a request the person is waiting on.
+        reason: clip(String(args.reason ?? ''), 160) || null,
+      });
+      const outcome = await settled;
+
+      if (outcome?.connected) {
+        const account = outcome.login ? `as ${outcome.login}` : '';
+        const reach = typeof outcome.repositories === 'number'
+          ? ` They chose ${outcome.repositories} repositor${outcome.repositories === 1 ? 'y' : 'ies'} for this box, so anything outside that set will still be refused.`
+          : '';
+        return {
+          content: [{
+            type: 'text',
+            text: `GitHub is connected ${account}. git and gh are authenticated here and your commits are attributed correctly — do not look for a token, and never put one in a command.${reach} Carry on with what you were doing.`,
+          }],
+        };
+      }
+      // Not an error. Declining is an answer, and one the agent should absorb and work around
+      // rather than retry — an isError result reads as something that went wrong and invites one.
+      return {
+        content: [{
+          type: 'text',
+          text: outcome?.message
+            ?? 'They did not connect GitHub. Do not ask again in this turn; say what you can still do without it, and let them come back to it.',
+        }],
+      };
+    },
+  );
+}
+
 /**
  * The `box` server, or null if this guest's SDK cannot host one.
  *
@@ -1020,11 +1112,11 @@ async function boxServer(sdk) {
     return sdk.createSdkMcpServer({
       name: 'box',
       version: '1.0.0',
-      instructions: 'Box is a chat app on an Android phone; this agent runs in a Linux VM inside it. Use show to put a file, a served port, or the desktop in front of the person as a button in the conversation.',
+      instructions: 'Box is a chat app on an Android phone; this agent runs in a Linux VM inside it. Use show to put a file, a served port, or the desktop in front of the person as a button in the conversation, and connect to ask them for an account this box does not have yet.',
       // Kept out of tool search. It is one tool, and the alternative is the model spending a round
       // trip on a fully emulated phone to discover the thing it is being told about in its prompt.
       alwaysLoad: true,
-      tools: [showTool(sdk.tool, z)],
+      tools: [showTool(sdk.tool, z), connectTool(sdk.tool, z)],
     });
   } catch (error) {
     // The exports being present is not the same as their signatures being the ones this file was
@@ -1248,6 +1340,10 @@ async function main() {
     inputClosed = true;
     if (promptWaiter) { const resolve = promptWaiter; promptWaiter = null; resolve(null); }
     if (authCodeWaiter) { const resolve = authCodeWaiter; authCodeWaiter = null; resolve(null); }
+    // A connect request outlives the sheet by design, so the one thing that must end its wait is
+    // Box itself going away. Without this the model sits on a tool call nothing can ever answer.
+    for (const [requestId, resolve] of pendingConnects) resolve({ connected: false, message: 'Box closed before they answered.' });
+    pendingConnects.clear();
   });
 
   if (authMode) {
@@ -1276,7 +1372,9 @@ async function main() {
       // agent to show you a file?" has one honest answer, and asking is worse than not: the
       // artifact is *itself* a button nobody has to press, so the consent is the tap, and a
       // permission prompt in front of it makes the person answer the same question twice.
-      ...(box ? { mcpServers: { box }, allowedTools: [SHOW_TOOL] } : {}),
+      // Neither is ever asked about. A sheet reading "allow the agent to ask you to connect
+      // GitHub?" asks the same question the connect card is about to ask, one screen earlier.
+      ...(box ? { mcpServers: { box }, allowedTools: [SHOW_TOOL, CONNECT_TOOL] } : {}),
     },
   });
 

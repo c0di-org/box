@@ -13,6 +13,11 @@ ExecStart=/bin/chown agent:agent /workspace /dev/virtio-ports/dev.localagent.age
 ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config
 ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config/claude
 ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config/box
+# git and gh keep their state here rather than in the agent's home, which an image update
+# replaces: connecting GitHub configures a commit identity and a credential helper, and both
+# have to still be true after Box updates itself.
+ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config/git
+ExecStart=/usr/bin/install -d -o agent -g agent -m 0700 /workspace/.config/gh
 # Box's conventions live beside the credential because Claude Code reads user-level memory
 # from its config directory, which now points here. Copied from the image on every boot and
 # overwritten deliberately: the image is the source of truth, so a Box update corrects them
