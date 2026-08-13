@@ -81,10 +81,16 @@ import dev.localagent.workstation.agent.PermissionDecision
  *  - The evidence is scrollable but the decision buttons are pinned, so a long diff can never
  *    push the choice off screen or invite a blind tap.
  *
- * It is about one request at a time, which is not the same as there being only one: a turn can block
- * on two tools at once. The sheet takes the oldest and says how many are behind it, and each request
- * also carries its own inline decision in the transcript, so nothing depends on this modal being the
- * only way to answer.
+ * It is opened, never raised. Box used to put it up by itself the moment anything was asked, which
+ * on a phone meant arriving over whatever the user was doing — the keyboard went down with it and
+ * came back after the answer. Every unanswered request draws its own Allow and Deny in the
+ * transcript, next to the work it is about, so the modal was never the only way to answer; what it
+ * is *for* is the case a one-line card cannot serve, which is reading a whole diff before
+ * deciding, and that is something a person asks for by tapping the card.
+ *
+ * It is about one request at a time, which is not the same as there being only one: a turn can
+ * block on two tools at once. So it says how many are still behind this one, and closing it
+ * answers nothing — the request is still standing in the transcript with both buttons on it.
  *
  * ## The keyboard, and why Enter does not simply mean Allow
  *
