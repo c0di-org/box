@@ -221,8 +221,24 @@ class RuntimeService : Service() {
             IntentFilter(ACTION_QUERY_STATE),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
+        // Where the runtime is sitting before anything has been asked of it. Read here, on the
+        // main thread, so it is settled before any `onStartCommand` can move it.
+        val resting = runtime.state().value
         // The VM lives in `:computer`; the Compose process cannot observe this StateFlow directly.
-        scope.launch { runtime.state().collect(::publishState) }
+        scope.launch {
+            var first = true
+            runtime.state().collect { state ->
+                // A process created by a *bind* has done nothing and has nothing to announce — and
+                // the UI binds a stopped computer on purpose, to read a closed box's session logs.
+                // Broadcasting where it happens to be sitting would answer the Open the user
+                // pressed a second ago with "the box is closed", and take the progress they are
+                // watching away with it. A state the runtime actually entered is always published;
+                // only this one resting value, and only once, is kept quiet.
+                val settling = first && state == resting
+                first = false
+                if (!settling) publishState(state)
+            }
+        }
     }
 
     override fun onDestroy() {

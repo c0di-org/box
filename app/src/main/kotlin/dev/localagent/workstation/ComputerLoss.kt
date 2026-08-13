@@ -60,6 +60,11 @@ internal object ComputerLoss {
      * Binding only once the computer is [RuntimeState.Ready] is what left the startup path
      * unwatched. Box holds the connection across the whole time the computer is meant to be alive,
      * so a death during boot is heard immediately rather than waited out.
+     *
+     * This is about *watching*, and it is not the only reason Box binds `:computer`. The agent
+     * backend holds a connection of its own to read a closed box's session logs — the process, not
+     * the VM. Answering false here never means "nobody may bind"; it means there is no VM whose
+     * death this connection would be reporting.
      */
     fun shouldWatch(state: RuntimeState): Boolean = when (state) {
         RuntimeState.Starting, RuntimeState.Connecting, RuntimeState.Ready,

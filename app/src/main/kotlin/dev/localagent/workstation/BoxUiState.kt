@@ -143,6 +143,16 @@ data class BoxUiState(
     val permissionMode: AgentPermissionMode = AgentPermissionMode.Ask,
     val startingSession: Boolean = false,
     /**
+     * The task swiped off the list, still waiting to find out whether the user meant it.
+     *
+     * Held here rather than closed on the spot because closing is the one thing on this surface
+     * that cannot be taken back: the record goes, the index is rewritten, and `:computer` is told
+     * to let the session go. So the row leaves immediately — a swipe that snaps back has not
+     * happened — and the actual close waits out the undo snackbar. One at a time; swiping a second
+     * task commits the first, because the snackbar it was relying on has gone.
+     */
+    val closingTaskId: String? = null,
+    /**
      * What the user typed before the guest could take it. Shown in the transcript's place so a
      * message sent to a booting computer is visibly waiting rather than apparently lost.
      */
@@ -208,7 +218,9 @@ data class BoxUiState(
      * property of that task, drawn on its row.
      */
     val tasks: List<SessionSummary>
-        get() = sessions.sortedByDescending { it.updatedAt }
+        get() = sessions
+            .filterNot { it.id == closingTaskId }
+            .sortedByDescending { it.updatedAt }
 
     fun harnessOf(session: SessionSummary): HarnessDescriptor? =
         harnesses.firstOrNull { it.id == session.harnessId }

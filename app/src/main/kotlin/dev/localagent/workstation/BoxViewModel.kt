@@ -525,6 +525,36 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch { agents.interruptSubAgent(sessionId, subAgentId) }
     }
 
+    /**
+     * Take a task off the list, with a way back for as long as the snackbar is up.
+     *
+     * The list is where closing belongs — it used to mean opening the task and finding the header
+     * menu, which is a strange route to "I am done with this" — and a list you can close things
+     * from needs an undo, because a swipe is easy to do by accident and this one is final. So the
+     * row goes now and the close itself waits: see [BoxUiState.closingTaskId]. Nothing is told to
+     * the agent in the meantime, which is what makes taking it back free.
+     */
+    fun beginClosingTask(sessionId: String) {
+        val pending = mutableUiState.value.closingTaskId
+        // Its snackbar is about to be replaced by this one, so its undo is gone. Honour what the
+        // user did rather than quietly keeping a task they closed.
+        if (pending != null && pending != sessionId) closeSession(pending)
+        mutableUiState.update { it.copy(closingTaskId = sessionId) }
+        if (mutableUiState.value.selectedSessionId == sessionId) selectSession(null)
+    }
+
+    /** The undo window closed without being used. */
+    fun commitClosingTask() {
+        val pending = mutableUiState.value.closingTaskId ?: return
+        mutableUiState.update { it.copy(closingTaskId = null) }
+        closeSession(pending)
+    }
+
+    /** The row comes back exactly as it was, because nothing has happened to it yet. */
+    fun undoClosingTask() {
+        mutableUiState.update { it.copy(closingTaskId = null) }
+    }
+
     fun closeSession(sessionId: String) {
         viewModelScope.launch {
             agents.closeSession(sessionId)
