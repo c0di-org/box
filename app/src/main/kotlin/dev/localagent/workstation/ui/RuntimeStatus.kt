@@ -144,15 +144,23 @@ fun RuntimeGate(state: RuntimeState, onOpenBox: () -> Unit) {
                     RuntimeState.Starting, RuntimeState.Connecting, is RuntimeState.Provisioning ->
                         "Opening your box"
                     RuntimeState.Stopping -> "Closing"
+                    RuntimeState.Suspending -> "Pausing your box"
+                    // Not "closed". A put-away box still has everything in it, and comes back in
+                    // about a second — which is a different offer from the one below it.
+                    RuntimeState.Suspended -> "Your box is paused"
                     is RuntimeState.Failed -> "Your box didn’t open"
                     else -> "Your box is closed"
                 },
                 style = MaterialTheme.typography.titleLarge,
             )
             when (state) {
-                RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended -> {
+                RuntimeState.NotProvisioned, RuntimeState.Stopped -> {
                     Spacer(Modifier.height(20.dp))
                     Button(onClick = onOpenBox) { Text("Open your box") }
+                }
+                RuntimeState.Suspended -> {
+                    Spacer(Modifier.height(20.dp))
+                    Button(onClick = onOpenBox) { Text("Pick up where you left off") }
                 }
                 is RuntimeState.Failed -> {
                     Spacer(Modifier.height(20.dp))
@@ -170,6 +178,7 @@ fun DiagnosticsSheet(
     state: RuntimeState,
     onDismiss: () -> Unit,
     onOpenBox: () -> Unit,
+    onPutAway: () -> Unit,
     onStop: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -216,11 +225,23 @@ fun DiagnosticsSheet(
                 DiagnosticRow("Network", "Outgoing only, through your phone")
                 Spacer(Modifier.height(20.dp))
                 when (state) {
-                    RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended ->
+                    RuntimeState.NotProvisioned, RuntimeState.Stopped ->
                         Button(onClick = onOpenBox, Modifier.fillMaxWidth()) { Text("Open your box") }
-                    RuntimeState.Starting, RuntimeState.Connecting, RuntimeState.Ready, RuntimeState.Suspending ->
+                    RuntimeState.Suspended ->
+                        Button(onClick = onOpenBox, Modifier.fillMaxWidth()) {
+                            Text("Pick up where you left off")
+                        }
+                    // Two endings, and the primary one is the cheap one. Putting the box away
+                    // keeps everything and reopens in about a second; closing it means the next
+                    // box boots from nothing, which on an emulated ARM64 machine is minutes.
+                    RuntimeState.Ready -> {
+                        Button(onClick = onPutAway, Modifier.fillMaxWidth()) { Text("Pause your box") }
+                        Spacer(Modifier.height(10.dp))
                         OutlinedButton(onClick = onStop, Modifier.fillMaxWidth()) { Text("Close your box") }
-                    RuntimeState.Stopping -> Unit
+                    }
+                    RuntimeState.Starting, RuntimeState.Connecting ->
+                        OutlinedButton(onClick = onStop, Modifier.fillMaxWidth()) { Text("Close your box") }
+                    RuntimeState.Stopping, RuntimeState.Suspending -> Unit
                     is RuntimeState.Failed -> Button(onClick = onOpenBox, Modifier.fillMaxWidth()) { Text("Try again") }
                     is RuntimeState.Provisioning -> Unit
                 }

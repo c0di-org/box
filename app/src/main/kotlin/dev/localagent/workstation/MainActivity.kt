@@ -110,6 +110,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onCloseSession = boxViewModel::closeSession,
             onSelectComputerPanel = boxViewModel::selectComputerPanel,
             onOpenBox = openBox,
+            onPutAway = boxViewModel::putAway,
             onStop = boxViewModel::stop,
             onRunCommand = boxViewModel::runCommand,
             onSelectFilesPlace = boxViewModel::selectFilesPlace,

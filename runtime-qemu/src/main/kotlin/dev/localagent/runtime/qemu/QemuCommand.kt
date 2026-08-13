@@ -10,8 +10,14 @@ object QemuCommand {
      * them, rather than read from fixed fields here. Nothing below knows what an image is called
      * or where it is keyed — it is handed paths.
      */
-    fun boot(storage: RuntimeStorage): List<String> =
-        storage.headlessBootFiles()?.let { headless(storage, it) } ?: uefi(storage)
+    fun boot(storage: RuntimeStorage, resumeFrom: String? = null): List<String> {
+        val command = storage.headlessBootFiles()?.let { headless(storage, it) } ?: uefi(storage)
+        // `-loadvm` is what makes reopening a box cheap: QEMU builds the same machine and then,
+        // instead of running a bootloader, reads the guest's memory back out of the snapshot in
+        // its qcow2. The device set either side of this has to be identical, which is why it is
+        // appended to an ordinary launch rather than composed as a separate one.
+        return resumeFrom?.let { command + listOf("-loadvm", it) } ?: command
+    }
 
     /** Temporary compatibility boot path used by the device proof image. Production images use
      * the direct-kernel headless path below, which is smaller and boots faster. */

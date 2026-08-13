@@ -13,6 +13,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Bundle
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.localagent.runtime.api.ExecRequest
@@ -21,11 +22,14 @@ import dev.localagent.runtime.qemu.shared.SharedFolderBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Process boundary for QEMU. The manifest pins this service to `:computer`, so a native VM
@@ -37,6 +41,18 @@ class RuntimeService : Service() {
 
     /** A process retires once; a second settled state must not queue another kill. */
     private val retiring = AtomicBoolean(false)
+
+    /**
+     * When the guest was last asked for anything, and the watcher that acts on the answer.
+     *
+     * An emulated ARM64 machine runs until something tells it not to, and until now nothing did:
+     * a box opened for one question stayed open all day. The reason there was no idle timer is
+     * that the only thing one could have done was *stop* the box — which buys battery by selling
+     * the user a boot, and the boot was the expensive thing. Saving the guest instead is what
+     * makes this worth having: see [QemuTcgRuntime.suspendRuntime].
+     */
+    private val lastGuestActivity = AtomicLong(SystemClock.elapsedRealtime())
+    private var idleWatch: Job? = null
     private val runtime by lazy { QemuTcgRuntime(applicationContext) }
 
     /**
@@ -59,6 +75,7 @@ class RuntimeService : Service() {
             timeoutSeconds: Int,
             callback: IExecCallback,
         ) {
+            touch()
             scope.launch {
                 try {
                     val result = runtime.exec(
@@ -80,6 +97,7 @@ class RuntimeService : Service() {
         }
 
         override fun listFiles(path: String, callback: IFileListCallback) {
+            touch()
             scope.launch {
                 try {
                     val entries = runtime.listFiles(path)
@@ -97,6 +115,7 @@ class RuntimeService : Service() {
         }
 
         override fun readFile(path: String, callback: IFileReadCallback) {
+            touch()
             scope.launch {
                 try {
                     val bytes = runtime.readFile(path)
@@ -117,6 +136,7 @@ class RuntimeService : Service() {
         }
 
         override fun writeFile(path: String, data: ByteArray, callback: IWriteCallback) {
+            touch()
             scope.launch {
                 try {
                     runtime.writeFile(path, data)
@@ -137,6 +157,7 @@ class RuntimeService : Service() {
             environment: Bundle?,
             callback: IAgentSessionCallback,
         ) {
+            touch()
             val existing = sessions[sessionId]
             if (existing != null && existing.isRunning) {
                 // Re-opening a live session is a resumed UI, not a second agent.
@@ -155,6 +176,7 @@ class RuntimeService : Service() {
         }
 
         override fun attachAgentSession(sessionId: String, callback: IAgentSessionCallback) {
+            touch()
             val host = sessions[sessionId]
             if (host != null) {
                 host.attach(callback)
@@ -176,6 +198,7 @@ class RuntimeService : Service() {
             environment: Bundle?,
             callback: IAgentSessionCallback,
         ) {
+            touch()
             // Any previous attempt is torn down rather than resumed: a half-finished sign-in
             // should be restarted, never re-entered.
             sessions.remove(sessionId)?.cancel()
@@ -185,6 +208,7 @@ class RuntimeService : Service() {
         }
 
         override fun closeAgentSession(sessionId: String) {
+            touch()
             sessions.remove(sessionId)?.cancel()
         }
     }
@@ -259,6 +283,27 @@ class RuntimeService : Service() {
                 .onFailure { Log.e(TAG, "QEMU failed to stop", it) }
                 .onSuccess { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
+        if (intent?.action == ACTION_SUSPEND) scope.launch {
+            runCatching { runtime.suspendRuntime() }
+                .onSuccess {
+                    Log.i(TAG, "The box was put away")
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+                // Deliberately not falling back to a stop. Putting the box away failed, so the
+                // box is still open and still working; closing it would turn a saved three
+                // minutes into a lost session, which is the trade this whole path exists to undo.
+                .onFailure { error ->
+                    Log.e(TAG, "Could not put the box away", error)
+                    // Unless there is no box here to keep alive. Asking a saved box to save again
+                    // arrives in a fresh process that never ran a VM, and leaving that one up
+                    // would put "Your box is open" in the shade over nothing at all.
+                    if (runtime.state().value != RuntimeState.Ready) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }
+        }
         if (intent?.action == ACTION_REPROVISION_IMAGE) scope.launch {
             // Debuggable builds only, on the same reasoning as the exec probe below: the service
             // is not exported, so only this UID can reach it either way, and the build check is
@@ -300,7 +345,54 @@ class RuntimeService : Service() {
     private fun isDebuggable(): Boolean =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
+    private fun touch() = lastGuestActivity.set(SystemClock.elapsedRealtime())
+
+    /**
+     * Puts an unused box away by itself.
+     *
+     * "Unused" is deliberately conservative, because the one thing a suspend cannot carry across
+     * is an agent that is still working — agentd kills its children when its host goes away, and a
+     * restored guest is told its host went away. So a running session is not idleness however
+     * quiet it looks, and its presence keeps the clock reset rather than merely deferring a check.
+     *
+     * What this costs the user when it gets it wrong is the thing worth measuring: a saved box
+     * comes back in about a second, against the 86–116 s a cold boot took on the same phone. That
+     * ratio is the only reason this is allowed to act without asking.
+     */
+    private fun watchForIdle() {
+        if (idleWatch?.isActive == true) return
+        idleWatch = scope.launch {
+            while (isActive) {
+                delay(IDLE_POLL_MILLIS)
+                if (sessions.values.any { it.isRunning }) {
+                    touch()
+                    continue
+                }
+                val quietFor = SystemClock.elapsedRealtime() - lastGuestActivity.get()
+                if (quietFor < IDLE_TIMEOUT_MILLIS) continue
+                Log.i(TAG, "Nothing has needed the box for ${quietFor / 1_000}s; putting it away")
+                // Deliberately not awaited here, and this is not a detail. Saving the box moves it
+                // out of Ready, [publishState] answers that by cancelling this watcher, and if the
+                // save were running *inside* this job that cancellation would land on the save —
+                // which is exactly what it did: the box stopped half way, quiesced but unsaved.
+                idleWatch = null
+                scope.launch {
+                    runCatching { runtime.suspendRuntime() }
+                        .onFailure { Log.w(TAG, "Could not put the idle box away", it) }
+                }
+                return@launch
+            }
+        }
+    }
+
     private fun publishState(state: RuntimeState) {
+        if (state == RuntimeState.Ready) {
+            touch()
+            watchForIdle()
+        } else {
+            idleWatch?.cancel()
+            idleWatch = null
+        }
         sharedFolder.onRuntimeState(state)
         sendBroadcast(
             Intent(ACTION_STATE)
@@ -354,18 +446,20 @@ class RuntimeService : Service() {
             "Your box",
             NotificationManager.IMPORTANCE_LOW,
         ))
-        val close = PendingIntent.getService(
-            this,
-            0,
-            Intent(this, RuntimeService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val close = serviceAction(ACTION_STOP, requestCode = 0)
+        val putAway = serviceAction(ACTION_SUSPEND, requestCode = 1)
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_box_notification)
             .setContentTitle("Your box is open")
             .setContentText("Debian is running on this phone.")
             .setOngoing(true)
             .apply { openAppIntent()?.let(::setContentIntent) }
+            // Two ways out, because they are not the same offer and the shade is where the
+            // choice gets made. Putting the box away saves the guest as it stands and reopens in
+            // seconds; closing it ends the machine, and the next box has to boot from nothing —
+            // about three minutes of an emulated CPU waiting on emulated hardware. The cheap one
+            // goes first because it is almost always the one that was meant.
+            .addAction(Notification.Action.Builder(null, "Pause your box", putAway).build())
             .addAction(Notification.Action.Builder(null, "Close your box", close).build())
             .build()
         startForeground(
@@ -374,6 +468,14 @@ class RuntimeService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
     }
+
+    private fun serviceAction(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getService(
+            this,
+            requestCode,
+            Intent(this, RuntimeService::class.java).setAction(action),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
     /**
      * The other half of "start work and pocket the phone".
@@ -452,6 +554,14 @@ class RuntimeService : Service() {
 
         const val ACTION_START = "dev.localagent.runtime.qemu.START"
         const val ACTION_STOP = "dev.localagent.runtime.qemu.STOP"
+
+        /**
+         * Save the guest and end the VM, so the next start is seconds rather than minutes.
+         *
+         * The difference from [ACTION_STOP] is what the user gets back afterwards, not what they
+         * give up now: both end the emulated machine and both stop costing battery.
+         */
+        const val ACTION_SUSPEND = "dev.localagent.runtime.qemu.SUSPEND"
         const val ACTION_EXEC_PROBE = "dev.localagent.runtime.qemu.EXEC_PROBE"
 
         /**
@@ -484,6 +594,16 @@ class RuntimeService : Service() {
          * again immediately still lands on a fresh process.
          */
         private const val RETIRE_GRACE_MILLIS = 750L
+
+        /**
+         * How long a box may sit untouched before it is saved and closed.
+         *
+         * A policy number rather than a technical one, and the first honest guess at it: long
+         * enough that stepping away from a task does not close the box behind you, short enough
+         * that a box opened for one question is not still emulating an ARM64 machine at bedtime.
+         */
+        private const val IDLE_TIMEOUT_MILLIS = 15 * 60 * 1_000L
+        private const val IDLE_POLL_MILLIS = 30_000L
         private const val CHANNEL_ID = "local_agent_runtime"
         private const val NOTIFICATION_ID = 1001
 

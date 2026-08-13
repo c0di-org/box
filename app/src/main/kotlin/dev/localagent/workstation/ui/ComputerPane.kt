@@ -489,6 +489,7 @@ private fun ComputerComingUp(
                 failure != null -> "Your box didn’t open"
                 state.computerReady -> "Waiting for the picture"
                 opening -> "Opening your box"
+                state.runtimeState == RuntimeState.Suspended -> "Your box is paused"
                 else -> "Your box is closed"
             },
             style = MaterialTheme.typography.titleLarge,

@@ -87,6 +87,7 @@ class UiGalleryActivity : ComponentActivity() {
                     onCloseSession = {},
                     onSelectComputerPanel = model::panel,
                     onOpenBox = {},
+                    onPutAway = {},
                     onStop = {},
                     onRunCommand = {},
                     onSelectFilesPlace = {},

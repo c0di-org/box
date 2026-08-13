@@ -89,6 +89,7 @@ fun BoxApp(
     onCloseSession: (String) -> Unit,
     onSelectComputerPanel: (ComputerPanel) -> Unit,
     onOpenBox: () -> Unit,
+    onPutAway: () -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String) -> Unit,
     onSelectFilesPlace: (FilesPlace) -> Unit,
@@ -317,6 +318,10 @@ fun BoxApp(
                 showDiagnostics = false
                 onOpenBox()
             },
+            onPutAway = {
+                showDiagnostics = false
+                onPutAway()
+            },
             onStop = {
                 showDiagnostics = false
                 onStop()
@@ -468,6 +473,7 @@ private fun PreviewBox(state: BoxUiState) {
             onCloseSession = {},
             onSelectComputerPanel = {},
             onOpenBox = {},
+            onPutAway = {},
             onStop = {},
             onRunCommand = {},
             onSelectFilesPlace = {},
