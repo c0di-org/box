@@ -208,10 +208,12 @@ fun DiagnosticsSheet(
                 }
                 Spacer(Modifier.height(22.dp))
                 DiagnosticRow("System", "Debian / ARM64")
-                DiagnosticRow("Virtual machine", "QEMU TCG • 2 vCPU • 1 GB")
-                DiagnosticRow("Workspace", "/workspace • persistent disk")
-                DiagnosticRow("Control channel", "Private on-device socket")
-                DiagnosticRow("Guest network", "Private NAT")
+                // What each line costs the reader, not what it costs the runtime: "QEMU TCG" and
+                // "vCPU" name the implementation, and the sheet is answering "what have I got".
+                DiagnosticRow("Machine", "Emulated • 2 processors • 1 GB memory")
+                DiagnosticRow("Workspace", "/workspace • kept between tasks")
+                DiagnosticRow("Connection", "Private, on this phone")
+                DiagnosticRow("Network", "Outgoing only, through your phone")
                 Spacer(Modifier.height(20.dp))
                 when (state) {
                     RuntimeState.NotProvisioned, RuntimeState.Stopped, RuntimeState.Suspended ->
@@ -224,7 +226,11 @@ fun DiagnosticsSheet(
                 }
                 Spacer(Modifier.height(18.dp))
                 Text(
-                    "Box ${BuildConfig.VERSION_NAME} • ${BuildConfig.FLAVOR.replaceFirstChar { it.titlecase() }} runtime",
+                    // The flavour is only worth a word when it is the experimental one, and the
+                    // suffix it stamps on the version is never worth one. On every shipping phone
+                    // "0.1.0-stock • Stock runtime" was a build detail wearing a user's clothes.
+                    "Box ${BuildConfig.VERSION_NAME.substringBefore('-')}" +
+                        if (BuildConfig.FLAVOR == "avf") " • Experimental runtime" else "",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
