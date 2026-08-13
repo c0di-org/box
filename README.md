@@ -86,6 +86,16 @@ other. Plug in a keyboard and you're using a small Linux PC that was in your poc
   </picture>
 </p>
 
+And this one is not an emulator at all — it is the desktop, on a desk:
+
+<p align="center">
+  <img alt="Box in Samsung DeX on a 34-inch monitor: the agent's own Debian desktop fills the window, a terminal open on it at agent@355cb8862545:/workspace." src="docs/assets/screenshots/device/dex-computer.png" width="820">
+</p>
+
+A Galaxy Z Fold 7 in DeX, driving a 3440×1440 monitor, showing the Debian desktop that is
+running inside the phone. Taken with [`tools/device-shots.sh`](tools/device-shots.sh),
+which drives and photographs the app on real hardware in each of its three shapes.
+
 ## Nothing to set up
 
 Real Linux on Android today means several apps, a tour of the developer settings, a
@@ -106,7 +116,7 @@ code, not the roadmap.
 | --- | --- |
 | **The computer** | Real. An ARM64 Debian Bookworm VM boots under QEMU in its own process, with a private control channel to `agentd` inside it. Commands run, files persist. |
 | **A real agent in it** | Real. Claude Code runs in the guest and speaks Box's event vocabulary; you sign in through the phone's browser, no API key to paste. The full OAuth round trip is not yet proven on hardware. |
-| **Open computer / Take over** | Built, not confirmed. The guest runs X and openbox, and the screen comes to the app over RFB on a private socket. Every hop is verified except the last one — pixels landing on the phone's surface. |
+| **Open computer / Take over** | Real, confirmed on hardware 12 Aug 2026. The guest runs X and openbox, the screen reaches the app over RFB on a private socket, and taking over moves the guest's own cursor and types into its shell. Until that day the machine had a screen and no input devices at all, so "Take over" switched on and then silently dropped every click — see [docs/ux-field-notes.md](docs/ux-field-notes.md). The guest's resolution is still fixed at 1280×800 rather than following the window. |
 | **Other agents** | ChatGPT and Cursor exist as a scripted demo only. One harness is wired for real. |
 | **Preview a running server** | Not built. Port forwarding throws, and the button says so instead of opening nothing. |
 
@@ -114,12 +124,16 @@ The honest cost: it's a fully emulated ARM64 VM, so first light takes a couple o
 on a Galaxy Z Fold 7 and most of that is the guest waiting on emulated udev. See
 [docs/development.md](docs/development.md) for the measurements.
 
-And the pictures above, on the same terms: they are screenshots, taken by
-[`tools/screenshots.sh`](tools/screenshots.sh) on a phone and a tablet emulator, of the
-app in this repository. What is in them is Box's built-in demo conversation — an emulator
-has no VM, so there is no agent in there to have really run `npm install`. Every pixel
-around it is the shipping UI, and the one thing Box cannot honestly photograph yet, the
-guest's own desktop, is the one screen you will not find here.
+And the pictures above, on the same terms. The phone and tablet ones are screenshots taken
+by [`tools/screenshots.sh`](tools/screenshots.sh) on emulators, of the app in this
+repository; what is in them is Box's built-in demo conversation, because an emulator has no
+VM and there is no agent in there to have really run `npm install`. Every pixel around it is
+the shipping UI.
+
+The DeX picture is the other kind: [`tools/device-shots.sh`](tools/device-shots.sh) on a
+real Fold 7 with a real VM behind it, so the desktop in it is a Debian that is actually
+running and the prompt is a shell you could type into. That screen used to be the one thing
+Box could not honestly photograph.
 
 ## Build it
 
