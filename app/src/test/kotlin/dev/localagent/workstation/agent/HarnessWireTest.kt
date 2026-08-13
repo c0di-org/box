@@ -194,6 +194,78 @@ class HarnessWireTest {
     }
 
     @Test
+    fun `a question arrives as something the sheet can answer`() {
+        val event = parse(
+            """{"type":"permission_requested","requestId":"p4","ask":{"kind":"question",
+               "questions":[{"text":"Which model should the sub-agent use?","header":"Model",
+               "multiSelect":false,"options":[{"label":"Sonnet","description":"Faster."},
+               {"label":"Opus","description":"Better at long reasoning."}]}]}}""",
+        ) as AgentEvent.PermissionRequested
+
+        val ask = event.ask as PermissionAsk.Questions
+        val question = ask.questions.single()
+        assertEquals("Which model should the sub-agent use?", question.text)
+        assertEquals("Model", question.header)
+        assertEquals(listOf("Sonnet", "Opus"), question.options.map { it.label })
+        assertEquals("Faster.", question.options.first().description)
+        // Answering future questions nobody has read is the one thing this must not offer.
+        assertNull(ask.alwaysAllowScope)
+    }
+
+    @Test
+    fun `a question with no way to answer it degrades to an ask that can still be refused`() {
+        // Options are what makes a question answerable. Without them the sheet would be a dead
+        // end, so it falls back to the one shape that always works rather than drawing nothing.
+        val event = parse(
+            """{"type":"permission_requested","requestId":"p5","ask":{"kind":"question",
+               "questions":[{"text":"Which one?","header":"Pick","options":[]}]}}""",
+        ) as AgentEvent.PermissionRequested
+
+        assertTrue(event.ask is PermissionAsk.Generic)
+    }
+
+    @Test
+    fun `an answered question comes back carrying the answer, not just a yes`() {
+        val event = parse(
+            """{"type":"permission_resolved","requestId":"p4","decision":"answer",
+               "answers":{"Which model should the sub-agent use?":"Opus"}}""",
+        ) as AgentEvent.PermissionResolved
+
+        val decision = event.decision as PermissionDecision.Answered
+        assertEquals(mapOf("Which model should the sub-agent use?" to "Opus"), decision.answers)
+    }
+
+    @Test
+    fun `an answer with nothing in it is an allow, and never an answer nobody gave`() {
+        // The whole point of this path is that the agent is never told a person chose something
+        // they did not. An empty payload has to lose the claim, not keep it.
+        val event = parse(
+            """{"type":"permission_resolved","requestId":"p4","decision":"answer","answers":{}}""",
+        ) as AgentEvent.PermissionResolved
+
+        assertEquals(PermissionDecision.Allow, event.decision)
+    }
+
+    @Test
+    fun `an answered decision goes down as an allow a guest that predates questions still obeys`() {
+        val line = HarnessWire.encode(
+            mapOf(
+                "type" to "decision",
+                "requestId" to "p4",
+                "decision" to "allow",
+                "answers" to mapOf("Which model?" to "Opus"),
+            ),
+        )
+
+        // An older harness reads the allow and drops the field it has never heard of: the answer
+        // is lost, which is exactly today's behaviour. A decision word it did not know would have
+        // been read as "not allowed" and failed the call outright.
+        val parsed = org.json.JSONObject(line)
+        assertEquals("allow", parsed.getString("decision"))
+        assertEquals("Opus", parsed.getJSONObject("answers").getString("Which model?"))
+    }
+
+    @Test
     fun `a checklist maps the harness's own task vocabulary`() {
         val event = parse(
             """{"type":"task_progress","planId":"plan-1","items":[

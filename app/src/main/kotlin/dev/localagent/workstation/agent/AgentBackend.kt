@@ -135,10 +135,16 @@ enum class AgentPermissionMode(val wire: String) {
      * Only the in-process fake needs this — with a real harness the agent never asks in the first
      * place. It is here rather than there so both sides answer the question the same way.
      */
-    fun approves(ask: PermissionAsk): Boolean = when (this) {
-        Ask -> false
-        AcceptEdits -> ask is PermissionAsk.EditFile
-        Everything -> true
+    fun approves(ask: PermissionAsk): Boolean = when {
+        // A question is never approved, in any mode. There is nothing here to permit, and a
+        // setting that answered it without a person would be the original bug wearing a
+        // preference: the agent told that someone chose, when choosing is the exact step skipped.
+        // The guest keeps the same rule from the other side, by pinning the question tool to
+        // "ask" no matter what the mode says.
+        ask is PermissionAsk.Questions -> false
+        this == Ask -> false
+        this == AcceptEdits -> ask is PermissionAsk.EditFile
+        else -> true
     }
 }
 

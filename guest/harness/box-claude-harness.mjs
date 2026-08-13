@@ -392,6 +392,19 @@ function describeTool(name, input = {}) {
       return { kind: 'fetch', url: input.url ?? '' };
     case 'WebSearch':
       return { kind: 'search', query: input.query ?? '', scope: 'the web' };
+    case 'AskUserQuestion':
+      // A card, not silence, and deliberately so. Under `bypassPermissions` nothing reaches the
+      // permission flow, so no sheet is drawn and no answer is collected — and a turn where the
+      // agent asked, was never shown to anyone, and was told nobody answered has to leave *some*
+      // record of what it wanted. This is that record.
+      return {
+        kind: 'generic',
+        name: 'Asked you',
+        arguments: askedQuestions(input).map((question) => [
+          question.header || 'Question',
+          question.text,
+        ]),
+      };
     case 'Task':
     case 'Agent':
       // A sub-agent, and the one tool whose card outlives the call: everything the delegate then
@@ -409,9 +422,87 @@ function describeTool(name, input = {}) {
         name,
         arguments: Object.entries(input)
           .slice(0, 8)
-          .map(([key, value]) => [key, clip(String(typeof value === 'object' ? JSON.stringify(value) : value), 512)]),
+          .map(([key, value]) => [key, clip(readable(value), 512)]),
       };
   }
+}
+
+/**
+ * The tool input an answered question produces, or null when there is nothing to answer.
+ *
+ * `AskUserQuestion` is answered by handing its own input back with the `answers` field filled in.
+ * The SDK's tool schema describes that field, in as many words, as "collected by the permission
+ * component", and `PermissionResult.updatedInput` is how a permission component hands anything
+ * back. So an answer is not a second round trip running alongside the permission one — it *is* the
+ * permission result, and the sheet Box already has is the component in question.
+ *
+ * Only keys naming a question this call actually asked survive. The app is the half of the pair
+ * that can be older or newer than the guest image, and an answer keyed to a question nobody asked
+ * would otherwise reach the model looking exactly like one somebody did.
+ */
+function answeredInput(toolName, input, answers) {
+  if (toolName !== 'AskUserQuestion') return null;
+  if (!answers || typeof answers !== 'object') return null;
+  const asked = new Set(askedQuestions(input).map((question) => question.text));
+  const kept = Object.entries(answers).filter(
+    ([question, answer]) => asked.has(question) && typeof answer === 'string' && answer !== '',
+  );
+  if (kept.length === 0) return null;
+  return { ...input, answers: Object.fromEntries(kept) };
+}
+
+/**
+ * The questions out of an `AskUserQuestion` input, in the shape the sheet draws.
+ *
+ * Renamed on the way past — `question` becomes `text` — because the app's model already has a
+ * `Question` and a field called `question` inside it reads like a stutter. Options with no label
+ * are dropped and so is a question left with none: an option nobody can tell apart from another is
+ * not a choice, and a question with no answers is a dead end on a sheet whose only job is to be
+ * answerable.
+ */
+function askedQuestions(input) {
+  return (Array.isArray(input.questions) ? input.questions : [])
+    .map((question) => ({
+      text: clip(String(question?.question ?? ''), 1024),
+      header: clip(String(question?.header ?? ''), 64),
+      multiSelect: question?.multiSelect === true,
+      options: (Array.isArray(question?.options) ? question.options : [])
+        .map((option) => ({
+          label: clip(String(option?.label ?? ''), 256),
+          description: option?.description ? clip(String(option.description), 512) : null,
+        }))
+        .filter((option) => option.label !== ''),
+    }))
+    .filter((question) => question.text !== '' && question.options.length > 0);
+}
+
+/**
+ * A value written out for a key/value card.
+ *
+ * `ToolCall.Generic` promises in as many words to render "a labelled key/value card, never raw
+ * JSON", and that promise was kept only for arguments that happened to be strings: anything
+ * structured went through `JSON.stringify` and landed on the card as punctuation. Every unmodelled
+ * tool taking a structured argument hit it.
+ *
+ * So structure is flattened into prose instead. One level down, an object becomes its `key: value`
+ * pairs and a list becomes its items; below that a nested value is named by its shape rather than
+ * spelled out, because a card is a glance and the tool's own output is where detail belongs.
+ */
+function readable(value, depth = 0) {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) {
+    if (depth > 1) return value.length === 1 ? '1 item' : `${value.length} items`;
+    return value.map((item) => readable(item, depth + 1)).filter(Boolean).join('; ');
+  }
+  if (typeof value === 'object') {
+    if (depth > 1) return Object.keys(value).join(', ');
+    return Object.entries(value)
+      .map(([key, nested]) => [key, readable(nested, depth + 1)])
+      .filter(([, text]) => text !== '')
+      .map(([key, text]) => `${key}: ${text}`)
+      .join(', ');
+  }
+  return String(value);
 }
 
 /**
@@ -498,6 +589,19 @@ function describeAsk(name, input = {}) {
         // "always allow" would answer for the ones nobody has thought of yet.
         alwaysAllowScope: null,
       };
+    case 'AskUserQuestion':
+      // Not a risk to weigh — a question to answer. It arrives here because the answer *is* the
+      // permission result: the tool's own input carries an `answers` field the SDK documents as
+      // "collected by the permission component", and the host fills it in by returning an
+      // `updatedInput`. So the sheet that exists to ask "may it?" is the same sheet that has to
+      // ask "which?", and this is the ask that tells it so.
+      return {
+        kind: 'question',
+        questions: askedQuestions(input),
+        // Never. "Always allow questions" would answer future questions nobody has read, which is
+        // the one thing a question must not do.
+        alwaysAllowScope: null,
+      };
     case 'WebFetch': {
       let host = input.url ?? '';
       try { host = new URL(input.url).host; } catch { /* keep the raw string */ }
@@ -515,7 +619,7 @@ function describeAsk(name, input = {}) {
         description: 'The agent wants to use a tool Box does not model yet.',
         details: Object.entries(input).slice(0, 6).map(([key, value]) => [
           key,
-          clip(String(typeof value === 'object' ? JSON.stringify(value) : value), 512),
+          clip(readable(value), 512),
         ]),
         alwaysAllowScope: null,
       };
@@ -546,7 +650,18 @@ function canUseTool(toolName, input, { signal, suggestions }) {
 
     pendingPermissions.set(requestId, (command) => {
       const allowed = command.decision === 'allow' || command.decision === 'allow_always';
-      emit({ type: 'permission_resolved', requestId, decision: command.decision });
+      const answered = allowed ? answeredInput(toolName, input, command.answers) : null;
+      emit({
+        // An answered question is not a granted permission, and calling it one puts the wrong
+        // sentence in the transcript. The distinction is drawn on the way out rather than on the
+        // way in: the app sends a plain `allow` with the answers attached, so a guest image that
+        // predates questions still *allows* the call instead of failing it, and only a harness
+        // that actually applied them says they were applied.
+        type: 'permission_resolved',
+        requestId,
+        decision: answered ? 'answer' : command.decision,
+        ...(answered ? { answers: answered.answers } : {}),
+      });
       if (!allowed) {
         resolve({
           behavior: 'deny',
@@ -556,6 +671,10 @@ function canUseTool(toolName, input, { signal, suggestions }) {
       }
       resolve({
         behavior: 'allow',
+        // The answer, handed back as the tool's own input. This is the whole of the question round
+        // trip: no second channel, no new command, just the field the tool was always going to
+        // read, filled in by the only part of Box that ever spoke to a person.
+        ...(answered ? { updatedInput: answered } : {}),
         // Carrying the SDK's own suggestions back is what makes "always allow" stick for the rest
         // of the session instead of asking again on the very next edit.
         ...(command.decision === 'allow_always' && suggestions
@@ -1367,6 +1486,31 @@ async function main() {
       // dropping it when the mode is permissive would mean rebuilding the query to get it back.
       canUseTool,
       permissionMode,
+      // A question reaches a person whatever the mode is set to.
+      //
+      // `canUseTool` is the ask path, and under `bypassPermissions` nothing falls through to it —
+      // so a question asked in that mode would be put to nobody and then reported to the agent as
+      // one the user declined to answer. Pinning this one tool to `ask` puts it back on the only
+      // path that can reach a sheet. Between a setting turned on to stop being interrupted and the
+      // one tool whose entire purpose is to interrupt, the tool wins: it is the more specific
+      // instruction, and it is the one the agent chose deliberately.
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'AskUserQuestion',
+            hooks: [
+              async () => ({
+                continue: true,
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse',
+                  permissionDecision: 'ask',
+                  permissionDecisionReason: 'Only the person using Box can answer this.',
+                },
+              }),
+            ],
+          },
+        ],
+      },
       includePartialMessages: false,
       // Showing something is the one tool that is never asked about. A sheet reading "allow the
       // agent to show you a file?" has one honest answer, and asking is worse than not: the
@@ -1477,4 +1621,14 @@ if (isEntryPoint) {
   });
 }
 
-export { describeTool, describeAsk, editPatch, createPatch, translateAssistant, translateToolResults };
+export {
+  describeTool,
+  describeAsk,
+  askedQuestions,
+  answeredInput,
+  readable,
+  editPatch,
+  createPatch,
+  translateAssistant,
+  translateToolResults,
+};

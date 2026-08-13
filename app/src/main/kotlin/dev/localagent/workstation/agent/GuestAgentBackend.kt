@@ -418,16 +418,27 @@ class GuestAgentBackend(
     ) {
         val record = records[sessionId] ?: return
         record.write(
-            mapOf(
-                "type" to "decision",
-                "requestId" to requestId,
-                "decision" to when (decision) {
-                    is PermissionDecision.Allow -> "allow"
-                    is PermissionDecision.AllowAlways -> "allow_always"
-                    is PermissionDecision.Deny -> "deny"
-                    is PermissionDecision.Abandoned -> "deny"
-                },
-            ),
+            buildMap {
+                put("type", "decision")
+                put("requestId", requestId)
+                put(
+                    "decision",
+                    when (decision) {
+                        is PermissionDecision.Allow -> "allow"
+                        // An answered question goes down as a plain allow carrying its answers,
+                        // rather than as a decision word of its own. A guest image older than
+                        // questions then reads an allow it already understands and drops a field
+                        // it has never heard of — the answer is lost, which is exactly today's
+                        // behaviour. A new word would have been read as "not allowed" and failed
+                        // the call outright, which is worse than the bug being fixed.
+                        is PermissionDecision.Answered -> "allow"
+                        is PermissionDecision.AllowAlways -> "allow_always"
+                        is PermissionDecision.Deny -> "deny"
+                        is PermissionDecision.Abandoned -> "deny"
+                    },
+                )
+                if (decision is PermissionDecision.Answered) put("answers", decision.answers)
+            },
         )
     }
 
@@ -807,5 +818,8 @@ private fun reasonFor(ask: PermissionAsk): String = when (ask) {
     is PermissionAsk.EditFile -> "It wants to change a file"
     is PermissionAsk.RunCommand -> "It wants to run a command"
     is PermissionAsk.NetworkAccess -> "It wants to reach the network"
+    // The shape of it, like the rest: which question, and what the answers were, stay in the
+    // transcript where this string is not allowed to follow them.
+    is PermissionAsk.Questions -> "It asked you a question"
     is PermissionAsk.Generic -> "It needs your decision"
 }

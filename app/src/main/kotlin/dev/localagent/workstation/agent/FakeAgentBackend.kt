@@ -760,6 +760,57 @@ class FakeAgentBackend(
     private suspend fun runGenericScript(sessionId: String, prompt: String) {
         activity(sessionId, AgentActivity.Thinking())
         beat(700)
+
+        // The demo's one question, and the only way to see that sheet without building a guest
+        // image. Two at once on purpose: one choice whose descriptions are worth reading, one
+        // multi-select, which between them is everything the sheet has to draw.
+        activity(sessionId, AgentActivity.AwaitingPermission("pending"))
+        val answered = ask(
+            sessionId,
+            PermissionAsk.Questions(
+                listOf(
+                    Question(
+                        text = "How should I take this one?",
+                        header = "Approach",
+                        options = listOf(
+                            QuestionOption(
+                                "Have a look first",
+                                "Read around the code and come back with a plan before touching anything.",
+                            ),
+                            QuestionOption(
+                                "Just make the change",
+                                "Go straight at it. Faster, and you review the diff instead of the plan.",
+                            ),
+                        ),
+                    ),
+                    Question(
+                        text = "Anything I should keep clear of?",
+                        header = "Off limits",
+                        multiSelect = true,
+                        options = listOf(
+                            QuestionOption("Dependencies", "No new packages, no version bumps."),
+                            QuestionOption("Config", "Leave build and CI files alone."),
+                            QuestionOption("Tests", "Change behaviour, not the tests that pin it."),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        when (answered) {
+            is PermissionDecision.Answered ->
+                // Said back in the agent's own words. An answer that vanishes into silence looks,
+                // from the user's side, exactly like a question that was never asked.
+                stream(sessionId, "Got it — ${answered.answers.values.joinToString("; ")}.")
+
+            else ->
+                stream(
+                    sessionId,
+                    "No problem, I'll have a look around first and keep off anything that " +
+                        "isn't obviously mine to change.",
+                )
+        }
+        beat(300)
+
         tool(
             sessionId = sessionId,
             call = ToolCall.Shell("ls -la", "/workspace"),

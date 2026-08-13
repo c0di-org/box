@@ -754,6 +754,14 @@ private fun PermissionRecord(
         PermissionDecision.Allow -> "You allowed this" to MaterialTheme.colorScheme.primary
         is PermissionDecision.AllowAlways ->
             "You allowed ${decision.scope}" to MaterialTheme.colorScheme.primary
+        // One question gets its answer said back, because that is the whole record of it: the
+        // headline above is what was asked and this is what you told it. Several would not fit
+        // on the line, and the sheet is a tap away for the rest.
+        is PermissionDecision.Answered -> {
+            val only = decision.answers.values.singleOrNull()
+            val said = if (only != null) "You chose $only" else "You answered"
+            said to MaterialTheme.colorScheme.primary
+        }
         PermissionDecision.Deny -> "You denied this" to MaterialTheme.colorScheme.error
         PermissionDecision.Abandoned -> "Left unanswered" to MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -830,6 +838,23 @@ private fun PendingPermissionCard(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (item.ask is PermissionAsk.Questions) {
+                    // A question has no answer this card can hold. Options need room to be read
+                    // and compared, and picking one out of a row of buttons at the end of a card
+                    // is how you get a tap that meant "the shorter word", so the card hands the
+                    // whole thing to the sheet rather than pretending to be it.
+                    TextButton(onClick = { onDecision(item.requestId, PermissionDecision.Deny) }) {
+                        Text("Rather not", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(Modifier.width(2.dp))
+                    Button(
+                        onClick = { onReview(item.requestId) },
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+                    ) {
+                        Text("Answer", fontSize = 13.sp)
+                    }
+                    return@Row
+                }
                 // Widening the rule is a decision about the future, so it stays a quiet text
                 // button even here, where the other two are the obvious things to press.
                 item.ask.alwaysAllowScope?.let { scope ->
@@ -859,6 +884,11 @@ private fun askOneLiner(ask: PermissionAsk): String? = when (ask) {
     is PermissionAsk.RunCommand -> ask.command
     is PermissionAsk.EditFile -> ask.diff.path
     is PermissionAsk.NetworkAccess -> ask.purpose ?: ask.host
+    // The headline is already the question when there is only one, so the line under it is better
+    // spent on what the answers are than on repeating it.
+    is PermissionAsk.Questions -> ask.questions.singleOrNull()
+        ?.options?.joinToString(" · ") { it.label }
+        ?: ask.questions.joinToString(" · ") { it.header.ifBlank { it.text } }
     is PermissionAsk.Generic -> ask.description
 }
 
