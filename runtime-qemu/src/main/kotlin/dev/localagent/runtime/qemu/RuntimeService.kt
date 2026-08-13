@@ -336,18 +336,37 @@ class RuntimeService : Service() {
         }
     }
 
+    /**
+     * The one notification the user cannot dismiss, so it has to be Box's.
+     *
+     * It used to introduce itself as "Local Agent VM" under a warning triangle — a name nobody
+     * installed, wearing the icon Android uses for something going wrong, permanently in the shade
+     * of a phone whose owner had only ever seen the word Box.
+     *
+     * It also carries the way out. An emulated ARM64 machine costs real battery and runs until it
+     * is told not to, and the only other route to closing it is two menus deep inside the app —
+     * which is the wrong place for a decision someone makes while looking at their battery screen.
+     */
     private fun promoteToForeground() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(
             CHANNEL_ID,
-            "Local Agent runtime",
+            "Your box",
             NotificationManager.IMPORTANCE_LOW,
         ))
+        val close = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, RuntimeService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification = Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("Local Agent VM")
-            .setContentText("Private Linux workspace is running")
+            .setSmallIcon(R.drawable.ic_box_notification)
+            .setContentTitle("Your box is open")
+            .setContentText("Debian is running on this phone.")
             .setOngoing(true)
+            .apply { openAppIntent()?.let(::setContentIntent) }
+            .addAction(Notification.Action.Builder(null, "Close your box", close).build())
             .build()
         startForeground(
             NOTIFICATION_ID,
@@ -389,21 +408,10 @@ class RuntimeService : Service() {
             }
         }
 
-        // Launching by package keeps the dependency pointing one way: `:app` knows about the
-        // runtime, and the runtime never learns the name of an Activity.
-        val open = packageManager.getLaunchIntentForPackage(packageName)
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val pending = open?.let {
-            PendingIntent.getActivity(
-                this,
-                sessionId.hashCode(),
-                it,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-        }
+        val pending = openAppIntent(sessionId.hashCode())
 
         val notification = Notification.Builder(this, SESSION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(R.drawable.ic_box_notification)
             .setContentTitle(title)
             .setContentText(body.take(MAX_NOTIFICATION_CHARS))
             .setStyle(Notification.BigTextStyle().bigText(body.take(MAX_NOTIFICATION_CHARS)))
@@ -418,6 +426,24 @@ class RuntimeService : Service() {
         runCatching { manager.notify(sessionId.hashCode(), notification) }
             .onFailure { Log.w(TAG, "Could not post a session notification", it) }
     }
+
+    /**
+     * The way back into Box from the shade.
+     *
+     * Launching by package keeps the dependency pointing one way: `:app` knows about the runtime,
+     * and the runtime never learns the name of an Activity.
+     */
+    private fun openAppIntent(requestCode: Int = 0): PendingIntent? =
+        packageManager.getLaunchIntentForPackage(packageName)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            ?.let {
+                PendingIntent.getActivity(
+                    this,
+                    requestCode,
+                    it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            }
 
     companion object {
         /** Binder transactions are capped near 1 MB; keep well clear for text the UI can show. */

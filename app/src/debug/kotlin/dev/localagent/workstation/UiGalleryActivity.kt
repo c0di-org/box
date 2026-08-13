@@ -16,6 +16,7 @@ import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.FakeAgentBackend
+import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.agent.TranscriptItem
@@ -116,6 +117,7 @@ val SCENES = listOf(
     "closed",
     "opening",
     "greeting",
+    "signin",
     // The work.
     "tasks",
     "chat",
@@ -190,6 +192,23 @@ private class GalleryModel(private val scope: CoroutineScope) {
             }
 
             "greeting" -> mutable.update { it.copy(readyGreeting = true) }
+
+            // The same arrival, for the first-run user who has not signed in — with the task they
+            // typed into the wait still in hand. Nothing about this scene is reachable in the
+            // gallery's fake backend, which is signed into nothing and asks for nothing.
+            "signin" -> mutable.update {
+                it.copy(
+                    readyGreeting = true,
+                    signIn = GuestAuth.State.SignedOut,
+                    queued = listOf(
+                        QueuedPrompt(
+                            sessionId = null,
+                            text = "Clone my project and get it running.",
+                            heldForSignIn = true,
+                        ),
+                    ),
+                )
+            }
 
             "tasks" -> Unit
 

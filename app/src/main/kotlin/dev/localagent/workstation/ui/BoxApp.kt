@@ -54,9 +54,11 @@ import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
+import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopTransport
@@ -119,8 +121,9 @@ fun BoxApp(
     /** Set when a specific card asks to be reviewed, so the sheet opens on that one, not the first. */
     var reviewingRequestId by remember { mutableStateOf<String?>(null) }
     val progress = rememberBoxProgress(state)
-    // The app is handed back on press. Only the closed box is allowed to hold the window.
-    val revealed = state.boxStage != BoxStage.Closed
+    // The app is handed back on press. Only a box holding the whole window keeps the chrome off,
+    // which is the first-run splash and the one arrival — never a closed box with work under it.
+    val revealed = state.boxStage != BoxStage.Closed || state.tasks.isNotEmpty()
     val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(state.notice?.id) {
@@ -169,6 +172,7 @@ fun BoxApp(
                     onSendFirstTask = onSend,
                     onDismissGreeting = onDismissGreeting,
                     onShowDetails = { showDiagnostics = true },
+                    onSignIn = onShowSignIn,
                     modifier = modifier,
                     showSelection = showSelection,
                 )
@@ -311,6 +315,7 @@ fun BoxApp(
     if (showDiagnostics) {
         DiagnosticsSheet(
             state = state.runtimeState,
+            signIn = state.signIn,
             onDismiss = { showDiagnostics = false },
             onOpenBox = {
                 showDiagnostics = false
@@ -319,6 +324,10 @@ fun BoxApp(
             onStop = {
                 showDiagnostics = false
                 onStop()
+            },
+            onSignIn = {
+                showDiagnostics = false
+                onShowSignIn()
             },
         )
     }
@@ -498,6 +507,19 @@ private fun PhoneOpeningPreview() = PreviewBox(
 @Composable
 private fun PhoneGreetingPreview() = PreviewBox(
     BoxUiState(runtimeState = RuntimeState.Ready, readyGreeting = true),
+)
+
+@Preview(name = "Phone — first open, not signed in", widthDp = 411, heightDp = 891)
+@Composable
+private fun PhoneSignInPreview() = PreviewBox(
+    BoxUiState(
+        runtimeState = RuntimeState.Ready,
+        readyGreeting = true,
+        signIn = GuestAuth.State.SignedOut,
+        queued = listOf(
+            QueuedPrompt(null, "Clone my project and get it running.", heldForSignIn = true),
+        ),
+    ),
 )
 
 @Preview(name = "Phone — open", widthDp = 411, heightDp = 891)

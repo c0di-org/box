@@ -76,6 +76,7 @@ fun SessionsPane(
     onSendFirstTask: (String) -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
+    onSignIn: () -> Unit,
     modifier: Modifier = Modifier,
     showSelection: Boolean = true,
 ) {
@@ -107,6 +108,7 @@ fun SessionsPane(
                 onSendFirstTask = onSendFirstTask,
                 onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
+                onSignIn = onSignIn,
                 modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
             )
             // Zero-height until the panel has shrunk out of the way, so the tasks slide up into
@@ -318,10 +320,12 @@ private fun NewConversationBar(
                 Spacer(Modifier.width(8.dp))
                 Text("New task")
             }
-            Box {
+            // Only when there is a choice to make. One agent installed — which is every phone
+            // today — and this was a button that opened a menu with a single item in it, next to
+            // the button that already starts a task with that same agent.
+            if (state.harnesses.size > 1) Box {
                 OutlinedButton(
                     onClick = { pickerOpen = true },
-                    enabled = state.harnesses.isNotEmpty(),
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp),
                 ) {
