@@ -121,6 +121,9 @@ let activeQuery = null;
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
 let permissionMode = 'default';
 
+/** Set by `interrupt`, cleared by the turn it stops. See the `result` case in the main loop. */
+let interruptRequested = false;
+
 /**
  * What the person is reading this on, as last reported by the app. Null until it says.
  *
@@ -264,6 +267,17 @@ function handleCommand(line) {
       // thumbnail on a restored transcript is drawn from this line, not from anything the app kept.
       emit(attachments.length > 0 ? { type: 'user_message', text, attachments } : { type: 'user_message', text });
       pushPrompt({ text, attachments });
+      // The turn has begun as far as anyone watching is concerned.
+      //
+      // The SDK narrates the *session* once, at `init`, and then says nothing about a turn
+      // starting — so a second prompt used to produce no activity at all, and Box drew a
+      // conversation with no working indicator and no Stop while an agent was mid-task. Said
+      // here rather than on the first assistant message because the gap this covers is exactly
+      // the one before it: attachments settling, a model call in flight, minutes of nothing.
+      //
+      // Not while something is blocked on the user. "Thinking" over an unanswered request would
+      // overwrite the truer statement that the agent has stopped and is waiting to be answered.
+      if (pendingPermissions.size === 0) emit({ type: 'activity', activity: { kind: 'thinking' } });
       break;
     }
     case 'decision': {
@@ -302,6 +316,7 @@ function handleCommand(line) {
         diagnostic(`ignoring unknown permission mode ${mode}`);
         return;
       }
+      const previous = permissionMode;
       permissionMode = mode;
       // Two paths on purpose. A query that has not been created yet reads the variable when it is;
       // one already running is told, because the SDK will not consult `canUseTool` again for a
@@ -310,7 +325,20 @@ function handleCommand(line) {
       // — the next session opens in the right mode either way.
       if (activeQuery && typeof activeQuery.setPermissionMode === 'function') {
         activeQuery.setPermissionMode(mode).catch((error) => {
+          // Loud, and in the transcript. A refused mode change is the one failure that is
+          // invisible from the outside: Box would go on drawing "Approving everything" over a
+          // session that had quietly stayed on `default` and would keep asking. Rolling the
+          // variable back matters too — the *next* query must not open in a mode this one was
+          // refused.
+          permissionMode = previous;
           diagnostic(`could not change permission mode: ${error?.message ?? error}`);
+          emit({
+            type: 'error',
+            message: 'Box could not change what the agent asks about.',
+            detail: 'This session is still asking before it acts.',
+            recoverable: false,
+          });
+          emit({ type: 'permission_mode', mode: previous });
         });
       }
       // Into the log as well as into the SDK. The transcript is the record of what happened, and
@@ -333,6 +361,10 @@ function handleCommand(line) {
       break;
     }
     case 'interrupt':
+      // Remembered, because the turn does not come back saying who stopped it: the SDK reports an
+      // interrupted turn with the same failed `result` a genuine error produces, and calling that
+      // a failure would put "The agent stopped before it finished" under a Stop the user pressed.
+      interruptRequested = true;
       if (activeQuery) activeQuery.interrupt().catch(() => {});
       break;
     case 'stop_subagent':
@@ -1367,6 +1399,19 @@ async function main() {
       // dropping it when the mode is permissive would mean rebuilding the query to get it back.
       canUseTool,
       permissionMode,
+      // The one option without which "Approve everything" is a lie.
+      //
+      // `bypassPermissions` is not a mode a session may simply be put into: the CLI refuses it
+      // unless it was *launched* with the bypass allowance, both up front and later through
+      // `setPermissionMode`, whose rejection reads "the session was not launched with
+      // --dangerously-skip-permissions". Without this, picking Approve everything left the guest
+      // in `default` and every tool call still stopped to ask — the setting appeared to take,
+      // the banner said it had, and nothing about the behaviour changed.
+      //
+      // It is an allowance rather than a mode. On its own it changes nothing: the session still
+      // starts and stays in whatever `permissionMode` says, and the only thing this adds is that
+      // the answer the user actually chose is now a legal one.
+      allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
       // Showing something is the one tool that is never asked about. A sheet reading "allow the
       // agent to show you a file?" has one honest answer, and asking is worse than not: the
@@ -1378,7 +1423,16 @@ async function main() {
     },
   });
 
-  let ended = false;
+  /**
+   * How the last turn went, held for the session's own ending.
+   *
+   * A `result` is a *turn* boundary, not a session boundary — in streaming-input mode the SDK
+   * emits one at the end of every reply and then waits for the next prompt on the same query. The
+   * session is over when the message stream is, which is when stdin closes or the query is
+   * disposed. This carries the most recent turn's verdict across that gap so the one
+   * `session_ended` Box ever sees still says how the work actually went.
+   */
+  let lastOutcome = null;
   try {
     for await (const message of activeQuery) {
       switch (message.type) {
@@ -1412,24 +1466,49 @@ async function main() {
           });
           break;
         case 'result':
-          ended = true;
-          emit({
-            type: 'session_ended',
-            outcome: message.subtype === 'success'
-              ? { status: 'completed', summary: clip(message.result, 2048) }
-              : { status: 'failed', message: message.subtype },
-          });
+          /*
+           * The end of a turn, said as a turn ending.
+           *
+           * This used to emit `session_ended`, which was wrong twice over. It drew a "Task
+           * finished" rule under every single reply — with `message.result`, the verbatim text
+           * of the answer directly above it, printed again underneath in small grey type — and
+           * it left the transcript marked Ended, so the *next* turn ran with no working
+           * indicator and no Stop until something else happened to narrate itself.
+           *
+           * `result` carries no summary worth showing either way: its `result` field is a copy of
+           * the final assistant message, not a description of the work, so there is nothing here
+           * to say that the conversation has not already said better.
+           */
+          if (message.subtype === 'success') {
+            lastOutcome = { status: 'completed' };
+          } else if (interruptRequested) {
+            // A turn the user stopped, which is not a failure and must never be reported as one.
+            lastOutcome = { status: 'interrupted' };
+          } else {
+            lastOutcome = { status: 'failed', message: message.subtype };
+            // Said now rather than saved for the end. A turn that fell over is news while the
+            // conversation is still open, and the session may well carry on afterwards.
+            emit({
+              type: 'error',
+              message: 'The agent stopped before it finished.',
+              detail: String(message.subtype),
+              recoverable: false,
+            });
+          }
+          interruptRequested = false;
+          // Back to the user. Idle is what puts the composer's full attention on typing and takes
+          // Stop out of the header, and it is only true between turns. A request still waiting to
+          // be answered outranks it, and the app's fold says so on Box's behalf.
+          emit({ type: 'activity', activity: { kind: 'idle' } });
           break;
         default:
           break;
       }
     }
-    // session_ended is terminal: nothing may follow it. Reporting "idle" afterwards would tell the
-    // UI a finished session is waiting for typing. If the stream ended without a result at all,
-    // say so rather than leaving the transcript running forever.
-    if (!ended) {
-      emit({ type: 'session_ended', outcome: { status: 'interrupted' } });
-    }
+    // The stream is finished, so the session genuinely is. session_ended is terminal: nothing may
+    // follow it, and it is emitted exactly once, here — with the last turn's verdict, or
+    // `interrupted` for a stream that ended without ever completing a turn.
+    emit({ type: 'session_ended', outcome: lastOutcome ?? { status: 'interrupted' } });
   } catch (error) {
     const raw = String(error?.message ?? error);
     // An auth failure is the one error whose text is never repeated. It can quote the key it
