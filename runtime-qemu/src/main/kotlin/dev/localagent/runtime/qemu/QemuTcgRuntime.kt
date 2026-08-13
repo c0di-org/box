@@ -481,7 +481,13 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
                         // Recorded before the quit, so a process killed between the two still
                         // leaves a note pointing at a snapshot that is complete on disk.
                         storage.writeSuspendedVm(
-                            SuspendedVm(SuspendedVm.TAG, image, System.currentTimeMillis(), elapsed),
+                            SuspendedVm(
+                                SuspendedVm.TAG,
+                                image,
+                                System.currentTimeMillis(),
+                                elapsed,
+                                machine = QemuCommand.machine(storage),
+                            ),
                         )
                         qmp.quit()
                     }
@@ -666,6 +672,18 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             Log.w(
                 TAG,
                 "Discarding a box saved from ${saved.image}; this device now runs ${installed ?: "no image"}",
+            )
+            storage.clearSuspendedVm()
+            return null
+        }
+        // The same argument one level down: the guest's memory has to go back into the machine it
+        // came out of, and an app update can change that machine without changing its Debian.
+        val machine = QemuCommand.machine(storage)
+        if (saved.machine != machine) {
+            Log.w(
+                TAG,
+                "Discarding a box saved from machine ${saved.machine.ifBlank { "(unrecorded)" }}; " +
+                    "this build builds $machine",
             )
             storage.clearSuspendedVm()
             return null

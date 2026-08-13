@@ -21,9 +21,26 @@ class SuspendedVmTest {
 
     @Test
     fun `a saved box is read back exactly`() {
-        val saved = SuspendedVm("box-suspend", "box-minimal-claude@92ab9fc3", 1_760_000_000_000L, 4_200L)
+        val saved = SuspendedVm(
+            "box-suspend",
+            "box-minimal-claude@92ab9fc3",
+            1_760_000_000_000L,
+            4_200L,
+            machine = "7f3a91c40be2d518",
+        )
         saved.writeTo(file())
         assertEquals(saved, SuspendedVm.read(file()))
+    }
+
+    @Test
+    fun `a note from before machines were recorded names no machine`() {
+        // Such a note was written by a build with a different device set than any build that
+        // records one, so reading it as "no machine" is what makes the resume check refuse it —
+        // see QemuCommand.machine. Blank has to survive the read for that to happen.
+        file().writeText(
+            """{"tag":"box-suspend","image":"box-minimal-claude@92ab9fc3","savedAt":1,"saveMillis":2}""",
+        )
+        assertEquals("", SuspendedVm.read(file())?.machine)
     }
 
     @Test

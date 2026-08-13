@@ -19,6 +19,31 @@ object QemuCommand {
         return resumeFrom?.let { command + listOf("-loadvm", it) } ?: command
     }
 
+    /**
+     * A fingerprint of the machine this build constructs, so a saved guest is only ever handed
+     * back to one shaped like the machine it left.
+     *
+     * `-loadvm` restores a guest's memory into a machine that has to match the one it was saved
+     * from, device for device, and QEMU does not decline politely when it does not: the load fails
+     * *after* the disks have been rolled back toward the snapshot. The image check in
+     * [QemuTcgRuntime.pendingResume] catches a new Debian, but not a new device on the same
+     * Debian — and giving the VNC server a tablet and a keyboard to deliver into is exactly that.
+     * Without this, every box paused by the previous build would have failed to reopen.
+     *
+     * Taken from the launch command itself rather than a constant somebody has to remember to
+     * bump, because the failure it prevents is silent and the reminder would not be. It is
+     * deliberately over-sensitive — an argument that could not really invalidate a snapshot still
+     * changes the fingerprint — since being wrong in that direction costs one cold boot, and
+     * booting cold is always safe.
+     */
+    fun machine(storage: RuntimeStorage): String {
+        val command = boot(storage, resumeFrom = null).joinToString(" ")
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest(command.toByteArray(Charsets.UTF_8))
+            .take(8)
+            .joinToString("") { "%02x".format(it) }
+    }
+
     /** Temporary compatibility boot path used by the device proof image. Production images use
      * the direct-kernel headless path below, which is smaller and boots faster. */
     private fun uefi(storage: RuntimeStorage): List<String> = listOf(
@@ -70,6 +95,23 @@ object QemuCommand {
         "-L", storage.qemuData.absolutePath,
         "-display", "none",
         "-device", "virtio-gpu-pci,xres=1280,yres=800,romfile=",
+        // Something for the VNC server to deliver input *to*. Without these the machine has a
+        // screen and no way to be touched: QEMU routes pointer and key events from RFB into its
+        // input subsystem, which hands them to registered input devices, and `-M virt` registers
+        // none of its own -- there is no PS/2 controller outside x86 and no USB controller unless
+        // one is asked for. Nothing errors. Every click and keystroke is simply dropped, which
+        // presents as "Take over" switching to "You're driving" over a desktop that then ignores
+        // the user completely.
+        //
+        // Tablet rather than mouse because the pointer is absolute everywhere above this line:
+        // RFB carries absolute coordinates and DesktopView maps a touch straight to a guest pixel
+        // (see DesktopView.toGuest). A virtio-mouse reports relative deltas, which would need an
+        // acceleration model here and would still drift away from where the finger actually is.
+        //
+        // romfile= for the same reason as every other PCI device here: there is no QEMU data
+        // directory in an APK, so a device that tries to load an option ROM cannot find one.
+        "-device", "virtio-tablet-pci,romfile=",
+        "-device", "virtio-keyboard-pci,romfile=",
         "-vnc", "unix:${storage.vncSocket.absolutePath}",
         "-kernel", image.kernel.absolutePath,
         "-initrd", image.initrd.absolutePath,
