@@ -29,8 +29,8 @@ const USER = { login: 'codi', id: 4242, name: 'Codi', email: null };
  * `pendingPolls` is not decoration: the device flow is defined by the wait, and a stub that hands
  * over a token on the first poll would let a broken polling loop pass.
  */
-function stubGitHub({ pendingPolls = 1, tokenError = null, installations = 1, repositories = 3 } = {}) {
-  const state = { polls: 0, installations, deviceCodes: 0 };
+function stubGitHub({ pendingPolls = 1, tokenError = null, installations = 1, repositories = 3, revoked = false } = {}) {
+  const state = { polls: 0, installations, deviceCodes: 0, revoked };
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://stub');
     const answer = (status, body) => {
@@ -55,8 +55,8 @@ function stubGitHub({ pendingPolls = 1, tokenError = null, installations = 1, re
       return answer(200, { access_token: 'ghu_the_token', token_type: 'bearer' });
     }
     if (url.pathname === '/user') {
-      const authorized = request.headers.authorization === 'Bearer ghu_the_token'
-        || request.headers.authorization === 'Bearer ghp_pasted';
+      const authorized = !state.revoked && (request.headers.authorization === 'Bearer ghu_the_token'
+        || request.headers.authorization === 'Bearer ghp_pasted');
       return authorized ? answer(200, USER) : answer(401, { message: 'Bad credentials' });
     }
     if (url.pathname === '/user/installations') {
@@ -79,11 +79,13 @@ function stubGitHub({ pendingPolls = 1, tokenError = null, installations = 1, re
  * `respond` is handed each event as it arrives so a test can answer the way the app would — which
  * is the only way to exercise the steps that wait for a person.
  */
-async function connect({ respond = () => null, arguments: argv = [], environment = {}, ...stub } = {}) {
+async function connect({ respond = () => null, arguments: argv = [], environment = {}, config: reuse, ...stub } = {}) {
   const { server, state } = stubGitHub(stub);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const config = mkdtempSync(join(tmpdir(), 'box-github-'));
+  // Reusable, so a test can run the program twice over one box's disk -- which is the only way to
+  // exercise what a *second* connect does, and the second connect is the common one.
+  const config = reuse ?? mkdtempSync(join(tmpdir(), 'box-github-'));
 
   const child = spawn(process.execPath, [PROGRAM, ...argv], {
     env: {
@@ -170,6 +172,62 @@ test('authorised with nothing to work on asks for repositories, then finishes', 
   assert.match(events[1].url, /\/apps\/box-agent\/installations\/new$/);
   // Two installations of three repositories each: the number the UI says out loud.
   assert.equal(events[2].repositories, 6);
+});
+
+test('connecting a box that is already connected offers the repositories, not a second sign-in', async () => {
+  // The whole reason this path exists. A GitHub App token reaches only the repositories the app is
+  // installed on, so the 403 an agent hits on a private clone almost always means "not that one"
+  // rather than "no credential". Running the device flow again re-authorises, finds installations
+  // already there, finishes -- and the agent gets the identical 403 on the retry.
+  const { config } = await connect();
+
+  const { events, state } = await connect({
+    config,
+    respond: (event, stub) => {
+      if (event.type !== 'github_install') return null;
+      stub.installations = 2;
+      return { type: 'installed' };
+    },
+  });
+
+  // No code, because nobody needs to prove who they are twice.
+  assert.deepEqual(typesOf(events), ['github_install', 'github_connected']);
+  assert.equal(events[0].adding, true, 'the screen has to know it is widening, not connecting');
+  assert.equal(events[0].login, 'codi');
+  assert.equal(state.deviceCodes, 0);
+  assert.equal(events[1].repositories, 6);
+});
+
+test('adding nothing is an answer, and does not hold the screen for a quarter of an hour', async () => {
+  const { config } = await connect();
+
+  // Went to GitHub, thought better of it, came back. The reachable set is unchanged, so the poll
+  // will never finish on its own -- "I'm done" has to be able to end it.
+  const { events } = await connect({
+    config,
+    respond: (event) => (event.type === 'github_install' ? { type: 'installed' } : null),
+  });
+
+  assert.deepEqual(typesOf(events), ['github_install', 'github_connected']);
+  assert.equal(events[1].repositories, 3);
+});
+
+test('a box whose token was revoked at GitHub does start over', async () => {
+  const { config } = await connect();
+
+  // The one case where a second sign-in is exactly right, and the shortcut above must not swallow
+  // it: the stored credential is refused, so there is genuinely nothing to widen.
+  const { events } = await connect({
+    config,
+    revoked: true,
+    respond: (event, stub) => {
+      // Once a code is out, the person is authorising afresh and the new token must be accepted.
+      if (event.type === 'github_code') stub.revoked = false;
+      return null;
+    },
+  });
+
+  assert.deepEqual(typesOf(events), ['github_code', 'github_connected']);
 });
 
 test('backing out of the picker leaves the credential in place to resume from', async () => {

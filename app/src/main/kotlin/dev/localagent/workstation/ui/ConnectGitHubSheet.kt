@@ -141,6 +141,7 @@ fun ConnectGitHubSheet(
 
                     is GitHubAuth.State.ChoosingRepositories -> ChooseBody(
                         url = current.url,
+                        adding = current.adding,
                         onOpenUrl = onOpenUrl,
                         onDone = onRepositoriesChosen,
                     )
@@ -149,7 +150,7 @@ fun ConnectGitHubSheet(
                         if (current.needsRepositories) {
                             // Connected to an account and able to reach nothing. Not a success, and
                             // not a failure either — one step of two, offered again.
-                            ChooseBody(url = null, onOpenUrl = onOpenUrl, onDone = onConnect)
+                            ChooseBody(url = null, adding = false, onOpenUrl = onOpenUrl, onDone = onConnect)
                         } else {
                             ConnectedBody(current, onDisconnect)
                         }
@@ -201,6 +202,9 @@ private fun Header(state: GitHubAuth.State, reason: String?) {
                 when {
                     state is GitHubAuth.State.Connected && !state.needsRepositories -> "GitHub connected"
                     state is GitHubAuth.State.Failed -> "That didn’t finish"
+                    // Nothing is being connected here; something already connected is being
+                    // widened, and a title saying otherwise is the first thing read.
+                    state is GitHubAuth.State.ChoosingRepositories && state.adding -> "Add a repository"
                     else -> "Connect GitHub"
                 },
                 style = MaterialTheme.typography.titleLarge,
@@ -210,7 +214,8 @@ private fun Header(state: GitHubAuth.State, reason: String?) {
                     // Past the first step, the useful sentence is not why they are here — it is
                     // that the half they have already done worked. Without it, a second browser
                     // trip reads as the first one having failed.
-                    state is GitHubAuth.State.ChoosingRepositories -> "Signed in as @${state.login}"
+                    state is GitHubAuth.State.ChoosingRepositories ->
+                        if (state.adding) "Connected as @${state.login}" else "Signed in as @${state.login}"
                     // The agent's own reason when there is one: it is the only explanation the
                     // person gets before deciding, and more use than anything written in advance.
                     else -> reason ?: "Stays in your box. Only the repositories you pick."
@@ -338,24 +343,48 @@ private fun CodeCells(code: String, onCopy: () -> Unit) {
 
 /** Choosing what the box can reach, which is the step that is actually about trust. */
 @Composable
-private fun ChooseBody(url: String?, onOpenUrl: (String) -> Unit, onDone: () -> Unit) {
+private fun ChooseBody(
+    url: String?,
+    /** Widening a box that already works, rather than finishing a first connection. */
+    adding: Boolean,
+    onOpenUrl: (String) -> Unit,
+    onDone: () -> Unit,
+) {
     Column {
         Text(
-            "Now pick what this box can see.",
+            // A person who is already connected is here because something was out of reach, not
+            // because their account did not take. Telling them to "now pick what this box can
+            // see" reads as though the connection they have did not happen.
+            if (adding) "Add the repository it needs." else "Now pick what this box can see.",
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.Medium,
         )
         Spacer(Modifier.height(6.dp))
-        Quiet("Choose repositories at GitHub. Box can only reach the ones you pick, and you can change it later.")
+        Quiet(
+            if (adding) {
+                "Box can only reach the repositories you picked. Add this one at GitHub and it will carry on."
+            } else {
+                "Choose repositories at GitHub. Box can only reach the ones you pick, and you can change it later."
+            },
+        )
         Spacer(Modifier.height(16.dp))
         if (url != null) {
             Button(onClick = { onOpenUrl(url) }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(17.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Choose repositories")
+                Text(if (adding) "Add a repository" else "Choose repositories")
             }
             Spacer(Modifier.height(12.dp))
             Waiting("Waiting for you to choose")
+            if (adding) {
+                // Only offered where there is something to fall back on. This screen finishes by
+                // itself when the reachable set changes, which is the intended path — but somebody
+                // who went to GitHub and decided against it would otherwise be held here for a
+                // quarter of an hour by a screen with no way to say so.
+                TextButton(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
+                    Text("I’m done", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         } else {
             Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Choose repositories") }
         }
