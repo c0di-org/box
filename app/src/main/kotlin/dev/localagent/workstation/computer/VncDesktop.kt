@@ -48,7 +48,11 @@ class VncDesktop(
      * pane beside a conversation on a Fold. One RFB connection feeds all of them; the cost of an
      * extra view is one scaled blit per frame, not another framebuffer crossing the emulated link.
      */
-    private val surfaces = LinkedHashSet<Surface>()
+    private val surfaces = LinkedHashMap<Surface, GuestScreen>()
+
+    private val wantedScreen = MutableStateFlow<GuestScreen?>(null)
+    override val wantedGuestScreen: StateFlow<GuestScreen?> = wantedScreen.asStateFlow()
+
     private var connection: RfbConnection? = null
     private var pump: Job? = null
     private var bitmap: Bitmap? = null
@@ -59,7 +63,10 @@ class VncDesktop(
 
     override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int) {
         synchronized(lock) {
-            surfaces += surface
+            // Re-measured, not merely added: `surfaceChanged` is how a rotation, a fold and a DeX
+            // window drag all arrive, and each of those is a resize of a surface already here.
+            surfaces[surface] = GuestScreen(widthPx, heightPx)
+            publishWantedScreen()
             if (pump != null) {
                 // Already streaming; a view was resized, recreated, or newly opened. Repaint into
                 // it rather than reconnecting, which would cost a full framebuffer resend.
@@ -81,6 +88,7 @@ class VncDesktop(
     override suspend fun detach(surface: Surface) {
         val running = synchronized(lock) {
             surfaces -= surface
+            publishWantedScreen()
             if (surfaces.isNotEmpty()) return
             val job = pump
             pump = null
@@ -176,6 +184,14 @@ class VncDesktop(
         }
     }
 
+    /**
+     * Only ever called while [lock] is held: the answer is derived from [surfaces], and a size
+     * published from a half-updated set of views would be a size the guest then actually took.
+     */
+    private fun publishWantedScreen() {
+        wantedScreen.value = GuestScreenFit.of(surfaces.values)
+    }
+
     private fun bitmapMatches(rfb: RfbConnection): Boolean = synchronized(lock) {
         val current = bitmap ?: return false
         current.width == rfb.width && current.height == rfb.height
@@ -209,7 +225,7 @@ class VncDesktop(
         val target = bitmap ?: return
         // Each view letterboxes the same bitmap into its own size, so a thumbnail and a full window
         // are the same picture at two scales rather than two streams.
-        for (output in surfaces.toList()) {
+        for (output in surfaces.keys.toList()) {
             if (!output.isValid) continue
             val canvas: Canvas = runCatching { output.lockCanvas(null) }.getOrNull() ?: continue
             try {

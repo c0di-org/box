@@ -114,6 +114,11 @@ fun SessionsPane(
                 onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
                 onSignIn = onSignIn,
+                // Exactly this tall, and it has to stay exact: [RowFrame] centres its content with
+                // `fillMaxHeight`, so relaxing this to a minimum lets the row expand to the whole
+                // pane and pushes the task list out of the window entirely. The three-line row
+                // that used to be clipped is fixed by [HERO_SETTLED_HEIGHT] being big enough for
+                // it instead.
                 modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
             )
             // Zero-height until the panel has shrunk out of the way, so the tasks slide up into
@@ -313,8 +318,11 @@ private fun TaskRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    // What the agent last said, or else when it last did anything. Never the
+                    // working directory: it is `/workspace` for every task there has ever been,
+                    // so a column of it under a column of titles distinguished nothing.
                     Text(
-                        task.preview ?: task.workingDirectory,
+                        task.preview ?: Ago.of(task.updatedAt, System.currentTimeMillis()),
                         style = MaterialTheme.typography.bodyMedium,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -682,8 +682,19 @@ private fun RowFrame(onClick: (() -> Unit)?, content: @Composable (androidx.comp
     }
 }
 
-/** How tall the box's row is once it has settled. The caller animates down to this. */
-val HERO_SETTLED_HEIGHT = 100.dp
+/**
+ * How tall the box's row is once it has settled. The caller animates down to this.
+ *
+ * It has to be a fixed height — [RowFrame] centres its content with `fillMaxHeight`, so a row
+ * given a minimum instead of an exact height expands until it has eaten the task list — which
+ * means this number has to fit the *tallest* thing the row ever says, not the usual thing.
+ *
+ * 100dp did not, by about a pixel. The row's chrome is 40dp (14/8 outside, 12/12 inside), which
+ * left 60dp for text; two lines and a subtitle need 61dp, and the three-line case — "Your box is
+ * paused" wrapping in a 320dp task pane, over "Just as you left it." — was cut off through the
+ * descenders of its own last line. This is that, with room to spare.
+ */
+val HERO_SETTLED_HEIGHT = 116.dp
 
 /** Long enough to read as the panel moving rather than the screen changing. */
 const val SETTLE_MILLIS = 520

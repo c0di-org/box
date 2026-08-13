@@ -54,4 +54,16 @@ interface IRuntimeControl {
 
     /** Stop a session and forget it. An agent session's log stays on disk. */
     oneway void closeAgentSession(String sessionId);
+
+    /**
+     * Put the guest's screen at [width] x [height], so the desktop fills the window showing it
+     * instead of being letterboxed into it.
+     *
+     * Fire-and-forget, and deliberately without a callback: the answer already arrives by another
+     * route. Resizing the guest changes the shape of QEMU's console, and QEMU tells the VNC client
+     * about that itself — so the UI learns the new size from the picture, which is the only source
+     * that cannot disagree with what is on screen. A callback here would be a second, slower
+     * account of the same fact.
+     */
+    oneway void setDisplaySize(int width, int height);
 }

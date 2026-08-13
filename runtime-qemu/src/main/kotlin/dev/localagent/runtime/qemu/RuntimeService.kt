@@ -248,6 +248,22 @@ class RuntimeService : Service() {
             touch()
             sessions.remove(sessionId)?.cancel()
         }
+
+        /**
+         * Deliberately not `touch()`ed. Every other call here is the user doing something, and
+         * touching keeps the box awake for it. This one is the window being measured — it fires on
+         * rotations and folds, including ones nobody is watching, and an idle box should be
+         * allowed to go to sleep while its screen is on a display that changed shape.
+         */
+        override fun setDisplaySize(width: Int, height: Int) {
+            scope.launch {
+                runCatching { runtime.setDisplaySize(width, height) }
+                    // Nothing above can act on this. The desktop is a courtesy on a machine whose
+                    // real work is the agent, and a guest too early in its boot to have an X
+                    // server is the ordinary case, not a fault.
+                    .onFailure { Log.i(TAG, "guest kept its screen size: ${it.message}") }
+            }
+        }
     }
 
     /** Live sessions, keyed by Box's own session id so a restarted UI can find them again. */

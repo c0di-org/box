@@ -370,6 +370,60 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
 
     override suspend fun desktopStart(): DesktopSession = unavailable("Desktop")
     override suspend fun desktopStop(): Unit = unavailable("Desktop")
+
+    /**
+     * Resize the guest's screen to [width] x [height], from inside the guest.
+     *
+     * See [GuestDisplayMode] for why this is an `xrandr` and not the `SetDesktopSize` the RFB
+     * protocol is holding out — the short version is that QEMU 5.1's VNC server can announce a
+     * resize but cannot be asked for one.
+     *
+     * ### It is retried, because the usual reason it fails is that it was early
+     *
+     * The first size is asked for as soon as the computer is opened, and on a cold box that is
+     * often before the desktop session exists: `local-agent-desktop.service` is ordered after the
+     * workspace, restarts on failure every five seconds, and under TCG can lose a race with udev
+     * settling the GPU. An X server that is half-started does not refuse quickly — it accepts the
+     * connection and then does not answer, so the first attempt spends its whole budget and
+     * returns nothing useful.
+     *
+     * Giving up there would leave the guest at its built-in 1280x800 until the window next
+     * changed shape, which on a phone is never. So this tries a few times, spaced far enough
+     * apart to be worth doing. A wrong size fails the same way each time and costs a bounded
+     * amount; a slow one succeeds on the second or third go.
+     *
+     * A non-zero exit is still reported at the end, because the failures worth knowing about — no
+     * X server at all, or a mode the driver refused — are otherwise completely silent, and a
+     * screen that simply stayed the wrong shape is what both look like from above.
+     */
+    suspend fun setDisplaySize(width: Int, height: Int) {
+        require(width in MIN_DISPLAY_SIDE..MAX_DISPLAY_SIDE && height in MIN_DISPLAY_SIDE..MAX_DISPLAY_SIDE) {
+            "A ${width}x$height screen is outside what the guest's display can be"
+        }
+        var last = ""
+        repeat(DISPLAY_RESIZE_ATTEMPTS) { attempt ->
+            if (attempt > 0) delay(DISPLAY_RESIZE_RETRY_MILLIS)
+            val result = runCatching {
+                exec(
+                    ExecRequest(
+                        command = GuestDisplayMode.command(width, height),
+                        // The default, `/workspace`, and left as the default deliberately: nothing
+                        // here reads or writes a file, but agentd refuses any working directory
+                        // outside /workspace and /home/agent — a "/" that looked harmless was
+                        // rejected with the message a real escape attempt gets, and the screen
+                        // just stayed the wrong shape.
+                        timeoutSeconds = DISPLAY_RESIZE_TIMEOUT_SECONDS,
+                    ),
+                )
+            }
+            result.onSuccess { if (it.exitCode == 0) return }
+            last = result.fold(
+                { it.stderr.trim().ifEmpty { "exit ${it.exitCode}" } },
+                { it.message ?: it::class.java.simpleName },
+            )
+        }
+        error("the guest would not take a ${width}x$height screen: $last")
+    }
     /**
      * Opens a loopback port on the phone that reaches [request]'s port inside the guest.
      *
@@ -481,7 +535,13 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
                         // Recorded before the quit, so a process killed between the two still
                         // leaves a note pointing at a snapshot that is complete on disk.
                         storage.writeSuspendedVm(
-                            SuspendedVm(SuspendedVm.TAG, image, System.currentTimeMillis(), elapsed),
+                            SuspendedVm(
+                                SuspendedVm.TAG,
+                                image,
+                                System.currentTimeMillis(),
+                                elapsed,
+                                machine = QemuCommand.machine(storage),
+                            ),
                         )
                         qmp.quit()
                     }
@@ -670,6 +730,18 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             storage.clearSuspendedVm()
             return null
         }
+        // The same argument one level down: the guest's memory has to go back into the machine it
+        // came out of, and an app update can change that machine without changing its Debian.
+        val machine = QemuCommand.machine(storage)
+        if (saved.machine != machine) {
+            Log.w(
+                TAG,
+                "Discarding a box saved from machine ${saved.machine.ifBlank { "(unrecorded)" }}; " +
+                    "this build builds $machine",
+            )
+            storage.clearSuspendedVm()
+            return null
+        }
         return saved
     }
 
@@ -802,6 +874,19 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         const val HEALTH_TIMEOUT_MILLIS = 2_500L
         const val EXEC_TRANSPORT_GRACE_SECONDS = 5
         const val MAX_EXEC_TIMEOUT_SECONDS = 900
+
+        /**
+         * A mode set is a real piece of work on an emulated GPU — X reallocates the screen and
+         * every client redraws into it — and 15s, which looked generous, was not: it expired on a
+         * freshly booted guest and left the desktop at its built-in size.
+         */
+        const val DISPLAY_RESIZE_TIMEOUT_SECONDS = 60
+        const val DISPLAY_RESIZE_ATTEMPTS = 3
+        const val DISPLAY_RESIZE_RETRY_MILLIS = 6_000L
+
+        /** What the guest's `virtio-gpu` will accept; it reports `maximum 8192 x 8192`. */
+        const val MIN_DISPLAY_SIDE = 320
+        const val MAX_DISPLAY_SIDE = 8192
         const val MAX_FILE_BYTES = 8 * 1024 * 1024
         const val MAX_LIST_ENTRIES = 2_000
         const val EXIT_POLL_MILLIS = 250L

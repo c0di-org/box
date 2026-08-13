@@ -3,6 +3,8 @@ package dev.localagent.workstation.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -112,6 +114,14 @@ fun ConversationPane(
     modifier: Modifier = Modifier,
     onReviewPermission: (() -> Unit)? = null,
     showComputerAction: Boolean = true,
+    /**
+     * Whether this pane is the one that reports the box's own state.
+     *
+     * False in `Wide`, where the task list beside it already leads with the box and its Open
+     * button. See the call site in [BoxApp]; the default is true so the pane on its own always
+     * says it.
+     */
+    showBoxState: Boolean = true,
     onSignIn: () -> Unit = {},
     onConnectGitHub: () -> Unit = {},
     onDeclineConnection: () -> Unit = {},
@@ -137,28 +147,57 @@ fun ConversationPane(
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // Above the rest, and not dismissable: everything else here is about whether Box can work,
-        // and this is about what it is allowed to do without asking. A user scrolling past a
-        // booting-computer banner must not scroll past this one.
-        PermissionModeBanner(state.permissionMode, onSetPermissionMode)
+        /*
+         * One strip, ranked — not a stack.
+         *
+         * These were drawn one under another, and two of them together pushed the conversation a
+         * fifth of the way down a 1384px pane with neither dismissable. They are also not equally
+         * urgent, and stacking them said they were. The order below is "what most stands between
+         * the user and the thing they came here to do": no credential beats no computer beats an
+         * agent stopped waiting to be answered beats a dropped connection beats a standing
+         * setting. The first two are Box being unusable, the third is work that has actually
+         * halted, and the last two are noise the user can do nothing about.
+         *
+         * Each condition is spelled out rather than left to the banner's own early return,
+         * because a `when` that picks a branch which then draws nothing would silently hide the
+         * banner underneath it.
+         */
+        val requests = state.transcript?.pendingPermissions.orEmpty()
+        val connectionTrouble = state.computerReady &&
+            state.connection !is SessionConnection.Live &&
+            state.connection !is SessionConnection.Ended
+        val connectRequest = state.connectRequest?.takeIf { it.sessionId == state.selectedSessionId }
+        when {
+            state.needsSignIn -> SignInBanner(onSignIn)
+            // While the computer is down, its own banner is the true and actionable one. Showing
+            // the transport's view as well says the same thing twice, in red, about a normal state.
+            showBoxState && state.runtimeState != RuntimeState.Ready ->
+                ComputerBanner(state.runtimeState, onStartComputer)
 
-        // While the computer is down, its own banner is the true and actionable one. Showing the
-        // transport's view as well says the same thing twice, in red, about a normal state.
-        if (state.computerReady) ConnectionBanner(state.connection)
-        ComputerBanner(state.runtimeState, onStartComputer)
-        if (state.needsSignIn) SignInBanner(onSignIn)
-        // Only for the conversation that is actually waiting. An agent in another task asking for
-        // an account is that task's business until the user opens it.
-        state.connectRequest
-            ?.takeIf { it.sessionId == state.selectedSessionId }
-            ?.let { ConnectBanner(it, onConnectGitHub, onDeclineConnection) }
+            // An agent that has stopped and is waiting to be answered, for *this* conversation.
+            // Above the reconnect below it because it is blocking real work and the user can act
+            // on it, where a reconnect is transient and there is nothing to do but wait. Only for
+            // the selected session: an agent in another task asking for an account is that task's
+            // business until the user opens it.
+            connectRequest != null ->
+                ConnectBanner(connectRequest, onConnectGitHub, onDeclineConnection)
+
+            connectionTrouble -> ConnectionBanner(state.connection)
+
+            // Last, and silent while anything is actually being asked. "Box is not asking before
+            // the agent acts" was being drawn directly above a prompt asking the user to approve
+            // something: both cannot be true, and of the two the request is the one they have to
+            // deal with. It comes back the moment nothing is outstanding.
+            state.permissionMode != AgentPermissionMode.Ask && requests.isEmpty() ->
+                PermissionModeBanner(state.permissionMode, onSetPermissionMode)
+        }
 
         val nothingToShow = (state.transcript == null || state.transcript.items.isEmpty()) &&
             queued.isEmpty()
 
         Box(Modifier.weight(1f)) {
             when {
-                session == null && queued.isEmpty() -> NoSessionState()
+                session == null && queued.isEmpty() -> NoSessionState(state.tasks.isNotEmpty())
                 // Not while the box is opening: nothing can arrive until it does, the banner
                 // above already says so, and a spinner that has to run for three minutes is the
                 // app pretending to work.
@@ -447,10 +486,23 @@ private fun TranscriptList(
     LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity) {
         if (total > 0 && listState.isNearEnd()) listState.animateScrollToItem(total)
     }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    /*
+     * A column, not a stack with the pill floating on top of it.
+     *
+     * Floating put "↓ Latest" across whatever line of the transcript happened to be at that height
+     * — in the shots that prompted this, mid-sentence, hiding several words of the agent's answer,
+     * and worst in the narrow column where a covered line is a bigger fraction of what is there.
+     * Reserving room at the end of the list does not fix that: `contentPadding` only pads the ends,
+     * and the pill sits over the *viewport*, so any line scrolled under it is still covered — and
+     * the pill exists precisely when the user is scrolled somewhere in the middle.
+     *
+     * So it gets its own lane between the transcript and the composer. It costs a strip of height
+     * while it is up, which is the honest price of never hiding what it is offering to scroll to.
+     */
+    Column(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -490,7 +542,7 @@ private fun TranscriptList(
             // following resumes rather than sitting there offering to do what already happens.
             visible = remember(listState) { derivedStateOf { !listState.isNearEnd(slack = 1) } }.value,
             onClick = { scope.launch { listState.animateScrollToItem(total) } },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp),
         )
     }
 }
@@ -501,10 +553,19 @@ private fun TranscriptList(
  * It only exists while the user has scrolled away from the end, which is exactly when the
  * transcript stops following on its own — the pair is one behaviour. Quiet by design: the same
  * surface and outline as a tool card, because it is a way to move, not a thing that happened.
+ *
+ * It expands into its own lane rather than fading in over the transcript. Fading in over it meant
+ * landing on a line of the conversation and hiding words; taking the room is the cheaper of the
+ * two, and the movement also reads as the control arriving rather than a label appearing.
  */
 @Composable
 private fun JumpToLatest(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    AnimatedVisibility(visible, modifier, enter = fadeIn(), exit = fadeOut()) {
+    AnimatedVisibility(
+        visible,
+        modifier,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
         Surface(
             onClick = onClick,
             shape = CircleShape,
@@ -634,8 +695,18 @@ private fun TranscriptLoading() {
     }
 }
 
+/**
+ * Nothing selected — which is two different situations, and it used to say the same thing about
+ * both.
+ *
+ * "Pick a task" is instruction the reader cannot follow when there is nothing in the list, which
+ * is exactly the state a new box is in. The composer under it is live and does work in both cases:
+ * typing with nothing selected opens a task and sends into it (see `BoxViewModel.sendMessage`), so
+ * the second title is a description of what is already true rather than a new affordance.
+ */
 @Composable
-private fun NoSessionState() = EmptyState("Pick a task")
+private fun NoSessionState(hasTasks: Boolean) =
+    EmptyState(if (hasTasks) "Pick a task" else "Start a task")
 
 @Composable
 private fun EmptyTranscriptState(harness: HarnessDescriptor?) =

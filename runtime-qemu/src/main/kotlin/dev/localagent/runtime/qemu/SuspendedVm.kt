@@ -23,12 +23,21 @@ internal data class SuspendedVm(
     val savedAtMillis: Long,
     /** How long the save itself took, so the resume can be reported against its real cost. */
     val saveMillis: Long,
+    /**
+     * The machine this guest was saved from — see [QemuCommand.machine].
+     *
+     * Empty for a note written before builds recorded it, which is treated as "not this machine"
+     * rather than "any machine": those notes were written by a build with a different device set,
+     * and that is precisely the case this field exists to refuse.
+     */
+    val machine: String = "",
 ) {
     fun toJson(): String = JSONObject()
         .put(KEY_TAG, tag)
         .put(KEY_IMAGE, image)
         .put(KEY_SAVED_AT, savedAtMillis)
         .put(KEY_SAVE_MILLIS, saveMillis)
+        .put(KEY_MACHINE, machine)
         .toString()
 
     /**
@@ -58,6 +67,7 @@ internal data class SuspendedVm(
         private const val KEY_IMAGE = "image"
         private const val KEY_SAVED_AT = "savedAt"
         private const val KEY_SAVE_MILLIS = "saveMillis"
+        private const val KEY_MACHINE = "machine"
 
         /** Null for every unreadable form: absent, truncated, or not describing a snapshot. */
         fun read(file: File): SuspendedVm? = runCatching {
@@ -70,6 +80,7 @@ internal data class SuspendedVm(
                 image = image,
                 savedAtMillis = json.optLong(KEY_SAVED_AT),
                 saveMillis = json.optLong(KEY_SAVE_MILLIS),
+                machine = json.optString(KEY_MACHINE),
             )
         }.getOrNull()
     }

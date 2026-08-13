@@ -26,6 +26,7 @@ import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopInput
 import dev.localagent.workstation.computer.DesktopState
 import dev.localagent.workstation.computer.DesktopTransport
+import dev.localagent.workstation.computer.GuestScreen
 import dev.localagent.workstation.ui.BoxApp
 import dev.localagent.workstation.ui.BoxTheme
 import kotlinx.coroutines.CoroutineScope
@@ -439,6 +440,10 @@ private val WORKSPACE = listOf(
 private object StubDesktop : DesktopTransport {
     override val state: StateFlow<DesktopState> =
         MutableStateFlow(DesktopState.Live(1280, 800, ControlHolder.User))
+
+    // Never asks for a resize, for the same reason nothing is painted: the gallery is about
+    // layout, and a stub that drove the guest's screen would be reaching past what it is for.
+    override val wantedGuestScreen: StateFlow<GuestScreen?> = MutableStateFlow(null)
 
     override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int) = Unit
     override suspend fun detach(surface: Surface) = Unit
