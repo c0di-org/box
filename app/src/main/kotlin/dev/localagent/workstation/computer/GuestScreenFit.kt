@@ -14,15 +14,20 @@ data class GuestScreen(val width: Int, val height: Int) {
  * The rules here are the whole of the policy; [GuestDisplayMode][dev.localagent.runtime.qemu] only
  * carries it out. Three of them, and each exists because of something that went wrong without it.
  *
- * ### The biggest view wins, and thumbnails do not count
+ * ### The biggest view wins, and views that are only looked at never get here
  *
- * The same machine is drawn in several places at once — the row in the task list carries a live
- * 230px-wide thumbnail while the computer fills the window behind it. Following the largest
+ * The same machine is drawn in several places at once — the box's header on the home column
+ * carries a live minimap while the computer fills the window behind it. Following the largest
  * surface is right; following *any* surface is not, because leaving the computer for the task list
- * would then resize the guest down to a thumbnail, and coming back would resize it up again. A
- * whole X mode set, twice, for navigation. So a surface below [MIN_VIEWPORT_PIXELS] is understood
- * as a preview of a screen rather than a screen, and if none of the attached surfaces is bigger
- * than that, the answer is null: leave the guest exactly as it is.
+ * would then resize the guest down to the minimap, and coming back would resize it up again. A
+ * whole X mode set, twice, for navigation.
+ *
+ * Which view is a picture of the screen rather than a screen is not a question of size and cannot
+ * be — the minimap is a few hundred pixels across on a phone, which is larger than a desktop pane
+ * on a small window — so the caller says so, and [VncDesktop][dev.localagent.workstation.computer.VncDesktop]
+ * filters those out before this sees them. [MIN_VIEWPORT_PIXELS] stays as the floor under whatever
+ * is left: if nothing attached is bigger than that, the answer is null and the guest is left
+ * exactly as it is.
  *
  * ### A ceiling on pixels, not on either side
  *
@@ -86,8 +91,8 @@ object GuestScreenFit {
     private fun step(value: Double): Int = floor(value / STEP).toInt() * STEP
 
     /**
-     * Below this a surface is a thumbnail. Comfortably above the task list's live row (~230x145)
-     * and comfortably below the smallest real pane, which is a phone in the `Single` layout.
+     * Below this a surface is too small to resize a whole desktop for, whatever it claims to be.
+     * Comfortably below the smallest real pane, which is a phone in the `Single` layout.
      */
     private const val MIN_VIEWPORT_PIXELS = 400L * 300L
 

@@ -93,7 +93,7 @@ fun SessionsPane(
         // When the box gets the window and when it becomes a row is [BoxUiState.boxOwnsWindow].
         val full = state.boxOwnsWindow
         val panelHeight by animateDpAsState(
-            targetValue = if (full) maxHeight else HERO_SETTLED_HEIGHT,
+            targetValue = if (full) maxHeight else settledBoxHeight(state, maxWidth),
             animationSpec = tween(SETTLE_MILLIS),
             label = "box panel",
         )
@@ -114,11 +114,11 @@ fun SessionsPane(
                 onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
                 onSignIn = onSignIn,
-                // Exactly this tall, and it has to stay exact: [RowFrame] centres its content with
-                // `fillMaxHeight`, so relaxing this to a minimum lets the row expand to the whole
-                // pane and pushes the task list out of the window entirely. The three-line row
-                // that used to be clipped is fixed by [HERO_SETTLED_HEIGHT] being big enough for
-                // it instead.
+                // Exactly this tall, and it has to stay exact: the settled header is animated
+                // into place by a height, and a height that is whatever the content turns out to
+                // be cannot be animated to. What it should be, per state and per column width, is
+                // [settledBoxHeight] — which is derived from the same constants the header draws
+                // itself with, so the two cannot disagree about how much room the screen gets.
                 modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
             )
             // Zero-height until the panel has shrunk out of the way, so the tasks slide up into

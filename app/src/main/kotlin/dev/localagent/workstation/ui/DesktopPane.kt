@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 /**
  * The machine's screen, live.
  *
- * Two ways in and they are the same surface: the thumbnail on the home row, and the computer
+ * Two ways in and they are the same surface: the minimap in the box's header, and the computer
  * itself. The difference is only how much room it gets and whether input reaches it, because a
  * desktop that behaves differently depending on where it is drawn is two things to get right
  * instead of one. They can be on screen together — the transport paints every attached surface
@@ -55,14 +55,18 @@ import kotlinx.coroutines.launch
  * handover belongs to leaving the computer; see `BoxViewModel.showTasks`.
  *
  * @param pointer the cursor this surface steers, shared with the on-screen keyboard so the two
- * cannot disagree about where it is. A view that is only ever looked at — the thumbnail — gets one
+ * cannot disagree about where it is. A view that is only ever looked at — the minimap — gets one
  * of its own, which nothing will ever move.
+ * @param preview this view is a picture of the screen rather than a screen, and its size must not
+ * decide the guest's. Fixed per call site, and read once when the surface first attaches. See
+ * [DesktopTransport.attach].
  */
 @Composable
 internal fun DesktopSurface(
     transport: DesktopTransport,
     interactive: Boolean,
     modifier: Modifier = Modifier,
+    preview: Boolean = false,
     pointer: GuestPointer? = null,
     onViewReady: (DesktopView) -> Unit = {},
 ) {
@@ -101,7 +105,14 @@ internal fun DesktopSurface(
             factory = { context ->
                 DesktopView(context).apply {
                     onSurfaceReady = { surface, width, height ->
-                        scope.launch { transport.attach(surface, width, height + keyboardInset.intValue) }
+                        scope.launch {
+                            transport.attach(
+                                surface,
+                                width,
+                                height + keyboardInset.intValue,
+                                preview,
+                            )
+                        }
                     }
                     onSurfaceGone = { surface -> scope.launch { transport.detach(surface) } }
                     onInput = { input -> scope.launch { transport.send(input) } }

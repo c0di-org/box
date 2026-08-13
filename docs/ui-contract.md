@@ -411,15 +411,21 @@ changes class mid-process and DeX windows are resized by dragging a corner.
 The decision is made once in `BoxApp`; every pane below is written to be dropped into either
 without knowing which it landed in.
 
-There is no bottom navigation bar. The computer is the first row of the task list — carrying its
-own live screen — and a button in the conversation's header; both are always on screen, which the
-old nav bar was not.
+There is no bottom navigation bar. The computer is the top of the task list — the box's header
+carries the machine's own screen, as large as the column can make it — and a button in the
+conversation's header; both are always on screen, which the old nav bar was not.
+
+That header is the only chrome the home surface has: the mark, the word "Box", one LED for the
+machine's state, one overflow into the box's details, and under it whatever the stage owns — the
+screen when open, a hairline and a phase while opening, one line and one word when closed. It was
+a top bar stacked on a "Computer / Debian · in use" card with a second overflow menu going to the
+same sheet.
 
 ## 5. Opening the box
 
 `BoxStage` is the whole of it: `Closed`, `Working`, `Open`. What the home surface does with each is
 `BoxUiState.boxOwnsWindow` — the box gets the window when there is nothing else worth showing, and
-becomes a row the moment there is. The opening carries a composer, because the useful thing to do
+becomes the header the moment there is. The opening carries a composer, because the useful thing to do
 with a three-minute boot is queue the first task; `BoxUiState.queued` holds it until the guest can
 take it. The first opening on a device ends in a full-window greeting with both doors on it
 (`readyGreeting`, persisted in `OpeningHistory`); every later one ends in a snackbar and a haptic.

@@ -20,7 +20,8 @@ yourself" a sub-feature two taps inside a tab. The Computer destination now *is*
 full window at every size, live, driven by the pointer and keyboard — with the agent, terminal and
 files floating over it one panel at a time. Someone who never speaks to an agent can install Box,
 press Computer, and use Debian. The bottom nav bar went with that change: the computer is the
-first row of the task list, carrying its own live screen, and a button in the conversation header.
+top of the task list — the box's own header carries its live screen — and a button in the
+conversation header.
 
 The visual language did not change. `BoxTheme.kt` / `BoxTypography.kt` are as they were, plus two
 constants (`BoxUserBubble` / `BoxUserBubbleLight`) — the user's own turns are the one non-green

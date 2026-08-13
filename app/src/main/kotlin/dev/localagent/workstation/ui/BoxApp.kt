@@ -2,37 +2,25 @@ package dev.localagent.workstation.ui
 
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.expandVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,18 +29,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxDestination
-import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
@@ -147,9 +132,6 @@ fun BoxApp(
      */
     var reviewingRequestId by remember { mutableStateOf<String?>(null) }
     val progress = rememberBoxProgress(state)
-    // The app is handed back on press. Only a box holding the whole window keeps the chrome off,
-    // which is the first-run splash and the one arrival — never a closed box with work under it.
-    val revealed = state.boxStage != BoxStage.Closed || state.tasks.isNotEmpty()
     val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(state.notice?.id) {
@@ -301,20 +283,14 @@ fun BoxApp(
                 BoxDestination.Tasks -> when (layout) {
                     BoxLayout.Single -> SinglePaneLayout(
                         state = state,
-                        revealed = revealed,
-                        progress = progress,
                         onSelectSession = onSelectSession,
-                        onShowDiagnostics = { showDiagnostics = true },
                         home = home,
                         conversation = conversation,
                     )
 
                     BoxLayout.Wide -> WidePaneLayout(
                         state = state,
-                        revealed = revealed,
-                        progress = progress,
                         windowWidth = maxWidth,
-                        onShowDiagnostics = { showDiagnostics = true },
                         home = home,
                         conversation = conversation,
                     )
@@ -433,10 +409,7 @@ fun BoxApp(
 @Composable
 private fun SinglePaneLayout(
     state: BoxUiState,
-    revealed: Boolean,
-    progress: BoxProgress,
     onSelectSession: (String?) -> Unit,
-    onShowDiagnostics: () -> Unit,
     home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
@@ -449,12 +422,9 @@ private fun SinglePaneLayout(
             if (inConversation) {
                 conversation(Modifier.fillMaxSize(), { onSelectSession(null) }, true)
             } else {
-                Column(Modifier.fillMaxSize()) {
-                    // The hero is the window while the box is closed, so the chrome above it
-                    // arrives the moment the box is asked for — carrying the opening on its mark.
-                    BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
-                    home(Modifier.fillMaxSize(), false)
-                }
+                // No chrome above the home surface. The box's own header is the top of it —
+                // mark, name, state, menu — and it arrives with the box; see [YourBox].
+                home(Modifier.fillMaxSize(), false)
             }
         }
     }
@@ -464,16 +434,12 @@ private fun SinglePaneLayout(
 @Composable
 private fun WidePaneLayout(
     state: BoxUiState,
-    revealed: Boolean,
-    progress: BoxProgress,
     windowWidth: Dp,
-    onShowDiagnostics: () -> Unit,
     home: @Composable (Modifier, Boolean) -> Unit,
     conversation: @Composable (Modifier, (() -> Unit)?, Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.width(homeWidth(!state.boxOwnsWindow, windowWidth))) {
-            BoxChrome(visible = revealed) { BoxTopBar(state, progress, onShowDiagnostics) }
             home(Modifier.fillMaxSize(), true)
         }
         PaneDivider()
@@ -496,49 +462,12 @@ private fun homeWidth(settled: Boolean, windowWidth: Dp) =
         label = "home width",
     ).value
 
-/** Chrome that belongs to the opened box, and arrives with it. */
-@Composable
-private fun BoxChrome(visible: Boolean, content: @Composable () -> Unit) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(SETTLE_MILLIS)) + expandVertically(tween(SETTLE_MILLIS)),
-        exit = fadeOut(tween(SETTLE_MILLIS / 2)) + shrinkVertically(tween(SETTLE_MILLIS / 2)),
-    ) {
-        content()
-    }
-}
-
 @Composable
 private fun PaneDivider() {
     VerticalDivider(
         modifier = Modifier.fillMaxHeight().width(1.dp),
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
     )
-}
-
-// ---------------------------------------------------------------------------
-// Chrome
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun BoxTopBar(state: BoxUiState, progress: BoxProgress, onShowDiagnostics: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 12.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // The whole of the opening lives here too, for whenever the panel below is a row.
-        OpeningMark(progress, opening = state.boxStage == BoxStage.Working)
-        Spacer(Modifier.width(10.dp))
-        Text(
-            "Box",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onShowDiagnostics) {
-            Icon(Icons.Outlined.MoreVert, contentDescription = "Computer details")
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
