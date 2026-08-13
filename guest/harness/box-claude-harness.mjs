@@ -57,6 +57,24 @@ const MAX_TEXT = 32 * 1024;
 const clip = (text, limit = MAX_TEXT) =>
   typeof text === 'string' && text.length > limit ? text.slice(0, limit) + '\n…truncated' : text;
 
+/**
+ * A model's sentence, cut down to something that fits on one line of a phone.
+ *
+ * Not [clip], which is built for transcript bodies and says so in the way it ends: a hard cut
+ * mid-word followed by a newline and the word "truncated". In a caption under a button that is a
+ * broken sentence with a stray line break in it, which is exactly how it looked. Here the line
+ * break is the first thing to go — a caption is one line by definition — and the cut lands on a
+ * word boundary with a single ellipsis, so what is left still reads as language.
+ */
+const CAPTION = 140;
+function caption(text, limit = CAPTION) {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (flat.length <= limit) return flat;
+  const cut = flat.slice(0, limit);
+  const boundary = cut.lastIndexOf(' ');
+  return `${(boundary > limit * 0.6 ? cut.slice(0, boundary) : cut).replace(/[,;:.]$/, '')}…`;
+}
+
 // ---------------------------------------------------------------- input
 
 /** Resolvers for permission requests the user has not answered yet, keyed by requestId. */
@@ -1198,7 +1216,12 @@ function connectTool(tool, z) {
     {
       service: z.enum(['github']).describe('The account to connect. GitHub is the only one so far.'),
       reason: z.string().optional()
-        .describe('Half a line on what you need it for, in their words — "to clone garfbargle/box". It is shown above the button, so it is the only explanation they get before deciding.'),
+        .describe(
+          'One short sentence on what you need it for, in their words and their terms — '
+          + '"I need to push a branch to garfbargle/box." Shown as a caption under a button on a '
+          + 'phone, so it is the only explanation they get before deciding, and anything past a '
+          + 'line is cut. Name the repository; leave out the tooling.',
+        ),
     },
     async (args) => {
       const requestId = `connect-${++nextConnectId}`;
@@ -1207,9 +1230,9 @@ function connectTool(tool, z) {
         type: 'connect_requested',
         requestId,
         service: args.service ?? 'github',
-        // Clipped rather than refused: this is a caption, and a long one is a formatting problem
+        // Trimmed rather than refused: this is a caption, and a long one is a formatting problem
         // rather than a reason to fail a request the person is waiting on.
-        reason: clip(String(args.reason ?? ''), 160) || null,
+        reason: caption(args.reason) || null,
       });
       const outcome = await settled;
       // The counterpart to the event above, and the reason it exists is replay: a session log is

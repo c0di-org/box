@@ -65,6 +65,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.workstation.agent.GitHubAuth
@@ -223,6 +224,10 @@ private fun Header(state: GitHubAuth.State, reason: String?) {
                 style = MaterialTheme.typography.bodyMedium,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Model-written, so bounded here too. Three lines of explanation under the title
+                // pushes the code — the one thing this screen exists to show — down the sheet.
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

@@ -507,6 +507,11 @@ private fun Banner(
                         style = MaterialTheme.typography.bodyMedium,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // A caption, and the guest trims it to one. Bounded here as well because
+                        // this text is written by a model and the banner sits above the composer:
+                        // an unbounded body pushes the thing somebody is typing into off screen.
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

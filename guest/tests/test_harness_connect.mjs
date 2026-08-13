@@ -154,6 +154,36 @@ test('the agent asks, and the app is told what for', async () => {
   assert.equal(asked.reason, 'to clone garfbargle/box');
 });
 
+test('a long reason is trimmed to something that still reads as a sentence', async () => {
+  const events = await connect({
+    input: {
+      service: 'github',
+      reason: 'I need to push a branch and open a pull request against garfbargle/box with the '
+        + 'cold-start fix, which touches the runtime and the harness and a couple of tests as well',
+    },
+    answer: { connected: true, login: 'codi', repositories: 3 },
+  });
+
+  const { reason } = events.find((event) => event.type === 'connect_requested');
+  assert.ok(reason.length <= 141);
+  // The three things that made this unreadable: a hard cut mid-word, the word "truncated" as
+  // though the caption were a log, and a newline inside a one-line caption on a phone.
+  assert.ok(reason.endsWith('…'));
+  assert.ok(!reason.includes('truncated'));
+  assert.ok(!reason.includes('\n'));
+  assert.ok(!/\s…$/.test(reason), 'the ellipsis follows a word, not a space');
+  assert.ok(reason.startsWith('I need to push a branch'));
+});
+
+test('a reason with a line break in it becomes one line', async () => {
+  const events = await connect({
+    input: { service: 'github', reason: '  to clone\n  garfbargle/box  ' },
+    answer: { connected: true, login: 'codi', repositories: 3 },
+  });
+
+  assert.equal(events.find((event) => event.type === 'connect_requested').reason, 'to clone garfbargle/box');
+});
+
 test('a request that ends says so in the log, so a replay does not reopen it', async () => {
   const events = await connect({
     input: { service: 'github', reason: 'to clone garfbargle/box' },
