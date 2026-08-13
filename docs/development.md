@@ -91,6 +91,33 @@ python3 -m unittest discover -s guest/tests
 
 There is no CI, and no instrumented or UI tests.
 
+## The mark
+
+The app icon lives in `Marketing/app-icon.jpeg` — three lit faces of a cube, separated by
+seams that glow green. Nothing hand-traces it. `tools/gen-icon.py` holds the faces as
+polygons in the artwork's own pixel space and writes every place the mark appears:
+
+```bash
+python3 tools/gen-icon.py
+```
+
+That is the launcher's foreground, background and monochrome layers, the splash icon, the
+pre-O fallbacks, the notification silhouette, and `BoxMarkArt.kt`, which is the same
+geometry as Kotlin so `BoxMark` draws the icon rather than something that resembles it.
+Its output is committed; run it when the artwork changes.
+
+The one thing worth knowing before editing it: a VectorDrawable cannot blur, so the glow
+is a stack of round-joined strokes, laid down widest and faintest first, fitted to green
+measured perpendicular to a seam in the artwork. The broad far bloom is too faint to be
+worth a stroke and is a radial gradient on the icon's background layer instead. Both fall
+out of `FALLOFF` and `BANDS` at the top of the script.
+
+One thing that looks like a bug and is not: on a home screen the icon sits inside a pale
+ring. That is the launcher, not the artwork. Pixel Launcher shrinks any icon that fills
+its whole mask and fills the margin with a lightened sample of the icon's own background,
+which is invisible for the white-backed icons around it and obvious for a black one. Paint
+the background layer magenta and the ring goes pale magenta with it.
+
 ## The screenshots
 
 The pictures in the README are taken, not drawn. Retake all of them after any UI change:

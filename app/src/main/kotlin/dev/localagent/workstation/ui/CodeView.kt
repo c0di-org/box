@@ -51,9 +51,9 @@ object CodeColors {
     val comment = Color(0xFF6B7A70)
     val punctuation = Color(0xFF9AA79F)
 
-    val addedInk = Color(0xFFB9F0CE)
-    val addedWash = Color(0x2630A46C)
-    val addedGutter = Color(0xFF3F8F65)
+    val addedInk = Color(0xFFC6F3B4)
+    val addedWash = Color(0x262AB80C)
+    val addedGutter = Color(0xFF3E8F2A)
     val removedInk = Color(0xFFFFC2BB)
     val removedWash = Color(0x26E5484D)
     val removedGutter = Color(0xFFA9524F)
@@ -266,7 +266,7 @@ private fun DiffHeader(diff: FileDiff) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color(0xFF171C19))
+            .background(Color(0xFF121614))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

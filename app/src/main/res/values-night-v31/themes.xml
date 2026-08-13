@@ -6,7 +6,7 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@color/box_background</item>
-        <item name="android:windowSplashScreenBackground">@color/box_launcher_background</item>
+        <item name="android:windowSplashScreenBackground">@color/box_void</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_box_splash</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>

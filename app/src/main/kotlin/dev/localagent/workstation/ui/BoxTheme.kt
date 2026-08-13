@@ -7,10 +7,17 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val BoxGreen = Color(0xFF30A46C)
-val BoxGreenLight = Color(0xFF8CE3B5)
-val BoxInk = Color(0xFF181B19)
-val BoxTerminal = Color(0xFF101412)
+/** A seam of the app icon's cube at full strength: the one saturated colour Box owns. */
+val BoxGreen = Color(0xFF2AB80C)
+
+/** The hot edge of that seam, where the glow meets a lit face. Reads on dark surfaces. */
+val BoxGreenLight = Color(0xFF7FE868)
+
+/** The ground the icon's cube sits on, and the ground anything icon-like sits on here. */
+val BoxVoid = Color(0xFF0A0B0C)
+
+val BoxInk = Color(0xFF161A16)
+val BoxTerminal = Color(0xFF0A0C0B)
 
 /**
  * The user's own turns. Green belongs to the *agent's* work — its status, its successes — so the
@@ -21,14 +28,14 @@ val BoxUserBubble = Color(0xFF33407E)
 val BoxUserBubbleLight = Color(0xFFDDE1FB)
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF146C48),
+    primary = Color(0xFF1F7D08),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFC2F2D6),
-    onPrimaryContainer = Color(0xFF002114),
-    secondary = Color(0xFF4D6356),
+    primaryContainer = Color(0xFFC6F3B4),
+    onPrimaryContainer = Color(0xFF0A2600),
+    secondary = Color(0xFF52634A),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD0E8D7),
-    onSecondaryContainer = Color(0xFF0A1F14),
+    secondaryContainer = Color(0xFFD5E8C9),
+    onSecondaryContainer = Color(0xFF111F0A),
     tertiary = Color(0xFF3D6372),
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFC1E9FA),
@@ -37,10 +44,10 @@ private val LightColors = lightColorScheme(
     onBackground = BoxInk,
     surface = Color(0xFFF6F7F2),
     onSurface = BoxInk,
-    surfaceVariant = Color(0xFFDFE4DE),
-    onSurfaceVariant = Color(0xFF424842),
-    outline = Color(0xFF727872),
-    outlineVariant = Color(0xFFC1C8C1),
+    surfaceVariant = Color(0xFFDFE5D9),
+    onSurfaceVariant = Color(0xFF43483F),
+    outline = Color(0xFF73796D),
+    outlineVariant = Color(0xFFC2C8BB),
     error = Color(0xFFBA1A1A),
     errorContainer = Color(0xFFFFDAD6),
     onErrorContainer = Color(0xFF410002),
@@ -48,25 +55,25 @@ private val LightColors = lightColorScheme(
 
 private val DarkColors = darkColorScheme(
     primary = BoxGreenLight,
-    onPrimary = Color(0xFF003822),
-    primaryContainer = Color(0xFF005234),
-    onPrimaryContainer = Color(0xFFC2F2D6),
-    secondary = Color(0xFFB4CCBB),
-    onSecondary = Color(0xFF20352A),
-    secondaryContainer = Color(0xFF364B40),
-    onSecondaryContainer = Color(0xFFD0E8D7),
+    onPrimary = Color(0xFF0A3300),
+    primaryContainer = Color(0xFF17590A),
+    onPrimaryContainer = Color(0xFFC6F3B4),
+    secondary = Color(0xFFBACCAC),
+    onSecondary = Color(0xFF263520),
+    secondaryContainer = Color(0xFF3C4B34),
+    onSecondaryContainer = Color(0xFFD5E8C9),
     tertiary = Color(0xFFA5CDDE),
     onTertiary = Color(0xFF063543),
     tertiaryContainer = Color(0xFF244C5A),
     onTertiaryContainer = Color(0xFFC1E9FA),
-    background = Color(0xFF101311),
-    onBackground = Color(0xFFE1E4DF),
-    surface = Color(0xFF101311),
-    onSurface = Color(0xFFE1E4DF),
-    surfaceVariant = Color(0xFF424842),
-    onSurfaceVariant = Color(0xFFC1C8C1),
-    outline = Color(0xFF8B928B),
-    outlineVariant = Color(0xFF424842),
+    background = Color(0xFF0C0F0D),
+    onBackground = Color(0xFFE2E5DE),
+    surface = Color(0xFF0C0F0D),
+    onSurface = Color(0xFFE2E5DE),
+    surfaceVariant = Color(0xFF43483F),
+    onSurfaceVariant = Color(0xFFC2C8BB),
+    outline = Color(0xFF8C9287),
+    outlineVariant = Color(0xFF43483F),
     error = Color(0xFFFFB4AB),
     errorContainer = Color(0xFF93000A),
     onErrorContainer = Color(0xFFFFDAD6),

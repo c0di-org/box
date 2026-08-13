@@ -8,13 +8,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -24,36 +29,50 @@ import dev.localagent.workstation.agent.HarnessMarkKind
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** The Box cube. */
+/**
+ * The Box cube: the app icon, drawn at whatever size the screen wants it.
+ *
+ * The artwork is three lit faces with a green seam between them, and the seam glows. A
+ * vector cannot blur, so the bloom is the same stack of round-joined strokes the launcher
+ * icon carries — laid down widest and faintest first — and both come out of
+ * [BoxMarkArt], so the mark on a Box screen cannot drift away from the one on the home
+ * screen.
+ */
 @Composable
 fun BoxMark(size: Dp, modifier: Modifier = Modifier) {
+    val cube = remember { PathParser().parsePathString(BoxMarkArt.PATH).toPath() }
     Canvas(
         modifier
             .size(size)
+            .clip(RoundedCornerShape(size * 0.235f))
             .semantics { contentDescription = "Box" },
     ) {
-        drawRoundRect(color = BoxInk, cornerRadius = CornerRadius(9.dp.toPx()))
-        val stroke = 1.8.dp.toPx()
-        val left = Offset(this.size.width * 0.26f, this.size.height * 0.36f)
-        val top = Offset(this.size.width * 0.50f, this.size.height * 0.23f)
-        val right = Offset(this.size.width * 0.74f, this.size.height * 0.36f)
-        val center = Offset(this.size.width * 0.50f, this.size.height * 0.50f)
-        val bottomLeft = Offset(this.size.width * 0.26f, this.size.height * 0.63f)
-        val bottom = Offset(this.size.width * 0.50f, this.size.height * 0.77f)
-        val bottomRight = Offset(this.size.width * 0.74f, this.size.height * 0.63f)
-        val ink = BoxGreenLight
-        listOf(
-            left to top,
-            top to right,
-            left to center,
-            right to center,
-            center to bottom,
-            left to bottomLeft,
-            bottomLeft to bottom,
-            right to bottomRight,
-            bottomRight to bottom,
-        ).forEach { (from, to) ->
-            drawLine(ink, from, to, strokeWidth = stroke, cap = StrokeCap.Round)
+        // The tile is the 72-unit window a launcher mask shows of the icon's 108-unit grid,
+        // so the cube sits at the same size in its plate here as it does on the home screen.
+        val scale = this.size.width / BoxMarkArt.WINDOW
+        drawRect(
+            Brush.radialGradient(
+                0f to Color(BoxMarkArt.HAZE),
+                0.42f to Color(BoxMarkArt.HAZE_MID),
+                0.78f to BoxVoid,
+                1f to BoxVoid,
+                center = center,
+                radius = this.size.width * 0.875f,
+            ),
+        )
+        withTransform({
+            translate(-BoxMarkArt.INSET * scale, -BoxMarkArt.INSET * scale)
+            scale(scale, scale, Offset.Zero)
+        }) {
+            BoxMarkArt.GLOW.forEach { (width, alpha) ->
+                drawPath(
+                    cube,
+                    BoxGreen,
+                    alpha = alpha,
+                    style = Stroke(width = width, join = StrokeJoin.Round),
+                )
+            }
+            drawPath(cube, Color(BoxMarkArt.FACE))
         }
     }
 }
@@ -135,7 +154,7 @@ fun harnessAccent(harnessId: String): Color = when (harnessId) {
     "claude" -> Color(0xFFD97757)
     "chatgpt" -> Color(0xFF56C08A)
     "cursor" -> Color(0xFFB9C2BC)
-    else -> Color(0xFF8CE3B5)
+    else -> BoxGreenLight
 }
 
 /** A small filled dot, used for live-status indicators. */

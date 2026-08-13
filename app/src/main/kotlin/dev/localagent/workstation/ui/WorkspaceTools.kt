@@ -140,10 +140,10 @@ fun TerminalTool(
                             items(listOf("pwd", "ls -la", "uname -a")) { command ->
                                 Surface(
                                     onClick = { onRunCommand(command) },
-                                    color = Color(0xFF1B211D),
+                                    color = Color(0xFF151A17),
                                     contentColor = Color(0xFFD5DDD7),
                                     shape = CircleShape,
-                                    border = BorderStroke(1.dp, Color(0xFF344038)),
+                                    border = BorderStroke(1.dp, Color(0xFF2E3A2A)),
                                 ) {
                                     Text(
                                         command,
