@@ -813,7 +813,12 @@ private fun PendingPermissionCard(
                             style = MaterialTheme.typography.bodyMedium,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
+                            // A command gets room to be read whole. This card is not a summary of
+                            // the decision in the wide layout -- it *is* the decision, now that the
+                            // sheet no longer opens over it -- and "allow this command" with the
+                            // command ellipsized is not a question anyone can answer. Still
+                            // bounded, so one pathological line cannot take the pane.
+                            maxLines = if (item.ask is PermissionAsk.RunCommand) 6 else 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }

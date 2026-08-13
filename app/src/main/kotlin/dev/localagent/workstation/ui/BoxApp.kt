@@ -166,10 +166,9 @@ fun BoxApp(
     }
 
     val waiting = state.transcript?.pendingPermissions.orEmpty()
-    // The sheet is about one request at a time: whichever was asked to be reviewed, or else the
-    // oldest one nobody has waved away. The rest stay answerable on their own cards.
-    val sheetTarget = waiting.firstOrNull { it.requestId == reviewingRequestId }
-        ?: waiting.firstOrNull { it.requestId !in dismissedRequests }
+    // The request the user asked to look at properly, whatever the layout. Tapping "Review" is an
+    // explicit request for the sheet and is honoured everywhere.
+    val reviewing = waiting.firstOrNull { it.requestId == reviewingRequestId }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -184,6 +183,30 @@ fun BoxApp(
         ) {
             val layout = rememberBoxLayout(maxWidth, maxHeight)
             val compact = layout == BoxLayout.Single
+
+            /**
+             * One owner per request, decided by the layout.
+             *
+             * `Single` gives it to the sheet: the transcript card is somewhere up the scrollback,
+             * and the sheet is reachable with a thumb and follows you. `Wide` gives it to the card
+             * in the transcript, which is already on screen and next to the work it is about — and
+             * the sheet there was drawing a second live copy of the same Deny/Allow *on top of the
+             * hint pointing at the first one*.
+             *
+             * Both layouts still open the sheet on request; see [reviewing]. It is the automatic
+             * one that was wrong, not the sheet.
+             *
+             * Inside the constraints rather than beside them because that is where the layout is
+             * known. It costs nothing: a `ModalBottomSheet` is its own window and is positioned
+             * against the screen, not against whatever composable happens to contain it.
+             */
+            val sheetTarget = when (layout) {
+                BoxLayout.Single -> reviewing
+                    ?: waiting.firstOrNull { it.requestId !in dismissedRequests }
+
+                BoxLayout.Wide -> reviewing
+            }
+
 
             // The one place in Box that knows how much room there is. Reported rather than stored:
             // this is the same measurement the layout above is drawn from, so an agent writing for
@@ -310,29 +333,29 @@ fun BoxApp(
                     state.sessions.firstOrNull()?.let { onSelectSession(it.id) }
                 }
             }
-        }
-    }
 
-    if (sheetTarget != null) {
-        val harnessName = state.harnesses
-            .firstOrNull { it.id == state.selectedSession?.harnessId }
-            ?.name
-        PermissionSheet(
-            pending = sheetTarget,
-            harnessName = harnessName,
-            // How many others are blocked behind this one, so answering does not feel like the end
-            // of it when it is not.
-            alsoWaiting = waiting.count { it.requestId != sheetTarget.requestId },
-            onDecision = { decision ->
-                reviewingRequestId = null
-                dismissedRequests = dismissedRequests - sheetTarget.requestId
-                onPermissionDecision(sheetTarget.requestId, decision)
-            },
-            onDismiss = {
-                reviewingRequestId = null
-                dismissedRequests = dismissedRequests + sheetTarget.requestId
-            },
-        )
+            if (sheetTarget != null) {
+                val harnessName = state.harnesses
+                    .firstOrNull { it.id == state.selectedSession?.harnessId }
+                    ?.name
+                PermissionSheet(
+                    pending = sheetTarget,
+                    harnessName = harnessName,
+                    // How many others are blocked behind this one, so answering does not feel like
+                    // the end of it when it is not.
+                    alsoWaiting = waiting.count { it.requestId != sheetTarget.requestId },
+                    onDecision = { decision ->
+                        reviewingRequestId = null
+                        dismissedRequests = dismissedRequests - sheetTarget.requestId
+                        onPermissionDecision(sheetTarget.requestId, decision)
+                    },
+                    onDismiss = {
+                        reviewingRequestId = null
+                        dismissedRequests = dismissedRequests + sheetTarget.requestId
+                    },
+                )
+            }
+        }
     }
 
     if (state.signInVisible) {

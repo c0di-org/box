@@ -123,6 +123,18 @@ class GuestAgentBackend(
          * transcript readable with the box closed.
          */
         val restored: Boolean = false,
+        /**
+         * Whether [title] came from something the user actually said.
+         *
+         * A task started from the "New task" button has no prompt to be named after, so it gets a
+         * placeholder — and until this existed it kept that placeholder forever, however much work
+         * it went on to do. A list of tasks all called the same thing is not a list.
+         *
+         * Restored sessions count as named even when their stored title is a placeholder from an
+         * older build: renaming a task the user has been looking at for a week, because a message
+         * happened to arrive, would be worse than the dull name.
+         */
+        @Volatile var named: Boolean = false,
     ) {
         val chunks = MutableSharedFlow<Pair<Long, ByteArray>>(
             extraBufferCapacity = 256,
@@ -178,6 +190,9 @@ class GuestAgentBackend(
             records[summary.id] = Record(
                 summary.id, summary.harnessId, summary.title, summary.workingDirectory,
                 restored = true,
+                // Whatever it is called, it has been called that since before this process
+                // started, and the user has seen it. See [Record.named].
+                named = true,
             ).apply { status = summary.status }
         }
         sessionsState.value = restored
@@ -341,8 +356,9 @@ class GuestAgentBackend(
         val record = Record(
             id = id,
             harnessId = harnessId,
-            title = prompt?.toTitle() ?: "New task",
+            title = prompt?.toTitle() ?: UNNAMED,
             workingDirectory = WORKSPACE,
+            named = prompt != null,
         )
         records[id] = record
         publish(record, SessionStatus.Active, prompt)
@@ -354,6 +370,14 @@ class GuestAgentBackend(
 
     override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
         val record = records[sessionId] ?: return
+        // The first thing the user says is the name of the task, the way it is in every chat app.
+        // Only the first: a task is named after what it was for, not after the last thing said in
+        // it, and a title that moved under the reader would make the list unreadable in the other
+        // direction.
+        if (!record.named) {
+            text.toTitle()?.let { record.title = it }
+            record.named = true
+        }
         attach(record)
         record.write(promptCommand(text, attachments))
         publish(record, SessionStatus.Active, text)
@@ -645,8 +669,16 @@ class GuestAgentBackend(
         store.save(sessionsState.value)
     }
 
-    private fun String.toTitle(): String =
-        trim().lineSequence().firstOrNull()?.take(60)?.ifBlank { null } ?: "New task"
+    /**
+     * A task's name, from the first line of what was said. Null when there is nothing to name it
+     * after, so the caller keeps whatever it had rather than replacing a real title with a shrug.
+     *
+     * A whole first line, cut at [TITLE_CHARS] — not a summary. Summarising costs a model call and
+     * would be wrong often enough to be worse than the user's own words, which they wrote and
+     * therefore recognise.
+     */
+    private fun String.toTitle(): String? =
+        trim().lineSequence().firstOrNull()?.trim()?.take(TITLE_CHARS)?.ifBlank { null }
 
     private companion object {
         const val TAG = "BoxAgentBackend"
@@ -659,6 +691,10 @@ class GuestAgentBackend(
         const val BIND_TIMEOUT_MILLIS = 4_000L
         const val PREFERENCES = "box_product"
         const val MODE_KEY = "agent_permission_mode"
+
+        /** What a task is called before anybody has said anything in it. */
+        const val UNNAMED = "New task"
+        const val TITLE_CHARS = 60
 
         val HARNESS_COMMAND = arrayOf(
             "/usr/bin/node",
