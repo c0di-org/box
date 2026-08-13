@@ -28,7 +28,7 @@ enum class BoxDestination { Tasks, Computer }
  * panels drawn on top of it — the agent, a shell, the workspace — one at a time, dismissable back
  * to nothing. A tab bar would have made the desktop one of four equal things instead of the thing.
  */
-enum class ComputerPanel { None, Chat, Terminal, Files }
+enum class ComputerPanel { None, Chat, Terminal, Files, Preview }
 
 /**
  * The two places files live, and the Files panel opens on the first of them.
@@ -169,6 +169,14 @@ data class BoxUiState(
     val openingFilePath: String? = null,
     val openedFile: OpenedFile? = null,
 
+    /**
+     * Something the agent is serving in the guest, reachable on the phone's loopback.
+     *
+     * The guest port is kept beside the url because releasing the forward needs it, and the url is
+     * a loopback address that says nothing about which guest port it reaches.
+     */
+    val preview: OpenedPreview? = null,
+
     // ---- the shared folder ----
     val filesPlace: FilesPlace = FilesPlace.Shared,
     /** Relative to the shared folder; empty at its root. Never an absolute phone path. */
@@ -259,3 +267,6 @@ data class BoxUiState(
     val agentAtWork: Boolean
         get() = sessions.any { it.status == SessionStatus.Active }
 }
+
+/** A forwarded guest port, and the address on the phone that reaches it. */
+data class OpenedPreview(val url: String, val guestPort: Int)

@@ -175,7 +175,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
                 when (artifact) {
                     dev.localagent.workstation.agent.Artifact.Computer -> boxViewModel.openComputer()
                     is dev.localagent.workstation.agent.Artifact.Preview ->
-                        boxViewModel.openPreview("The preview")
+                        boxViewModel.openPreview(artifact)
                     is dev.localagent.workstation.agent.Artifact.Document ->
                         boxViewModel.openDocument(artifact)
                 }

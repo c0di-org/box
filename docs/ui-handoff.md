@@ -94,8 +94,8 @@ Working, against the fake:
 
 Deliberately inert:
 
-- "Open preview" — wired, and posts a snackbar saying the port-forwarding transport is still
-  being built
+- The display transport. `DesktopTransport` is declared and nothing implements it, so the computer
+  draws a placeholder rather than the guest's screen.
 
 Not built:
 

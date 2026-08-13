@@ -16,6 +16,8 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.localagent.runtime.api.ExecRequest
+import dev.localagent.runtime.api.PortForward
+import dev.localagent.runtime.api.PortForwardRequest
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.shared.SharedFolderBridge
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +36,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class RuntimeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Forwards handed out to the UI process, so a later release can close the right one.
+     *
+     * Held here rather than in the UI because the UI process is the one Android kills: a forward
+     * whose only handle died with a Compose process would stay open until the VM stopped.
+     */
+    private val forwards = java.util.concurrent.ConcurrentHashMap<Int, PortForward>()
 
     /** A process retires once; a second settled state must not queue another kill. */
     private val retiring = AtomicBoolean(false)
@@ -127,6 +137,31 @@ class RuntimeService : Service() {
                     Log.e(TAG, "Guest file write failed")
                     runCatching { callback.onError(error.readableMessage("Could not write $path")) }
                 }
+            }
+        }
+
+        override fun forwardPort(guestPort: Int, callback: IPortForwardCallback) {
+            scope.launch {
+                try {
+                    val forward = runtime.forwardPort(
+                        PortForwardRequest(guestPort, purpose = "preview"),
+                    )
+                    forwards[guestPort] = forward
+                    callback.onForwarded(guestPort, "http://127.0.0.1:${forward.localPort}/")
+                } catch (error: Exception) {
+                    Log.w(TAG, "Could not forward guest port $guestPort", error)
+                    runCatching {
+                        callback.onError(error.readableMessage("Could not open a preview"))
+                    }
+                }
+            }
+        }
+
+        override fun releasePort(guestPort: Int) {
+            scope.launch {
+                // Nothing is reported back. The caller is tidying up, and the honest answer to a
+                // failure here is that the forward dies with the VM anyway.
+                runCatching { forwards.remove(guestPort)?.close() }
             }
         }
 

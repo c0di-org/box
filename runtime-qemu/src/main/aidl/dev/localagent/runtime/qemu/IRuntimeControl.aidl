@@ -4,6 +4,7 @@ import dev.localagent.runtime.qemu.IAgentSessionCallback;
 import dev.localagent.runtime.qemu.IExecCallback;
 import dev.localagent.runtime.qemu.IFileListCallback;
 import dev.localagent.runtime.qemu.IFileReadCallback;
+import dev.localagent.runtime.qemu.IPortForwardCallback;
 import dev.localagent.runtime.qemu.IWriteCallback;
 
 /**
@@ -15,6 +16,18 @@ interface IRuntimeControl {
     oneway void listFiles(String path, IFileListCallback callback);
     oneway void readFile(String path, IFileReadCallback callback);
     oneway void writeFile(String path, in byte[] data, IWriteCallback callback);
+
+    /**
+     * Open a loopback port on the phone that reaches [guestPort] inside the guest, and report the
+     * URL a WebView can load. Asking twice for the same guest port returns the same forward.
+     */
+    oneway void forwardPort(int guestPort, IPortForwardCallback callback);
+
+    /**
+     * Close a forward opened by [forwardPort]. Deliberately fire-and-forget: this is cleanup, and
+     * a failure to tidy up must never surface as a failure of whatever the user actually did.
+     */
+    oneway void releasePort(int guestPort);
 
     /**
      * Start a harness under [sessionId] and stream it back. The session belongs to `:computer`

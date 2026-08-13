@@ -22,6 +22,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.IExecCallback
 import dev.localagent.runtime.qemu.IFileListCallback
 import dev.localagent.runtime.qemu.IFileReadCallback
+import dev.localagent.runtime.qemu.IPortForwardCallback
 import dev.localagent.runtime.qemu.IRuntimeControl
 import dev.localagent.runtime.qemu.RuntimeService
 import dev.localagent.runtime.qemu.RuntimeStateCodec
@@ -304,6 +305,10 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     fun selectComputerPanel(panel: ComputerPanel) {
+        // Before the state changes, while the open preview is still readable: leaving the panel is
+        // how a forward ends, and a hole in the phone's loopback interface should not outlive the
+        // panel that asked for it.
+        if (mutableUiState.value.computerPanel == ComputerPanel.Preview) closePreview()
         mutableUiState.update {
             it.copy(
                 computerPanel = if (it.computerPanel == panel) ComputerPanel.None else panel,
@@ -603,9 +608,50 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch { BoxContainer.desktop(getApplication()).setControl(holder) }
     }
 
-    /** Port forwarding still does not exist, so a preview says so rather than opening nothing. */
-    fun openPreview(label: String) {
-        showNotice("$label isn’t connected yet — the runtime transport for it is still being built.")
+    /**
+     * Opens something the agent is serving in the guest, in a panel over the machine.
+     *
+     * The forward is asked for every time rather than cached here: the runtime hands back the same
+     * one for a guest port it has already opened, and that is the only place that can know whether
+     * the VM has restarted underneath it since.
+     */
+    fun openPreview(artifact: Artifact.Preview) {
+        val runtime = control ?: return showNotice("The computer is still starting.")
+        mutableUiState.update {
+            it.copy(destination = BoxDestination.Computer, computerPanel = ComputerPanel.Preview)
+        }
+        runCatching {
+            runtime.forwardPort(
+                artifact.guestPort,
+                object : IPortForwardCallback.Stub() {
+                    override fun onForwarded(guestPort: Int, url: String) {
+                        mutableUiState.update {
+                            it.copy(preview = OpenedPreview(url = url, guestPort = guestPort))
+                        }
+                    }
+
+                    override fun onError(message: String) {
+                        mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+                        showNotice(message)
+                    }
+                },
+            )
+        }.onFailure { error ->
+            mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+            showNotice(error.message ?: "Box could not open that preview.")
+        }
+    }
+
+    /**
+     * Closes the preview and gives the port back.
+     *
+     * `release` is honoured rather than left to the VM's lifetime because a forward is a hole in
+     * the phone's loopback interface: it should not outlive the panel that asked for it.
+     */
+    fun closePreview() {
+        val open = mutableUiState.value.preview ?: return
+        mutableUiState.update { it.copy(preview = null) }
+        runCatching { control?.releasePort(open.guestPort) }
     }
 
     // -----------------------------------------------------------------------

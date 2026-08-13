@@ -37,8 +37,50 @@ internal class QmpClient(private val socketFile: File) {
         }
     }
 
-    private fun execute(writer: java.io.BufferedWriter, command: String, id: String) {
-        writer.write(JSONObject().put("execute", command).put("id", id).toString())
+    /**
+     * Runs one monitor command and returns what the monitor printed.
+     *
+     * `human-monitor-command` rather than a typed QMP command because the thing Box needs —
+     * adding and removing a host forward on a running user-mode netdev — has no QMP equivalent;
+     * `hostfwd_add` and `hostfwd_remove` exist only on the human monitor. The cost is that success
+     * is reported as an empty string and failure as *printed text* rather than a QMP error, which
+     * is why the caller has to read the output instead of trusting the absence of an exception.
+     */
+    fun monitorCommand(command: String): String {
+        val socket = LocalSocket()
+        try {
+            socket.connect(
+                LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM),
+            )
+            socket.setSoTimeout(READ_TIMEOUT_MILLIS)
+            val reader = socket.inputStream.bufferedReader(Charsets.UTF_8)
+            val writer = socket.outputStream.bufferedWriter(Charsets.UTF_8)
+            val greeting = JSONObject(reader.readLine() ?: error("QMP greeting was not received"))
+            check(greeting.has("QMP")) { "Invalid QMP greeting" }
+
+            execute(writer, "qmp_capabilities", CAPABILITIES_ID)
+            awaitResponse(reader, CAPABILITIES_ID)
+            execute(
+                writer,
+                "human-monitor-command",
+                MONITOR_ID,
+                JSONObject().put("command-line", command),
+            )
+            return awaitResponse(reader, MONITOR_ID).optString("return").trim()
+        } finally {
+            runCatching { socket.close() }
+        }
+    }
+
+    private fun execute(
+        writer: java.io.BufferedWriter,
+        command: String,
+        id: String,
+        arguments: JSONObject? = null,
+    ) {
+        val message = JSONObject().put("execute", command).put("id", id)
+        arguments?.let { message.put("arguments", it) }
+        writer.write(message.toString())
         writer.newLine()
         writer.flush()
     }
@@ -61,5 +103,6 @@ internal class QmpClient(private val socketFile: File) {
         const val MAX_MESSAGES_PER_COMMAND = 32
         const val CAPABILITIES_ID = "box-capabilities"
         const val STATUS_ID = "box-status"
+        const val MONITOR_ID = "box-monitor"
     }
 }

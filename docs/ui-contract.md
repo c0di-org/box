@@ -140,6 +140,13 @@ one that turns into fatigue at the sheet instead.
 `Document(guestPath, name, mimeType)`. On the wire it is
 `{"type": "artifact", "kind": "document", "guestPath": …, "name": …, "mimeType": …}`.
 
+`Preview` is a guest port. Opening one asks the runtime to forward it — QEMU's user-mode network
+stack does that itself, through the human monitor, with no proxy process and no change to the
+guest — and the panel loads the resulting `http://127.0.0.1:<port>/` in a WebView. The forward is
+bound to loopback because a dev server the agent started is for the person holding the phone, not
+for the network they are on, and it is released when the panel closes rather than left to the VM's
+lifetime.
+
 `Document` exists because most of what an agent makes needs no server. Requiring one to show a
 picture would mean starting a web server to hand over a PNG — absurd on a machine this size. It
 carries no bytes: the path is read when the user asks for it, through the same reader the Files

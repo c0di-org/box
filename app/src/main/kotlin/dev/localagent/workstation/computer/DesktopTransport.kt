@@ -78,15 +78,3 @@ sealed interface DesktopInput {
     /** A run of text, for paste and for soft keyboards that commit whole strings. */
     data class Text(val value: String) : DesktopInput
 }
-
-/**
- * What the UI needs to show a live preview of something the agent is serving in the guest.
- *
- * Also unimplemented: port forwarding currently throws. The contract Box wants is a loopback URL
- * a WebView can load, plus an explicit release so a forwarded port never outlives the session
- * that asked for it.
- */
-interface PreviewTransport {
-    suspend fun forward(guestPort: Int): Result<String>
-    suspend fun release(guestPort: Int)
-}
