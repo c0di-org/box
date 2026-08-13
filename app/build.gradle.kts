@@ -164,12 +164,13 @@ android {
     }
 
     sourceSets.named("stock") {
-        assets.srcDir(generatedStockAssets)
+        // The producing task rather than its output directory: naming the task lets Gradle infer
+        // the dependency for every consumer of this asset directory, which is more than the asset
+        // merge. Lint builds a model of each source set too, and wiring only `mergeStock*Assets`
+        // by hand left `generateStock*LintVitalReportModel` reading a directory it had no reason
+        // to wait for — a validation failure in `./gradlew build`.
+        assets.srcDir(prepareStockGuestAssets)
     }
-}
-
-tasks.matching { it.name.startsWith("mergeStock") && it.name.endsWith("Assets") }.configureEach {
-    dependsOn(prepareStockGuestAssets)
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
