@@ -27,8 +27,17 @@ class HomeSurfaceTest {
     )
 
     @Test
-    fun `a closed box is the whole window`() {
+    fun `a closed box with nothing behind it is the whole window`() {
         assertTrue(BoxUiState().boxOwnsWindow)
+    }
+
+    @Test
+    fun `a closed box never hides work either`() {
+        // The returning user: `:computer` was reclaimed while they were away, so the box is off and
+        // a week of tasks is sitting behind it. This used to be a full-window splash.
+        val closed = BoxUiState(runtimeState = RuntimeState.Stopped, sessions = listOf(task("a")))
+        assertEquals(BoxStage.Closed, closed.boxStage)
+        assertFalse(closed.boxOwnsWindow)
     }
 
     @Test
@@ -55,6 +64,26 @@ class HomeSurfaceTest {
         val greeting = BoxUiState(runtimeState = RuntimeState.Ready, readyGreeting = true)
         assertTrue(greeting.boxOwnsWindow)
         assertFalse(greeting.copy(readyGreeting = false).boxOwnsWindow)
+    }
+
+    @Test
+    fun `a task swiped away leaves the list before it is closed`() {
+        // The undo window: the row is gone, but nothing has been told to the agent yet.
+        val closing = BoxUiState(
+            runtimeState = RuntimeState.Ready,
+            sessions = listOf(task("a"), task("b")),
+            closingTaskId = "a",
+        )
+        assertEquals(listOf("b"), closing.tasks.map { it.id })
+        assertEquals(listOf("a", "b"), closing.sessions.map { it.id })
+        assertEquals(listOf("a", "b"), closing.copy(closingTaskId = null).tasks.map { it.id })
+    }
+
+    @Test
+    fun `closing the last task gives the box the window back`() {
+        val closed = BoxUiState(runtimeState = RuntimeState.Stopped, sessions = listOf(task("a")))
+        assertFalse(closed.boxOwnsWindow)
+        assertTrue(closed.copy(closingTaskId = "a").boxOwnsWindow)
     }
 
     @Test

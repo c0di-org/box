@@ -28,8 +28,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -54,11 +56,13 @@ import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
+import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.ComputerPanel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.Artifact
+import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.DesktopTransport
@@ -89,6 +93,8 @@ fun BoxApp(
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onCloseSession: (String) -> Unit,
+    onUndoCloseSession: () -> Unit,
+    onCommitCloseSession: () -> Unit,
     onSelectComputerPanel: (ComputerPanel) -> Unit,
     onOpenBox: () -> Unit,
     onStop: () -> Unit,
@@ -125,14 +131,29 @@ fun BoxApp(
     /** Set when a specific card asks to be reviewed, so the sheet opens on that one, not the first. */
     var reviewingRequestId by remember { mutableStateOf<String?>(null) }
     val progress = rememberBoxProgress(state)
-    // The app is handed back on press. Only the closed box is allowed to hold the window.
-    val revealed = state.boxStage != BoxStage.Closed
+    // The app is handed back on press. Only a box holding the whole window keeps the chrome off,
+    // which is the first-run splash and the one arrival — never a closed box with work under it.
+    val revealed = state.boxStage != BoxStage.Closed || state.tasks.isNotEmpty()
     val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(state.notice?.id) {
         val notice = state.notice ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(notice.message)
         onNoticeShown()
+    }
+
+    // The undo window for a task swiped off the list, which is the snackbar's own lifetime and not
+    // a timer of Box's: whichever way it goes away is the user's answer. A second swipe cancels
+    // this effect without either branch running, which is why committing the previous task is the
+    // view model's job — see [BoxViewModel.beginClosingTask].
+    LaunchedEffect(state.closingTaskId) {
+        if (state.closingTaskId == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Task closed",
+            actionLabel = "Undo",
+            duration = SnackbarDuration.Short,
+        )
+        if (result == SnackbarResult.ActionPerformed) onUndoCloseSession() else onCommitCloseSession()
     }
 
     // Three minutes of waiting deserve to end with something the hand can feel. The words are the
@@ -176,11 +197,13 @@ fun BoxApp(
                     desktop = desktop,
                     onSelectSession = { onSelectSession(it) },
                     onNewConversation = onNewConversation,
+                    onCloseTask = onCloseSession,
                     onOpenBox = onOpenBox,
                     onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                     onSendFirstTask = onSend,
                     onDismissGreeting = onDismissGreeting,
                     onShowDetails = { showDiagnostics = true },
+                    onSignIn = onShowSignIn,
                     modifier = modifier,
                     showSelection = showSelection,
                 )
@@ -326,6 +349,7 @@ fun BoxApp(
     if (showDiagnostics) {
         DiagnosticsSheet(
             state = state.runtimeState,
+            signIn = state.signIn,
             onDismiss = { showDiagnostics = false },
             onOpenBox = {
                 showDiagnostics = false
@@ -334,6 +358,10 @@ fun BoxApp(
             onStop = {
                 showDiagnostics = false
                 onStop()
+            },
+            onSignIn = {
+                showDiagnostics = false
+                onShowSignIn()
             },
         )
     }
@@ -480,6 +508,8 @@ private fun PreviewBox(state: BoxUiState) {
             onPermissionDecision = { _, _ -> },
             onOpenArtifact = {},
             onCloseSession = {},
+            onUndoCloseSession = {},
+            onCommitCloseSession = {},
             onSelectComputerPanel = {},
             onOpenBox = {},
             onStop = {},
@@ -513,6 +543,19 @@ private fun PhoneOpeningPreview() = PreviewBox(
 @Composable
 private fun PhoneGreetingPreview() = PreviewBox(
     BoxUiState(runtimeState = RuntimeState.Ready, readyGreeting = true),
+)
+
+@Preview(name = "Phone — first open, not signed in", widthDp = 411, heightDp = 891)
+@Composable
+private fun PhoneSignInPreview() = PreviewBox(
+    BoxUiState(
+        runtimeState = RuntimeState.Ready,
+        readyGreeting = true,
+        signIn = GuestAuth.State.SignedOut,
+        queued = listOf(
+            QueuedPrompt(null, "Clone my project and get it running.", heldForSignIn = true),
+        ),
+    ),
 )
 
 @Preview(name = "Phone — open", widthDp = 411, heightDp = 891)

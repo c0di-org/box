@@ -104,7 +104,7 @@ class FakeAgentBackend(
         attachments: List<Attachment>,
     ): String {
         val id = "s-${ids.incrementAndGet()}"
-        val title = prompt?.take(48)?.ifBlank { null } ?: "New conversation"
+        val title = prompt?.take(48)?.ifBlank { null } ?: "New task"
         sessionList.update {
             listOf(
                 SessionSummary(

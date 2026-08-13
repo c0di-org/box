@@ -80,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.agent.Attachment
@@ -152,7 +153,13 @@ fun ConversationPane(
                 // Not while the box is opening: nothing can arrive until it does, the banner
                 // above already says so, and a spinner that has to run for three minutes is the
                 // app pretending to work.
-                state.computerReady && state.transcriptLoading && state.transcript == null &&
+                //
+                // A closed box is the other case, and it is short: the session's log is being
+                // fetched from `:computer`, which takes a bind and a file read. `Connecting` is
+                // what says that is still in flight — every route out of it settles, so this can
+                // never become the three-minute spinner above.
+                (state.computerReady || state.connection == SessionConnection.Connecting) &&
+                    state.transcriptLoading && state.transcript == null &&
                     queued.isEmpty() -> TranscriptLoading()
                 nothingToShow -> EmptyTranscriptState(harness)
                 else -> TranscriptList(
@@ -212,7 +219,7 @@ private fun ConversationHeader(
     ) {
         if (onBack != null) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to conversations")
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to tasks")
             }
         } else {
             Spacer(Modifier.width(8.dp))
@@ -253,12 +260,12 @@ private fun ConversationHeader(
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "Session options")
+                Icon(Icons.Outlined.MoreVert, contentDescription = "Task options")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 if (onCloseSession != null) {
                     DropdownMenuItem(
-                        text = { Text("Close session") },
+                        text = { Text("Close task") },
                         onClick = {
                             menuOpen = false
                             onCloseSession()
@@ -401,7 +408,7 @@ private fun Banner(
 @Composable
 private fun TranscriptList(
     transcript: Transcript?,
-    queued: List<String>,
+    queued: List<QueuedPrompt>,
     harness: HarnessDescriptor?,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
@@ -443,10 +450,10 @@ private fun TranscriptList(
                     }
                 }
             }
-            queued.forEachIndexed { index, text ->
-                item(key = "queued-$index-$text") {
+            queued.forEachIndexed { index, prompt ->
+                item(key = "queued-$index-${prompt.text}") {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        QueuedMessage(text, Modifier.widthIn(max = 760.dp))
+                        QueuedMessage(prompt, Modifier.widthIn(max = 760.dp))
                     }
                 }
             }
@@ -521,22 +528,35 @@ internal fun LazyListState.isNearEnd(slack: Int = 2): Boolean {
  * the harness echoes the prompt into the session log, so it is never a second copy of a real one.
  */
 @Composable
-private fun QueuedMessage(text: String, modifier: Modifier = Modifier) {
+private fun QueuedMessage(prompt: QueuedPrompt, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
         ) {
-            Text(
-                text,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // The same tiles the sent turn draws, so a message waiting here looks like the message
+            // it is about to become. It matters most for a picture sent with no words, which is a
+            // whole message on its own — and which, held for a sign-in, would otherwise sit on
+            // screen as an empty bubble for as long as the user took to sign in.
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 11.dp)) {
+                prompt.attachments.forEach { attachment ->
+                    AttachmentTile(attachment)
+                    Spacer(Modifier.height(6.dp))
+                }
+                if (prompt.text.isNotBlank()) {
+                    Text(
+                        prompt.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(5.dp))
         Text(
-            "Waiting for the computer",
+            // Two different promises, and the difference is who is being waited on. One resolves
+            // itself; the other is waiting on the person reading it, and has to say so.
+            if (prompt.heldForSignIn) "Waiting for you to sign in" else "Waiting for the computer",
             style = MaterialTheme.typography.bodyMedium,
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),

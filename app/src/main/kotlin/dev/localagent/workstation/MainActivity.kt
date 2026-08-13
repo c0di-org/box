@@ -180,7 +180,11 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
                         boxViewModel.openDocument(artifact)
                 }
             },
-            onCloseSession = boxViewModel::closeSession,
+            // Both routes to closing — the swipe and the header menu — go the same way: the row
+            // leaves, and the close itself happens when the undo snackbar does.
+            onCloseSession = boxViewModel::beginClosingTask,
+            onUndoCloseSession = boxViewModel::undoClosingTask,
+            onCommitCloseSession = boxViewModel::commitClosingTask,
             onSelectComputerPanel = boxViewModel::selectComputerPanel,
             onOpenBox = openBox,
             onStop = boxViewModel::stop,

@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -34,7 +35,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,11 +75,13 @@ fun SessionsPane(
     desktop: DesktopTransport?,
     onSelectSession: (String) -> Unit,
     onNewConversation: (String) -> Unit,
+    onCloseTask: (String) -> Unit,
     onOpenBox: () -> Unit,
     onOpenComputer: () -> Unit,
     onSendFirstTask: (String) -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
+    onSignIn: () -> Unit,
     modifier: Modifier = Modifier,
     showSelection: Boolean = true,
 ) {
@@ -107,6 +113,7 @@ fun SessionsPane(
                 onSendFirstTask = onSendFirstTask,
                 onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
+                onSignIn = onSignIn,
                 modifier = Modifier.fillMaxWidth().height(panelHeight).clipToBounds(),
             )
             // Zero-height until the panel has shrunk out of the way, so the tasks slide up into
@@ -115,6 +122,7 @@ fun SessionsPane(
                 state = state,
                 onSelectSession = onSelectSession,
                 onNewConversation = onNewConversation,
+                onCloseTask = onCloseTask,
                 showSelection = showSelection,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
@@ -134,6 +142,7 @@ private fun TaskList(
     state: BoxUiState,
     onSelectSession: (String) -> Unit,
     onNewConversation: (String) -> Unit,
+    onCloseTask: (String) -> Unit,
     showSelection: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -152,12 +161,14 @@ private fun TaskList(
             }
         }
         items(tasks, key = { it.id }) { task ->
-            TaskRow(
-                task = task,
-                harnessName = state.harnessOf(task)?.name,
-                selected = showSelection && task.id == state.selectedSessionId,
-                onClick = { onSelectSession(task.id) },
-            )
+            ClosableTask(onClose = { onCloseTask(task.id) }) {
+                TaskRow(
+                    task = task,
+                    harnessName = state.harnessOf(task)?.name,
+                    selected = showSelection && task.id == state.selectedSessionId,
+                    onClick = { onSelectSession(task.id) },
+                )
+            }
         }
     }
 }
@@ -172,6 +183,80 @@ private fun SectionHeading(text: String) {
         letterSpacing = 1.1.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * A task row you can push off the list.
+ *
+ * Closing used to mean opening the task and finding it in the header's overflow — a route through
+ * the thing you are trying to be finished with. This is the shape Android already taught everyone,
+ * and it is why the close has an undo behind it: a swipe is easy to do by accident, and closing a
+ * task is not undoable once it has happened. The menu in the header stays, and is still the route
+ * for anyone who does not swipe.
+ *
+ * From the end only. A drag from the left edge is the system's back gesture, and a row that
+ * competes with it loses in a way the user reads as the app ignoring them.
+ *
+ * The dismissal is deliberately refused: `false` leaves this box settled and lets the *list* take
+ * the row away, which it does on the same frame. Left to settle itself, the box would remember
+ * being dismissed — lazy lists keep item state by key — and an undone task would come back as a
+ * blank space where the row used to be.
+ */
+@Composable
+private fun ClosableTask(onClose: () -> Unit, row: @Composable () -> Unit) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) onClose()
+            false
+        },
+    )
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            // Only once the row has actually moved. A task row draws no background of its own —
+            // that is how selection is the only tinted one — so anything painted behind a settled
+            // row would show straight through it, and the whole list would sit on red.
+            if (state.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
+                ClosingTaskBackground(
+                    committed = state.targetValue == SwipeToDismissBoxValue.EndToStart,
+                )
+            }
+        },
+    ) {
+        row()
+    }
+}
+
+/** What is under a row being pushed aside: paler while it would spring back, solid once it won't. */
+@Composable
+private fun ClosingTaskBackground(committed: Boolean) {
+    Surface(
+        modifier = Modifier.fillMaxSize().padding(vertical = 2.dp),
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = if (committed) 1f else 0.4f),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Close,
+                contentDescription = null,
+                modifier = Modifier.size(17.dp),
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "Close",
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
 }
 
 @Composable
@@ -318,10 +403,12 @@ private fun NewConversationBar(
                 Spacer(Modifier.width(8.dp))
                 Text("New task")
             }
-            Box {
+            // Only when there is a choice to make. One agent installed — which is every phone
+            // today — and this was a button that opened a menu with a single item in it, next to
+            // the button that already starts a task with that same agent.
+            if (state.harnesses.size > 1) Box {
                 OutlinedButton(
                     onClick = { pickerOpen = true },
-                    enabled = state.harnesses.isNotEmpty(),
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp),
                 ) {

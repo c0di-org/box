@@ -115,6 +115,14 @@ class GuestAgentBackend(
         val harnessId: String,
         var title: String,
         val workingDirectory: String,
+        /**
+         * Read back from the session index at launch, rather than started in this process.
+         *
+         * Which is the same thing as saying `:computer` has a log for it: a session only reaches
+         * the index once it has been given work. See [attachPlan] — this is what makes a
+         * transcript readable with the box closed.
+         */
+        val restored: Boolean = false,
     ) {
         val chunks = MutableSharedFlow<Pair<Long, ByteArray>>(
             extraBufferCapacity = 256,
@@ -123,6 +131,17 @@ class GuestAgentBackend(
         val connection = MutableStateFlow<SessionConnection>(SessionConnection.Connecting)
         val logPath = CompletableDeferred<String>()
         @Volatile var handle: IAgentSession? = null
+
+        /**
+         * Whether this session has been opened against the guest that is running *now*.
+         *
+         * Not "has a log": those two used to be the same question, answered by whether the log
+         * path had arrived, and they stopped being the same the moment a closed box was allowed to
+         * fetch that path just to read the history. A session whose log has been read but whose
+         * harness has never been started in this guest still needs opening, or the message the
+         * user typed while the box was closed would be delivered to nothing.
+         */
+        @Volatile var opened: Boolean = false
 
         /** Last status published, so a live line only republishes when it changes something. */
         @Volatile var status: SessionStatus = SessionStatus.Idle
@@ -158,6 +177,7 @@ class GuestAgentBackend(
         restored.forEach { summary ->
             records[summary.id] = Record(
                 summary.id, summary.harnessId, summary.title, summary.workingDirectory,
+                restored = true,
             ).apply { status = summary.status }
         }
         sessionsState.value = restored
@@ -196,6 +216,7 @@ class GuestAgentBackend(
                 // The guest is gone or not there yet; anything held for it is held a while longer.
                 records.values.forEach {
                     it.attached.set(false)
+                    it.opened = false
                     it.handle = null
                 }
                 return
@@ -214,6 +235,7 @@ class GuestAgentBackend(
             controlState.value = null
             records.values.forEach {
                 it.attached.set(false)
+                it.opened = false
                 it.handle = null
                 it.connection.value = SessionConnection.Disconnected("The computer stopped", true)
             }
@@ -319,7 +341,7 @@ class GuestAgentBackend(
         val record = Record(
             id = id,
             harnessId = harnessId,
-            title = prompt?.toTitle() ?: "New conversation",
+            title = prompt?.toTitle() ?: "New task",
             workingDirectory = WORKSPACE,
         )
         records[id] = record
@@ -412,16 +434,30 @@ class GuestAgentBackend(
 
     // ---- attaching ---------------------------------------------------------
 
-    /** Idempotent: opens the session if it is new, re-attaches if `:computer` already has it. */
+    /**
+     * Idempotent, and safe with the box shut: see [attachPlan] for what it can do when.
+     *
+     * The one thing it must never do is start a VM. Binding `:computer` creates the process that
+     * holds the session logs — nothing more — and QEMU is started by `ACTION_START` alone, which
+     * is a thing the user asks for.
+     */
     private suspend fun attach(record: Record) {
         if (record.attached.get()) return
-        if (!runtimeReady) {
+        val plan = attachPlan(
+            runtimeReady = runtimeReady,
+            opened = record.opened,
+            hasHistory = record.restored || record.logPath.isCompleted,
+        )
+        if (plan == AttachPlan.Wait) {
             // Not a failure, and deliberately not an attempt. The broadcast for Ready brings us
             // back here with whatever the user typed still in the outbox.
             record.connection.value =
                 SessionConnection.Disconnected("The computer is still starting", true)
             return
         }
+        // The log has already been handed over, and `events()` reads it from disk itself. There is
+        // nothing left for a closed box to ask.
+        if (plan == AttachPlan.ReadHistory && record.logPath.isCompleted) return
         val control = control() ?: run {
             record.connection.value =
                 SessionConnection.Disconnected("The computer is still starting", true)
@@ -430,9 +466,8 @@ class GuestAgentBackend(
         if (!record.attached.compareAndSet(false, true)) return
         val callback = Listener(record)
         runCatching {
-            if (record.logPath.isCompleted) {
-                control.attachAgentSession(record.id, callback)
-            } else {
+            if (plan == AttachPlan.Open) {
+                record.opened = true
                 control.openAgentSession(
                     record.id,
                     HARNESS_COMMAND,
@@ -446,16 +481,35 @@ class GuestAgentBackend(
                     },
                     callback,
                 )
+            } else {
+                // Both [AttachPlan.Reattach] and [AttachPlan.ReadHistory] are this call. The
+                // service answers a session it is running by streaming it, and one it has never
+                // heard of with the path to its log — which is precisely the read-back.
+                control.attachAgentSession(record.id, callback)
             }
         }.onFailure {
             record.attached.set(false)
+            record.opened = false
             record.connection.value = SessionConnection.Disconnected("Could not reach the computer", true)
         }
     }
 
     private inner class Listener(private val record: Record) : IAgentSessionCallback.Stub() {
+        /**
+         * Whether there was ever a process behind this attachment.
+         *
+         * False for a transcript read back with the box closed. `attachAgentSession` answers a
+         * session nothing is running with `onAttached(null)` and then `onClosed` — the same two
+         * calls a session makes when it really does end, because from the service's side there is
+         * nothing to tell apart. Taking that at face value would stamp a task that has been
+         * waiting on the user since yesterday as Finished, and — since a summary carries the
+         * moment it was published — jump it to the top of the list for having been *looked at*.
+         */
+        @Volatile private var live = false
+
         override fun onAttached(session: IAgentSession?, logPath: String) {
             record.handle = session
+            live = session != null
             record.connection.value =
                 if (session == null) SessionConnection.Ended else SessionConnection.Live
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
@@ -493,7 +547,10 @@ class GuestAgentBackend(
         override fun onClosed(exitCode: Int, error: String?) {
             record.handle = null
             record.attached.set(false)
+            // Honest either way: a session with no process is over, whether it ended a second ago
+            // or last week. The conversation shows it under the box's own "closed · Open" banner.
             record.connection.value = SessionConnection.Ended
+            if (!live) return
             scope.launch {
                 publish(record, if (error == null) SessionStatus.Finished else SessionStatus.Failed(error))
             }
@@ -589,7 +646,7 @@ class GuestAgentBackend(
     }
 
     private fun String.toTitle(): String =
-        trim().lineSequence().firstOrNull()?.take(60)?.ifBlank { null } ?: "New conversation"
+        trim().lineSequence().firstOrNull()?.take(60)?.ifBlank { null } ?: "New task"
 
     private companion object {
         const val TAG = "BoxAgentBackend"
@@ -615,6 +672,42 @@ class GuestAgentBackend(
             mark = HarnessMarkKind.Burst,
         )
     }
+}
+
+/**
+ * What attaching to a session can do, given what is running.
+ *
+ * The row worth reading is [AttachPlan.ReadHistory]. A transcript is a log file in `:computer`'s
+ * private storage, appended to as the agent worked and left there when it stopped — so a task from
+ * last week can be read back with the box shut, and "shut, with a week of work behind it" is the
+ * ordinary state of someone coming back to Box. Reading it needs the `:computer` *process*, which
+ * binding creates; it does not need a booted VM, and must not cause one. This used to be refused
+ * outright, and a task with a hundred messages in it opened onto "Nothing yet".
+ *
+ * [opened] is asked before [hasHistory] because a running computer beats a readable log: the
+ * session the user is looking at should be one they can talk to.
+ */
+internal fun attachPlan(runtimeReady: Boolean, opened: Boolean, hasHistory: Boolean): AttachPlan =
+    when {
+        runtimeReady && opened -> AttachPlan.Reattach
+        runtimeReady -> AttachPlan.Open
+        hasHistory -> AttachPlan.ReadHistory
+        else -> AttachPlan.Wait
+    }
+
+/** See [attachPlan]. */
+internal enum class AttachPlan {
+    /** Start the harness. Nothing is running this session in the guest that is up now. */
+    Open,
+
+    /** `:computer` is already running it; pick the stream up from where the log leaves off. */
+    Reattach,
+
+    /** Nothing is running, but something happened here once. Read it back from the log. */
+    ReadHistory,
+
+    /** A session with no history and no computer to run it. Nothing to show, nothing to fetch. */
+    Wait,
 }
 
 /**
