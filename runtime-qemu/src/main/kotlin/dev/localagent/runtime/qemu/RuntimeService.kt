@@ -564,6 +564,15 @@ class RuntimeService : Service() {
         if (signal is SessionSignals.Signal.Finished) sharedFolder.onSessionFinished()
 
         val manager = getSystemService(NotificationManager::class.java) ?: return
+
+        // Nothing to say, and something to take back. Keyed the same way the notification was
+        // posted, so this takes down exactly the "Box needs you" that is no longer true — while a
+        // "finished" for the same session is posted over it in the ordinary way.
+        if (signal is SessionSignals.Signal.Answered) {
+            runCatching { manager.cancel(sessionId.hashCode()) }
+            return
+        }
+
         manager.createNotificationChannel(
             NotificationChannel(
                 SESSION_CHANNEL_ID,
@@ -581,6 +590,9 @@ class RuntimeService : Service() {
             } else {
                 "The agent finished" to (signal.summary ?: "Your task is done.")
             }
+            // Taken back above rather than posted. Spelled out because the compiler cannot see
+            // that early return, and an `else` here would silently swallow a signal added later.
+            SessionSignals.Signal.Answered -> return
         }
 
         val pending = openAppIntent(sessionId.hashCode())

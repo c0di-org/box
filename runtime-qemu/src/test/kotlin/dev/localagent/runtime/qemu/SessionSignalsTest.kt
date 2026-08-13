@@ -85,4 +85,19 @@ class SessionSignalsTest {
         )
         assertEquals(SessionSignals.Signal.NeedsYou("It needs you to connect an account"), signal)
     }
+
+    @Test
+    fun `a question that has been answered takes its notification back`() {
+        // "Box needs you" outlives the needing otherwise: somebody who answers in the app leaves a
+        // notice in the shade offering to take them to a decision already made, and it sits there
+        // for as long as the agent goes on working afterwards.
+        assertEquals(
+            SessionSignals.Signal.Answered,
+            SessionSignals.read("""{"type":"connect_resolved","requestId":"c-1","connected":true}"""),
+        )
+        assertEquals(
+            SessionSignals.Signal.Answered,
+            SessionSignals.read("""{"type":"permission_resolved","requestId":"p-1","decision":"allow"}"""),
+        )
+    }
 }
