@@ -38,6 +38,30 @@ class ComputerLossTest {
     }
 
     @Test
+    fun `a saved box going away is not a failure`() {
+        // The sharpest case, and the one this got wrong for as long as it could not happen.
+        // Saving a box *is* the process ending — QEMU writes the guest out and exits, and
+        // `:computer` retires behind it — so the disconnect is the operation succeeding. Since the
+        // idle timer started saving untouched boxes, "the computer stopped unexpectedly" would
+        // land on a box sitting safe on disk every fifteen minutes.
+        assertNull(ComputerLoss.after(RuntimeState.Suspended))
+    }
+
+    @Test
+    fun `a saved box is not watched`() {
+        // Nothing left for the connection to report the death of; see the note above.
+        assertFalse(ComputerLoss.shouldWatch(RuntimeState.Suspended))
+    }
+
+    @Test
+    fun `dying part way through a save is still a failure`() {
+        // The other side of it: the process going away *during* the save means the box may never
+        // have been written out, and the user should be told rather than left to find out.
+        assertTrue(ComputerLoss.after(RuntimeState.Suspending) is RuntimeState.Failed)
+        assertTrue(ComputerLoss.shouldWatch(RuntimeState.Suspending))
+    }
+
+    @Test
     fun `a failure already reported is not reported twice`() {
         assertNull(ComputerLoss.after(RuntimeState.Failed(RuntimeFailure("already said so"))))
     }

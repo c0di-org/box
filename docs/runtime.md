@@ -60,6 +60,47 @@ alive, not only once it is `Ready`. That binding is the only notice Box gets whe
 VM process dies mid-startup, which is when it is most likely to; `ComputerLoss`
 decides whether a disconnect is an expected retirement or a failure worth showing.
 
+## Putting the box away
+
+A cold boot is the single largest cost in the product: the guest is fully emulated
+ARM64 under TCG, and on a Galaxy Z Fold 7 it takes **86–116 s** from QEMU launch to a
+ready agent, nearly all of it the guest waiting on emulated udev. Until now that price
+was paid every time the box was not already running, which put "close it when it is
+idle" in direct opposition to "have it there when you want it".
+
+`suspendRuntime()` writes the guest's memory into its own qcow2 with `savevm` and
+quits; `start()` finds the note the save left behind and hands the snapshot to a fresh
+QEMU with `-loadvm`. Measured on the same device:
+
+| | |
+| --- | --- |
+| Cold boot to ready agent | 86.4 s, 116.4 s |
+| Save (`savevm`, ~430 MB of guest memory) | 0.56–3.6 s |
+| Reopen to ready agent | 0.94 s, 0.97 s, 0.99 s, 1.07 s |
+
+The last of those was measured after churning 6 GB through the page cache, so the
+number is not an artefact of the snapshot still being warm.
+
+Three things make this fit the process rule above rather than fight it. QEMU 5.1 —
+the build in this APK — has no QMP `savevm`, so both operations go through
+`human-monitor-command`; `snapshot-save` arrived in 6.0. The snapshot lives *inside*
+the system disk, so it is invalidated by anything that replaces that disk, and
+`SuspendedVm` records which image it belongs to for exactly that reason. And the note
+is consumed *before* QEMU is handed it, never after: `loadvm` reverts the disks to the
+snapshot, so a note that outlived a failed load would eventually roll `/workspace`
+backwards. Booting cold is always safe; loading twice is not.
+
+What does not survive is an agent that was mid-task. agentd kills every child when its
+host disconnects, and QEMU tells a restored guest that the host it remembers is gone —
+so the teardown happens either way. `quiesceGuest()` therefore does it deliberately,
+before the snapshot, on a healthy guest with a real clock. Files the agent had already
+written are unaffected; the disks and the guest's memory are captured together.
+
+`RuntimeService` puts an untouched box away by itself after 15 minutes, counting a
+running agent session as activity however quiet it looks. That timer is only defensible
+because of the table above: it is allowed to act without asking precisely because being
+wrong costs about a second.
+
 ## Current implementation state
 
 The storage/verification, agent protocol, guest-image source and isolated service

@@ -37,6 +37,15 @@ class RuntimeStorage(context: Context) {
     val uefiVars = File(images, "edk2-arm-vars.fd")
     val uefiSystemDisk: File get() = layout.legacyFlatFiles.getValue(GuestImageRole.SYSTEM)
 
+    /**
+     * Where a suspended box leaves its note. See [SuspendedVm].
+     *
+     * At the root rather than beside a particular image, because the question it answers is asked
+     * before an image is chosen: "is there a box to reopen at all". Which image it belongs to is
+     * recorded *in* the note, and checked against what is installed before it is acted on.
+     */
+    private val suspendMarker = File(root, "suspend.json")
+
     val qmpSocket = File(sockets, "qmp.sock")
     val agentSocket = File(sockets, "agentd.sock")
     val serialSocket = File(sockets, "serial.sock")
@@ -132,6 +141,37 @@ class RuntimeStorage(context: Context) {
     }
 
     /**
+     * Whether a saved box is waiting to be reopened.
+     *
+     * Public and boolean where [suspendedVm] is neither, because the UI process asks this too. It
+     * has no other way to know: `:computer` ends when the guest is saved, so there is no live
+     * runtime to broadcast the state, and a UI that starts afterwards would otherwise report a box
+     * that is full of the user's work as simply closed.
+     */
+    fun hasSuspendedVm(): Boolean = suspendedVm() != null
+
+    /** The suspended guest waiting to be reopened, or null if this box was closed properly. */
+    internal fun suspendedVm(): SuspendedVm? = SuspendedVm.read(suspendMarker)
+
+    internal fun writeSuspendedVm(record: SuspendedVm) {
+        ensureDirectory(root)
+        record.writeTo(suspendMarker)
+    }
+
+    /**
+     * Forgets the suspended guest.
+     *
+     * Called at the moment the snapshot is handed to QEMU, not once it has loaded: a saved guest
+     * is loaded exactly once. If the load then fails, the next start is a cold boot from disks
+     * that `loadvm` has already reverted to the same point — which loses nothing. Clearing the
+     * note later would allow the opposite and much worse case, where a crash leaves a snapshot
+     * that is older than the disks and a note still inviting the next start to load it.
+     */
+    fun clearSuspendedVm() {
+        suspendMarker.delete()
+    }
+
+    /**
      * Brings this device up to the image the APK is carrying.
      *
      * Installs only what the manifest says is missing or out of date. An image whose id and
@@ -178,6 +218,11 @@ class RuntimeStorage(context: Context) {
             written += weight(role)
             onProgress(PROGRESS_FLOOR + (1f - PROGRESS_FLOOR) * (written.toFloat() / total))
         }
+
+        // A suspended guest is memory that matches disks which are about to be replaced. Nothing
+        // installed here can reach `/workspace`, but the system disk is where `savevm` puts the
+        // vmstate, so an install of any kind invalidates the note that points at it.
+        if (plan.isNotEmpty()) clearSuspendedVm()
 
         // Written last, and only once every payload landed, so a provisioning run killed half way
         // through leaves no claim to have installed anything. The next attempt then sees an

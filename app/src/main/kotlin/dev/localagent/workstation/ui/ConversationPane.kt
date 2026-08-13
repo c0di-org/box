@@ -350,8 +350,12 @@ private fun ComputerBanner(runtimeState: RuntimeState, onStart: () -> Unit) {
         RuntimeState.Connecting -> Triple("Almost ready", null, null)
         is RuntimeState.Provisioning -> Triple("Setting up your box", null, null)
         RuntimeState.NotProvisioned -> Triple("No box yet", null, "Open")
-        RuntimeState.Stopped, RuntimeState.Suspended -> Triple("Your box is closed", null, "Open")
-        RuntimeState.Stopping, RuntimeState.Suspending -> Triple("Shutting down", null, null)
+        RuntimeState.Stopped -> Triple("Your box is closed", null, "Open")
+        // Put away is not closed, and the difference is the whole reason it exists: everything is
+        // still in there and it comes back in about a second.
+        RuntimeState.Suspended -> Triple("Your box is paused", null, "Open")
+        RuntimeState.Stopping -> Triple("Shutting down", null, null)
+        RuntimeState.Suspending -> Triple("Pausing your box", null, null)
         is RuntimeState.Failed -> Triple("The computer couldn’t start", runtimeState.reason.message, "Try again")
     }
     val (title, body, action) = banner

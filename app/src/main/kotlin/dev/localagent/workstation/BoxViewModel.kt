@@ -265,11 +265,16 @@ class BoxViewModel @JvmOverloads constructor(
      * the starting point, then a live runtime process overrides it with the real state.
      */
     private fun resyncRuntimeState() {
-        val provisioned = runCatching {
-            RuntimeStorage(getApplication()).hasHeadlessBootSet()
-        }.getOrDefault(false)
+        val storage = runCatching { RuntimeStorage(getApplication()) }.getOrNull()
+        val provisioned = runCatching { storage?.hasHeadlessBootSet() }.getOrNull() == true
         if (provisioned) {
-            mutableUiState.update { it.copy(runtimeState = RuntimeState.Stopped) }
+            // Closed and put away are different starting points, and only the disk knows which
+            // this is: a saved box has no `:computer` left to answer the broadcast below, so
+            // without this the box the user paused comes back described as switched off.
+            val saved = runCatching { storage?.hasSuspendedVm() }.getOrNull() == true
+            mutableUiState.update {
+                it.copy(runtimeState = if (saved) RuntimeState.Suspended else RuntimeState.Stopped)
+            }
         }
         getApplication<Application>().sendBroadcast(
             Intent(RuntimeService.ACTION_QUERY_STATE)
@@ -793,6 +798,28 @@ class BoxViewModel @JvmOverloads constructor(
         getApplication<Application>().startForegroundService(
             Intent(getApplication(), RuntimeService::class.java).setAction(RuntimeService.ACTION_START),
         )
+    }
+
+    /**
+     * Put the box away: save the guest as it stands, and end the machine.
+     *
+     * The difference from [stop] is entirely in what the next [openBox] costs — about a second
+     * against a boot — so this is the one to reach for whenever the box is simply not being used.
+     * The one thing it cannot carry across is an agent that is still working; the guest kills what
+     * it was running when the host goes away.
+     */
+    fun putAway() {
+        getApplication<Application>().startForegroundService(
+            Intent(getApplication(), RuntimeService::class.java).setAction(RuntimeService.ACTION_SUSPEND),
+        )
+        mutableUiState.update {
+            it.copy(
+                runtimeState = RuntimeState.Suspending,
+                openingSince = null,
+                runningCommand = null,
+                openedFile = null,
+            )
+        }
     }
 
     fun stop() {
