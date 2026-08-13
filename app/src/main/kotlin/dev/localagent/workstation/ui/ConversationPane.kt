@@ -142,7 +142,13 @@ fun ConversationPane(
                 // Not while the box is opening: nothing can arrive until it does, the banner
                 // above already says so, and a spinner that has to run for three minutes is the
                 // app pretending to work.
-                state.computerReady && state.transcriptLoading && state.transcript == null &&
+                //
+                // A closed box is the other case, and it is short: the session's log is being
+                // fetched from `:computer`, which takes a bind and a file read. `Connecting` is
+                // what says that is still in flight — every route out of it settles, so this can
+                // never become the three-minute spinner above.
+                (state.computerReady || state.connection == SessionConnection.Connecting) &&
+                    state.transcriptLoading && state.transcript == null &&
                     queued.isEmpty() -> TranscriptLoading()
                 nothingToShow -> EmptyTranscriptState(harness)
                 else -> TranscriptList(

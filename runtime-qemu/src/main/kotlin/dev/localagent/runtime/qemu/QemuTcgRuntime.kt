@@ -49,8 +49,26 @@ import java.util.concurrent.atomic.AtomicLong
 /** App-private QEMU/TCG runtime. Guest operations are never substituted with Android shell work. */
 class QemuTcgRuntime(context: Context) : ComputerRuntime {
     private val appContext = context.applicationContext
-    private val runtimeState = MutableStateFlow<RuntimeState>(RuntimeState.NotProvisioned)
     private val storage = RuntimeStorage(appContext)
+
+    /**
+     * Where a process that has not run anything yet starts from: an installed box is *closed*, and
+     * only a device with no box at all is unprovisioned.
+     *
+     * This used to open at `NotProvisioned` regardless, on the assumption that nothing would ask
+     * before a start had been requested. Two things ask. Android recreates `:computer` for a
+     * client that still holds a binding after the process retires, and the UI now binds a stopped
+     * computer on purpose — to read a finished session's log back. Either one broadcast "no box
+     * yet" over a phone with a box on it, and the home screen offered to set up what the user
+     * already had.
+     */
+    private val runtimeState = MutableStateFlow<RuntimeState>(
+        if (storage.hasHeadlessBootSet() || storage.hasUefiBootSet()) {
+            RuntimeState.Stopped
+        } else {
+            RuntimeState.NotProvisioned
+        },
+    )
     private val agentd = AgentdClient(storage.agentSocket)
     private val lifecycleMutex = Mutex()
     private val processLifetime = QemuProcessLifetime()

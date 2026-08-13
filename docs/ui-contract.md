@@ -138,6 +138,15 @@ everything in flight; stopping a sub-agent asks one delegate to stand down and l
 sent it carry on with whatever it hears back. A backend that cannot single one out should do nothing
 rather than fall back to interrupting the session.
 
+A transcript is readable **with the box closed**. Session logs are files in `:computer`'s private
+storage and they outlive the VM by design, so `events()` must replay one whenever the log can be
+reached — which needs the `:computer` process bound, not a booted guest. `GuestAgentBackend`
+decides this with `attachPlan`, and the two rules it exists to hold are: reading a log never starts
+a VM, and reading one is not a session ending — a task that stopped to ask a question yesterday
+must not come back as Finished, or jump to the top of the list, for having been looked at. The
+conversation stays honest about it: the connection is `Ended` and the box's own "Your box is closed
+· Open" banner sits above the history.
+
 `FakeAgentBackend` implements all of this with a scripted "clone project and run" flow that pauses
 on a real permission request. It is the demo path and the development target. A second script —
 "Audit the public API" — delegates to a sub-agent that parks rather than finishing, because a
