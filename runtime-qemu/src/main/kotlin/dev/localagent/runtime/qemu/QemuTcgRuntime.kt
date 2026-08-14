@@ -223,6 +223,9 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
 
             if (!NativeQemu.isRunning()) {
                 storage.removeStaleSockets()
+                // Logged beside the launch it is about, so a timing measured from this log has the
+                // device's answer in the same file. It selects nothing — see NativeQemu.probeHypervisor.
+                Log.i(TAG, "Hypervisor: ${NativeQemu.probeHypervisor()}")
                 NativeQemu.start(
                     QemuCommand.boot(storage, resuming?.tag, launching).toTypedArray(),
                     storage.privateRoot.absolutePath,
@@ -241,6 +244,9 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
                 "QEMU status is ${qmpStatus.status}"
             }
             Log.i(TAG, "QMP confirmed running guest in ${SystemClock.elapsedRealtime() - launchedAt}ms")
+            // Which TCG threading mode actually took effect, from the only source that can answer
+            // it on this build. See NativeQemu.threadCpuMillis for why thread names cannot.
+            logVcpuThreads()
             // Either the snapshot that was just loaded, or one left behind by a box that was saved
             // and then started cold. Both are dead weight from here: nothing holds a note pointing
             // at it any more, and it is a copy of the guest's memory sitting inside the system disk.
@@ -756,6 +762,36 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             return null
         }
         return saved
+    }
+
+    /**
+     * How many host threads the vCPUs are actually running on, recorded once per boot.
+     *
+     * `query-cpus-fast` reports a `thread-id` per vCPU. Distinct ids are multi-threaded TCG; every
+     * vCPU sharing one id is the round-robin mode, where a second vCPU buys nothing at all. QEMU
+     * 5.1 decides this for itself from the guest and host memory models and announces it nowhere,
+     * which is why it is asked rather than assumed — and why the processor count in [GuestSizing]
+     * can be checked against what the emulator actually built.
+     *
+     * Failure is logged and swallowed: this is a diagnostic, and a boot must not turn on it.
+     */
+    private fun logVcpuThreads() {
+        runCatching {
+            QmpClient(storage.qmpSocket).open().use { qmp ->
+                val cpus = qmp.command("query-cpus-fast").getJSONArray("return")
+                val threads = (0 until cpus.length()).map { index ->
+                    val cpu = cpus.getJSONObject(index)
+                    cpu.optInt("cpu-index", index) to cpu.optInt("thread-id", -1)
+                }
+                val distinct = threads.map { it.second }.toSet().size
+                Log.i(
+                    TAG,
+                    "vCPUs: " + threads.joinToString(" ") { "cpu${it.first}=tid${it.second}" } +
+                        " distinctThreads=$distinct " +
+                        if (distinct > 1) "mode=MTTCG" else "mode=single-threaded-RR",
+                )
+            }
+        }.onFailure { Log.w(TAG, "Could not read vCPU thread ids", it) }
     }
 
     private suspend fun awaitQmp(): QmpClient.Status = withContext(Dispatchers.IO) {
