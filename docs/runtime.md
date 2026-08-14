@@ -180,10 +180,111 @@ Open questions, none of them answered yet:
 - **Cost on disk.** The saved memory is ~430 MB inside the system qcow2, which is a real
   fraction of a phone's free space to spend on a box the person has not opened yet.
 
-The measurement that would settle whether any of this is worth building is one nobody has
-taken: **time from a freshly provisioned image to a first reply, cold**, against the same
-path with a seeded snapshot. Everything above is arithmetic and mechanism until that number
-exists.
+### The measurement, taken
+
+It has now been taken, on the same Galaxy Z Fold 7, against a guest image rebuilt from
+`main` and provisioned onto the phone in the same operation. Every number below comes
+from the runtime log and the session `.ndjson`, not from watching the screen.
+
+**Provisioning is not the cost.** Replacing the installed image with a new 947 MB one
+took **2.1 s**, and the open that followed reached a ready agent in **120.7 s**. A
+second cold open of that same image — nothing to provision, no snapshot to load —
+reached Ready in **94.9 s**. An image update therefore costs about two seconds more
+than any other cold start. What makes it expensive is not the install; it is that the
+install invalidates the snapshot, and so guarantees a cold start.
+
+The rest of the path, end to end, on that freshly provisioned image:
+
+| | |
+| --- | --- |
+| Tap Open → guest Ready | 94.9 s |
+| Open a task → harness process alive | 35.3 s |
+| SDK import (295 MB, cold page cache) | 67.6 s |
+| Open a task → `session_started` | 102.9 s |
+| Send → the harness receives the message | 39.5 s |
+| Send → first reply | 283.7 s |
+| **Tap Open → first reply** | **455 s — 7 min 35 s** |
+
+So the answer is not tens of seconds. It is seven and a half minutes, on a box that had
+just been updated, for a two-word greeting.
+
+The wait is at least legible now. Through it the transcript read `Starting Claude
+Code…`, then `Starting session…`, then `Thinking…` — the labels added for exactly this
+window, confirmed on a device for the first time here. They render as
+`Starting Claude Code……`, because the label already ends in an ellipsis and the view
+appends its own; worth one character of a fix.
+
+**The largest term, though, is not the one this section was about.** A probe taken at
+the end of that run found **three `node` and three `claude` processes** inside a guest
+with two emulated cores. Box had started a harness for every task in the list — the two
+that already existed and the one just opened — all within seven seconds of each other,
+about forty seconds after the guest became ready, and without anyone opening the two old
+ones. The preceding run behaved identically: no task was opened at all, and two
+harnesses started anyway.
+
+That is the fan-out from the top of this section, in a narrower form. Not "opening the
+box opens every conversation", but "the box becoming ready starts a harness for every
+conversation". It is why the SDK import above reads 67.6 s against a warm single-session
+9.95 s, and why a two-word reply spent 244 s in its model turn against a warm 4.7 s.
+Those figures are three-way contention as much as they are cold cache, and no reading of
+this table should treat them as the cost of being cold alone.
+
+### So: is the seeded snapshot worth building?
+
+Not first, and not yet. The measurement does not rule it out — the test set above was
+whether the cold first reply is only tens of seconds, and at 455 s it plainly is not.
+But the measurement does price the fix, and the price is poor next to what sits beside
+it.
+
+A seeded snapshot removes the boot and warms the page cache, and does nothing else. It
+cannot carry a CLI, by deliberate design: `quiesceGuest()` reaps the guest's children
+before saving. So against the 455 s it would take out the 94.9 s boot outright, and pull
+the 67.6 s SDK import down towards its 9.95 s warm figure. Call it 150 s, generously —
+leaving five minutes, and leaving the two largest remaining terms untouched.
+
+Not starting three harnesses to open one task costs nothing on disk, needs no
+opportunistic charging window, and removes contention from every line of that table
+including the model turn. It also has to come first on its own merits: a snapshot
+restored into a three-way fan-out is 430 MB of warm memory spent on the same congestion,
+and until it is fixed there is no way to measure what the snapshot alone would buy.
+
+The order is therefore: fix the fan-out, re-measure this table, and only then decide
+whether the boot that remains is worth 430 MB of somebody's phone. The open questions
+above keep their force — they are simply not the next thing to answer.
+
+### The fan-out, fixed
+
+It was not a missing guard. The guard was there and was being defeated. The outbox does
+two jobs — it queues what could not be delivered, and it is how `runtimeStateReceiver`
+decides which sessions were *waiting on the box* and must be given a harness. A turn
+earns that. A standing setting does not, and the UI broadcasts one: `setViewport` runs as
+soon as the window has measured itself, on every launch, over every record. So every
+restored conversation began life with a viewport command in its outbox, and "was anyone
+waiting" became true of all of them.
+
+Nothing needed queueing: `onAttached` already states the mode and viewport to every
+harness ahead of anything else it reads. Re-measured on the same phone, with the same
+three tasks in the list:
+
+| | Before | After |
+| --- | --- | --- |
+| Guest processes after opening the box | 3 `node`, 3 `claude` | 1 `node`, 1 `claude` |
+| SDK import, cold page cache | 67.6 s | 44.0 s |
+| Send → first reply | 283.7 s | 4.05 s |
+
+The one process that starts is the conversation being looked at, which is the intended
+behaviour. The two figures are not one experiment: the import is like-for-like — cold
+cache, one session rather than three — while the reply also had a warm CLI behind it, and
+is here only to show that a single session reaches the 4.7 s warm figure the contention
+was hiding.
+
+So the boot is now most of what is left, rather than a fifth of it, and the question this
+section opened with is live again on much better terms. What has changed alongside it is
+that keeping a box is now a choice the user can see: "Open faster" saves an idle box
+after three minutes instead of fifteen, or closes it instead of saving, and says that a
+saved copy costs about 430 MB. A seeded snapshot would extend that same setting to the
+one open it cannot help with — the first after an update — and it should be measured
+against this table rather than the old one.
 
 ## Current implementation state
 
