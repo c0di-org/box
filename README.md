@@ -70,8 +70,7 @@ reviews it, a third fixes the one thing that's broken — same machine, same fil
   </picture>
 </p>
 
-Opening the box takes a couple of minutes the first time, and Box says so rather than
-spinning.
+Opening the box takes a couple of minutes the first time.
 
 ## The screen you happen to have
 
@@ -115,26 +114,23 @@ Install Box. Open it. Start chatting. No Termux, no separate X11 app, no termina
 
 ## Where this actually is
 
-Nobody should have to guess which of the above already works. Checked against the code,
-not the roadmap.
+Nobody should have to guess which of the above already works.
 
 | Promise | Where it stands |
 | --- | --- |
-| **The computer** | Real. An ARM64 Debian Bookworm VM boots under QEMU in its own process, with a private control channel to `agentd` inside it. Commands run, files persist. |
-| **A real agent in it** | Real. Claude Code runs in the guest and speaks Box's event vocabulary; you sign in through the phone's browser, no API key to paste. The full OAuth round trip is not yet proven on hardware. |
-| **Open computer / Take over** | Real, confirmed on hardware 12 Aug 2026. The guest's screen reaches the app over RFB on a private socket, taking over moves its own cursor and types into its shell, and the desktop resizes to fit the window showing it. |
-| **Other agents** | ChatGPT and Cursor exist as a scripted demo only. One harness is wired for real. |
-| **Preview a running server** | Real. The agent offers a port, QEMU forwards it to loopback on the phone, and it opens in a panel. Not yet confirmed on hardware. |
+| **The computer** | Real. A Debian VM boots under QEMU. Commands run, files persist. |
+| **A real agent in it** | Real. Claude Code runs inside the VM, and you sign in through the phone's browser — no API key to paste. The full sign-in round trip isn't proven on hardware yet. |
+| **Open computer / Take over** | Real, on hardware. You see the guest's desktop, and taking over moves its cursor and types into its shell. |
+| **Other agents** | ChatGPT and Cursor are a scripted demo. Only Claude Code is wired up for real. |
+| **Preview a running server** | Real, but not yet confirmed on hardware. |
 
-The honest cost: it's a fully emulated ARM64 VM, so first light takes a couple of minutes
-on a Galaxy Z Fold 7, most of it the guest waiting on emulated udev — measurements in
-[docs/development.md](docs/development.md).
+The honest cost: it's a fully emulated VM, so the first boot takes a couple of minutes on
+a Galaxy Z Fold 7.
 
-The pictures, on the same terms. The phone and tablet ones are
-[`tools/screenshots.sh`](tools/screenshots.sh) on emulators, so the conversation in them
-is Box's built-in demo; every pixel around it is the shipping UI. The three desktop ones
-are [`tools/device-shots.sh`](tools/device-shots.sh) on a real Fold 7 with a real VM
-behind it, so that Debian is running and the `uname` output is that machine answering.
+And the pictures. The phone and tablet ones are emulator screenshots, so the conversation
+in them is Box's built-in demo — but every pixel around it is the shipping UI. The three
+desktop ones are a real Fold 7 with a real VM behind it, so that Debian is running and the
+`uname` output is that machine answering.
 
 ## Build it
 
@@ -152,8 +148,8 @@ After that, build, install and launch:
 ```
 
 Reach for `--image` again whenever anything under `guest/` changed. It reprovisions, which
-is the only way a new image reaches a device: an installed Box keeps its existing guest
-disk on purpose, so an app update never wipes the user's Linux box.
+is the only way a new image reaches a device — an installed Box keeps its guest disk on
+purpose, so an app update never wipes the user's Linux box.
 
 The tests, which need no device:
 
@@ -176,10 +172,7 @@ appear to do nothing: [docs/development.md](docs/development.md).
 | `docs/` | [Runtime design](docs/runtime.md), [UI contract](docs/ui-contract.md), [development](docs/development.md) |
 
 Two build flavors. `stock` is the product: QEMU, carrying the guest image. `avf` is the
-same app without that image, so it builds on a machine that has never run the guest
-builder — it's what UI work is built against.
-
-The name is a leftover. AVF's APIs are `@SystemApi` behind `MANAGE_VIRTUAL_MACHINE`,
-which AOSP documents as unavailable to third-party apps, so a Play-distributed Box cannot
-get hardware virtualization. Full emulation is not a stage Box is passing through — see
-[the spike](docs/spike-android-toolchain.md).
+same app without it, so UI work builds on a machine that has never run the guest builder.
+The name is a leftover — Android doesn't offer hardware virtualization to third-party
+apps, so full emulation is not a stage Box is passing through
+([the spike](docs/spike-android-toolchain.md) has the evidence).
