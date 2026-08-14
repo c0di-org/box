@@ -930,12 +930,24 @@ internal class GuestKeyboardView(
             }
         }
 
+        /**
+         * True when the composed effect was played, false when the caller should fall back to
+         * [View.performHapticFeedback].
+         *
+         * The catch is the whole point of the return value being reachable. Every caller already
+         * had a fallback for a phone whose motor cannot compose primitives, and none of it ran:
+         * `vibrate` throws `SecurityException` when the permission is missing, so the fallback sat
+         * one line below a call that never returned. It took the app down from a *layout* pass —
+         * opening the computer, not pressing a key. The permission is declared now, but a
+         * permission is a thing the system can refuse, and a key tick is never worth a crash.
+         */
         private fun tick(primitive: Int, intensity: Float): Boolean {
             if (!primitives) return false
-            vibrator?.vibrate(
-                VibrationEffect.startComposition().addPrimitive(primitive, intensity).compose(),
-            )
-            return true
+            return runCatching {
+                vibrator?.vibrate(
+                    VibrationEffect.startComposition().addPrimitive(primitive, intensity).compose(),
+                )
+            }.isSuccess
         }
 
         private fun soundFor(key: Key) = when (key.keysym) {
