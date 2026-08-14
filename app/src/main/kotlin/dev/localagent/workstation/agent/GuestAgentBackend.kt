@@ -779,7 +779,11 @@ class GuestAgentBackend(
     private fun String.toTitle(): String? =
         trim().lineSequence().firstOrNull()?.trim()?.take(TITLE_CHARS)?.ifBlank { null }
 
-    private companion object {
+    /**
+     * Internal rather than private because the preference file is shared: [BoxViewModel] keeps the
+     * "Open faster" switch in the same one, and two copies of a file name is how they drift apart.
+     */
+    internal companion object {
         const val TAG = "BoxAgentBackend"
         const val WORKSPACE = "/workspace"
         const val GUEST_HOME = "/home/agent"

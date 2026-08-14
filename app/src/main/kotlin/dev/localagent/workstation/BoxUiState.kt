@@ -150,6 +150,12 @@ data class BoxUiState(
      * because it is a statement about the user's trust, not about a session.
      */
     val permissionMode: AgentPermissionMode = AgentPermissionMode.Ask,
+    /**
+     * "Open faster": whether an idle box is saved rather than closed.
+     *
+     * True by default, because saving an idle box is what Box did before this was a choice.
+     */
+    val openFaster: Boolean = true,
     val startingSession: Boolean = false,
     /**
      * The task swiped off the list, still waiting to find out whether the user meant it.
