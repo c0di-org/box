@@ -134,8 +134,23 @@ if (( wipe )); then
   adb uninstall "$PACKAGE" >/dev/null 2>&1 || true
 fi
 
+# Pushed as a file and installed on the device, rather than streamed by `adb install`.
+#
+# The APK is about a gigabyte, almost all of it the guest image, and streaming one that size to
+# this phone is the slow and fragile path: an install left running overnight was still going
+# eight hours later and then reported failure, and the incremental installer separately refused
+# with INSTALL_FAILED_MEDIA_UNAVAILABLE. The same bytes cross as an ordinary file in about
+# twenty seconds, after which `pm install` takes three.
 say "Installing $(du -h "$APK" | cut -f1) to $BOX_DEVICE"
-adb install -r "$APK"
+staged="/data/local/tmp/box-install-$$.apk"
+adb push "$APK" "$staged" >/dev/null
+# `pm` reports a refused install by printing Failure and still exiting 0 on some builds, so the
+# output is the result rather than the status. Cleared first either way: a gigabyte left behind
+# in /data/local/tmp is the sort of thing nobody finds until the phone is full.
+install_output="$(adb shell pm install -r -t "$staged" 2>&1 | tr -d '\r')"
+adb shell rm -f "$staged" >/dev/null 2>&1 || true
+printf '%s\n' "$install_output"
+grep -q '^Success' <<<"$install_output" || { echo 'The install did not succeed.' >&2; exit 1; }
 
 if (( launch )); then
   say 'Launching'
