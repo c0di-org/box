@@ -677,12 +677,32 @@ class GuestAgentBackend(
      * without it a message written just as the session attaches can overtake one that has been
      * queued since before the boot, and the agent would read the user's turns out of order.
      * `IAgentSession.write` is `oneway`, so nothing waits on the guest while the lock is held.
+     *
+     * Nothing is held for a session with no process unless it is a *turn*. The outbox is not only
+     * a queue: it is Box's record of who was genuinely waiting on the box, and
+     * [runtimeStateReceiver] opens a harness for every session that has one. A turn earns that —
+     * somebody typed it at a shut box and is owed an answer the moment the guest is up. A standing
+     * setting does not, and needs nothing held either, because [Listener.onAttached] states the
+     * current mode and viewport to every harness ahead of anything else it will read.
+     *
+     * Holding settings here anyway is what brought the fan-out back after it was fixed. The UI
+     * calls `setViewport` as soon as it has measured itself — on every launch, for every record —
+     * so every restored conversation began life with a viewport command in its outbox, "was anyone
+     * waiting on the box" became true of all of them, and the next open started a harness per
+     * conversation. Measured on device: three `claude` processes in a two-core guest to answer one
+     * "hi", and 455 s to a first reply. See docs/runtime.md.
      */
     private fun Record.write(command: Map<String, Any>) {
         val json = HarnessWire.encode(command)
         synchronized(outbox) {
             val live = handle
-            if (live == null || outbox.isNotEmpty()) {
+            if (live == null) {
+                if (!isStandingSetting(command)) outbox += json
+                return
+            }
+            // Ordering, and it applies to settings too: one sent past a queued turn would reach
+            // the agent after work that was meant to run under it.
+            if (outbox.isNotEmpty()) {
                 outbox += json
                 return
             }
@@ -757,7 +777,11 @@ class GuestAgentBackend(
     private fun String.toTitle(): String? =
         trim().lineSequence().firstOrNull()?.trim()?.take(TITLE_CHARS)?.ifBlank { null }
 
-    private companion object {
+    /**
+     * Internal rather than private because the preference file is shared: [BoxViewModel] keeps the
+     * "Open faster" switch in the same one, and two copies of a file name is how they drift apart.
+     */
+    internal companion object {
         const val TAG = "BoxAgentBackend"
         const val WORKSPACE = "/workspace"
         const val GUEST_HOME = "/home/agent"
@@ -799,6 +823,21 @@ class GuestAgentBackend(
  * [opened] is asked before [hasHistory] because a running computer beats a readable log: the
  * session the user is looking at should be one they can talk to.
  */
+/**
+ * Whether a command is a standing setting rather than a turn.
+ *
+ * The distinction decides one thing: whether a session with no process is left without one. Turns
+ * are held in the outbox and open a harness the moment the guest is ready, because somebody typed
+ * them at a shut box. Settings are not held at all — [GuestAgentBackend.Listener.onAttached]
+ * states the current mode and viewport to every harness before anything else reaches it, so
+ * queueing them buys nothing and costs a process per conversation.
+ *
+ * Derived from the command rather than passed in by the caller, so that a future setting
+ * broadcast to `records.values` cannot reintroduce the fan-out by forgetting to say so.
+ */
+internal fun isStandingSetting(command: Map<String, Any>): Boolean =
+    command["type"] == "permission_mode" || command["type"] == "viewport"
+
 internal fun attachPlan(runtimeReady: Boolean, opened: Boolean, hasHistory: Boolean): AttachPlan =
     when {
         runtimeReady && opened -> AttachPlan.Reattach

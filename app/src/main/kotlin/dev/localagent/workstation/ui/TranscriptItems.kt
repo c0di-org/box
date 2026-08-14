@@ -48,6 +48,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -1112,6 +1113,9 @@ fun ActivityRow(
         is AgentActivity.AwaitingPermission ->
             if (waitingOn is PermissionAsk.Questions) "Waiting for your answer" else "Waiting for your approval"
         AgentActivity.AwaitingInput -> "Waiting for your reply"
+        // Box's own machinery, drawn by [StartingCard] instead. This line is the agent's voice and
+        // there is no agent yet.
+        is AgentActivity.Starting -> return
         AgentActivity.Idle, AgentActivity.Ended -> return
     }
     val transition = rememberInfiniteTransition(label = "activity")
@@ -1129,6 +1133,43 @@ fun ActivityRow(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * The box getting an agent ready, said in Box's voice rather than the agent's.
+ *
+ * This is the wait the cold-start work is about: on a fully emulated guest the harness and the CLI
+ * take minutes to come up, and for all of it there is nothing behind the conversation to speak.
+ * The old treatment borrowed the agent's own activity line for it — the same pulsing dot as
+ * "Thinking…" — which read as the agent replying before it existed.
+ *
+ * So it is drawn as a card, in the same muted surface the tool and sub-agent cards use: the
+ * transcript's established grammar for "this is Box telling you something", visibly not a turn.
+ * The indeterminate bar is the honest shape here — unlike the opening screen, which knows how long
+ * this phone usually takes, nothing measures the CLI's own start, and a bar that guessed would be
+ * a lie of exactly the kind [BoxProgress] avoids.
+ */
+@Composable
+fun StartingCard(activity: AgentActivity.Starting, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text(
+                activity.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+        }
     }
 }
 

@@ -326,14 +326,32 @@ internal object HarnessWire {
         else -> PermissionDecision.Abandoned
     }
 
+    /**
+     * A guest image older than this app has no `starting` kind — it reports the same wait as
+     * `thinking` with a "Starting …" label, which is what it had when those labels were added.
+     * That degrades to the old appearance rather than breaking, which is the right way round: the
+     * image on a phone lags the APK by a whole rebuild, and the ellipsis fix below still applies
+     * to it.
+     */
     private fun activity(json: JSONObject?): AgentActivity = when (json?.optString("kind")) {
-        "thinking" -> AgentActivity.Thinking(json.optStringOrNull("label"))
-        "working" -> AgentActivity.Working(json.optStringOrNull("label") ?: "Working")
+        "thinking" -> AgentActivity.Thinking(json.trimmedLabel())
+        "working" -> AgentActivity.Working(json.trimmedLabel() ?: "Working")
+        "starting" -> AgentActivity.Starting(json.trimmedLabel() ?: "Starting")
         "awaiting_permission" -> AgentActivity.AwaitingPermission(json.optString("requestId"))
         "awaiting_input" -> AgentActivity.AwaitingInput
         "ended" -> AgentActivity.Ended
         else -> AgentActivity.Idle
     }
+
+    /**
+     * The label, without a trailing ellipsis.
+     *
+     * The view appends its own, so a harness that sent one produced "Starting Claude Code……" on
+     * screen. Stripped here rather than at the harness alone, because the guest image is deployed
+     * separately and an old one must not render badly against a new app.
+     */
+    private fun JSONObject.trimmedLabel(): String? =
+        optStringOrNull("label")?.trimEnd('…', '.', ' ')?.takeIf { it.isNotEmpty() }
 
     private fun outcome(json: JSONObject?): SessionOutcome = when (json?.optString("status")) {
         "completed" -> SessionOutcome.Completed(json.optStringOrNull("summary"))

@@ -290,12 +290,33 @@ class RuntimeService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) = publishState(runtime.state().value)
     }
 
+    /**
+     * The "Open faster" setting changing while a box is already up.
+     *
+     * Registered at runtime for the same reason as [queryReceiver], and it matters more here: sent
+     * as a service Intent this would *create* `:computer` just to tell it a preference, and leave a
+     * foreground notification standing over no VM at all. A broadcast reaches the process if it
+     * exists and is silently dropped if it does not — which is right, because a box that is not
+     * running has nothing to save and will be told again by the next [ACTION_START].
+     */
+    private val keepSavedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            keepSaved = intent?.getBooleanExtra(EXTRA_KEEP_SAVED, true) ?: return
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         ContextCompat.registerReceiver(
             this,
             queryReceiver,
             IntentFilter(ACTION_QUERY_STATE),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        ContextCompat.registerReceiver(
+            this,
+            keepSavedReceiver,
+            IntentFilter(ACTION_SET_KEEP_SAVED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         // Where the runtime is sitting before anything has been asked of it. Read here, on the
@@ -321,11 +342,17 @@ class RuntimeService : Service() {
     override fun onDestroy() {
         sharedFolder.stop()
         unregisterReceiver(queryReceiver)
+        unregisterReceiver(keepSavedReceiver)
         super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         promoteToForeground()
+        // Carried on every start, so a service that has just been created knows the setting before
+        // it has a box to apply it to. Changes under a running box arrive by broadcast instead.
+        if (intent?.hasExtra(EXTRA_KEEP_SAVED) == true) {
+            keepSaved = intent.getBooleanExtra(EXTRA_KEEP_SAVED, true)
+        }
         if (intent?.action == ACTION_START) scope.launch {
             // Starting before the APK assets are installed is what "no verified guest image"
             // means; provisioning is part of the same user gesture.
@@ -414,6 +441,15 @@ class RuntimeService : Service() {
     private fun isDebuggable(): Boolean =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
+    /**
+     * Whether an idle box is worth saving. See [ACTION_SET_KEEP_SAVED].
+     *
+     * Defaults to true because that is what Box already did before the setting existed: an idle
+     * box was always put away. Starting anyone at false would have made every box on every phone
+     * slower than the one they had yesterday, to save storage nobody had asked to reclaim.
+     */
+    @Volatile private var keepSaved = true
+
     private fun touch() = lastGuestActivity.set(SystemClock.elapsedRealtime())
 
     /**
@@ -441,17 +477,31 @@ class RuntimeService : Service() {
                     touch()
                     continue
                 }
+                val keep = keepSaved
                 val quietFor = SystemClock.elapsedRealtime() - lastGuestActivity.get()
-                if (quietFor < IDLE_TIMEOUT_MILLIS) continue
-                Log.i(TAG, "Nothing has needed the box for ${quietFor / 1_000}s; putting it away")
+                if (quietFor < if (keep) SAVE_IDLE_MILLIS else IDLE_TIMEOUT_MILLIS) continue
+                Log.i(
+                    TAG,
+                    "Nothing has needed the box for ${quietFor / 1_000}s; " +
+                        if (keep) "putting it away" else "closing it (Open faster is off)",
+                )
                 // Deliberately not awaited here, and this is not a detail. Saving the box moves it
                 // out of Ready, [publishState] answers that by cancelling this watcher, and if the
                 // save were running *inside* this job that cancellation would land on the save —
                 // which is exactly what it did: the box stopped half way, quiesced but unsaved.
                 idleWatch = null
                 scope.launch {
-                    runCatching { runtime.suspendRuntime() }
-                        .onFailure { Log.w(TAG, "Could not put the idle box away", it) }
+                    if (keep) {
+                        runCatching { runtime.suspendRuntime() }
+                            .onFailure { Log.w(TAG, "Could not put the idle box away", it) }
+                    } else {
+                        // Closing rather than saving is the whole of "Open faster, off": the
+                        // ~430 MB of guest memory never reaches the disk. Whatever snapshot an
+                        // earlier setting left behind is discarded by [start] on the way back up,
+                        // so the space comes back on the next open rather than needing a sweep.
+                        runCatching { runtime.stop() }
+                            .onFailure { Log.w(TAG, "Could not close the idle box", it) }
+                    }
                 }
                 return@launch
             }
@@ -649,6 +699,17 @@ class RuntimeService : Service() {
         const val ACTION_EXEC_PROBE = "dev.localagent.runtime.qemu.EXEC_PROBE"
 
         /**
+         * Whether an idle box is saved or closed — the "Open faster" setting, sent rather than read.
+         *
+         * `:computer` is a separate process, and `SharedPreferences` gives no honest answer across
+         * one. So the choice travels as an Intent: with every [ACTION_START], so a service that has
+         * just been created knows it, and again on its own whenever the user changes it while a box
+         * is already running.
+         */
+        const val ACTION_SET_KEEP_SAVED = "dev.localagent.runtime.qemu.SET_KEEP_SAVED"
+        const val EXTRA_KEEP_SAVED = "keep_saved"
+
+        /**
          * Reinstall the guest image, keeping `/workspace`. Debuggable builds only.
          *
          * Reachable through the debug-only VmProbeActivity, which forwards whatever action it is
@@ -687,6 +748,18 @@ class RuntimeService : Service() {
          * that a box opened for one question is not still emulating an ARM64 machine at bedtime.
          */
         private const val IDLE_TIMEOUT_MILLIS = 15 * 60 * 1_000L
+
+        /**
+         * How long an untouched box waits before it is *saved*, which is much less than how long
+         * it waits before being closed.
+         *
+         * The two differ because the mistakes differ. Closing a box the user comes back to costs
+         * them a boot — 95–120 s measured on a Fold 7 — so that timer is allowed to be slow and
+         * cautious. Saving one costs about a second to undo, so waiting a quarter of an hour to do
+         * it buys nothing and loses the save entirely if the phone kills `:computer` first, which
+         * is the common way a box ends on Android.
+         */
+        private const val SAVE_IDLE_MILLIS = 3 * 60 * 1_000L
         private const val IDLE_POLL_MILLIS = 30_000L
         private const val CHANNEL_ID = "local_agent_runtime"
         private const val NOTIFICATION_ID = 1001

@@ -38,6 +38,7 @@ import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.ConnectOutcome
 import dev.localagent.workstation.agent.GitHubAuth
+import dev.localagent.workstation.agent.GuestAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
@@ -74,13 +75,24 @@ class BoxViewModel @JvmOverloads constructor(
     // The default ViewModel factory reflects on a single-argument constructor, hence @JvmOverloads.
     backend: AgentBackend? = null,
 ) : AndroidViewModel(application) {
-    private val mutableUiState = MutableStateFlow(BoxUiState())
+    private val mutableUiState = MutableStateFlow(
+        BoxUiState(
+            openFaster = application
+                .getSharedPreferences(GuestAgentBackend.PREFERENCES, Context.MODE_PRIVATE)
+                .getBoolean(OPEN_FASTER_KEY, true),
+        ),
+    )
     val uiState: StateFlow<BoxUiState> = mutableUiState.asStateFlow()
     private val ids = AtomicLong()
 
     private val agents: AgentBackend = backend ?: FakeAgentBackend(viewModelScope)
     private val auth = BoxContainer.auth
     private val openings = OpeningHistory(application)
+
+    // The same file the backend keeps the permission mode in; Box has a handful of settings and no
+    // screen for them, so a store of its own would be more machinery than the thing being stored.
+    private val preferences =
+        application.getSharedPreferences(GuestAgentBackend.PREFERENCES, Context.MODE_PRIVATE)
     private val signIns = SignInHistory(application)
     private val github = GitHubAuth()
     private var transcriptJob: Job? = null
@@ -1033,7 +1045,31 @@ class BoxViewModel @JvmOverloads constructor(
             )
         }
         getApplication<Application>().startForegroundService(
-            Intent(getApplication(), RuntimeService::class.java).setAction(RuntimeService.ACTION_START),
+            Intent(getApplication(), RuntimeService::class.java)
+                .setAction(RuntimeService.ACTION_START)
+                // Carried on the start rather than sent after it: `:computer` is a fresh process
+                // here and has no other way to know, and the broadcast below would arrive before
+                // it had a receiver registered.
+                .putExtra(RuntimeService.EXTRA_KEEP_SAVED, mutableUiState.value.openFaster),
+        )
+    }
+
+    /**
+     * "Open faster": keep a saved copy of the box, so opening it is a second rather than a boot.
+     *
+     * The cost is the honest half of the switch — the saved guest is about 430 MB inside the system
+     * disk. Turning it off does not go and delete that; the next open discards whatever snapshot is
+     * there on its way up, so the space comes back without a sweep that could race the VM.
+     */
+    fun setOpenFaster(enabled: Boolean) {
+        preferences.edit().putBoolean(OPEN_FASTER_KEY, enabled).apply()
+        mutableUiState.update { it.copy(openFaster = enabled) }
+        // Reaches `:computer` if it is running and is dropped if it is not, which is what should
+        // happen: a box that is not up has nothing to save, and [start] will carry the value.
+        getApplication<Application>().sendBroadcast(
+            Intent(RuntimeService.ACTION_SET_KEEP_SAVED)
+                .setPackage(getApplication<Application>().packageName)
+                .putExtra(RuntimeService.EXTRA_KEEP_SAVED, enabled),
         )
     }
 
@@ -1372,6 +1408,9 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     private companion object {
+        /** See [setOpenFaster]. Absent means true: saving an idle box is the older behaviour. */
+        const val OPEN_FASTER_KEY = "open_faster"
+
         const val COMMAND_TIMEOUT_SECONDS = 120
 
         /**

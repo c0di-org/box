@@ -85,6 +85,7 @@ fun BoxApp(
     onOpenBox: () -> Unit,
     onPutAway: () -> Unit,
     onStop: () -> Unit,
+    onSetOpenFaster: (Boolean) -> Unit,
     onRunCommand: (String) -> Unit,
     onSelectFilesPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
@@ -390,6 +391,11 @@ fun BoxApp(
                 showDiagnostics = false
                 onShowGitHub()
             },
+            // Deliberately does not dismiss the sheet: this is a preference being set, not a
+            // destination being chosen, and closing the sheet under the thumb that flipped it
+            // hides whether it took.
+            openFaster = state.openFaster,
+            onSetOpenFaster = onSetOpenFaster,
         )
     }
 }
@@ -494,6 +500,7 @@ private fun PreviewBox(state: BoxUiState) {
             onOpenBox = {},
             onPutAway = {},
             onStop = {},
+            onSetOpenFaster = {},
             onRunCommand = {},
             onSelectFilesPlace = {},
             onOpenDirectory = {},

@@ -114,6 +114,8 @@ class UiGalleryActivity : ComponentActivity() {
                     onDeclineConnection = model::declineConnection,
                     desktop = if (state.destination == BoxDestination.Computer) StubDesktop else null,
                     onSetDesktopControl = model::control,
+                    // The gallery has no runtime to keep a saved copy of.
+                    onSetOpenFaster = {},
                 )
             }
         }

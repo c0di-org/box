@@ -89,6 +89,7 @@ import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.QueuedPrompt
+import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.ConnectRequest
@@ -581,11 +582,16 @@ private fun TranscriptList(
             transcript?.let { live ->
                 item(key = "activity") {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        ActivityRow(
-                            live.activity,
-                            Modifier.widthIn(max = 760.dp),
-                            waitingOn = live.pendingPermission?.ask,
-                        )
+                        val activity = live.activity
+                        if (activity is AgentActivity.Starting) {
+                            StartingCard(activity, Modifier.widthIn(max = 760.dp))
+                        } else {
+                            ActivityRow(
+                                activity,
+                                Modifier.widthIn(max = 760.dp),
+                                waitingOn = live.pendingPermission?.ask,
+                            )
+                        }
                     }
                 }
             }
