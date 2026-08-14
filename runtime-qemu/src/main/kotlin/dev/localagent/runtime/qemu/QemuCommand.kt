@@ -114,7 +114,15 @@ object QemuCommand {
         // tty0 puts the kernel's own console on that screen, so a boot is watchable and a guest
         // that never reaches userspace still shows why. ttyAMA0 stays last and so stays
         // /dev/console, which is what the existing serial logging reads.
-        "-append", "root=/dev/vda rw console=tty0 console=ttyAMA0",
+        //
+        // `maxcpus=1` boots Linux on one processor however many the board has, and
+        // `local-agent-online-cpus.service` brings the rest up once boot is over. Every processor
+        // that is online while the kernel probes devices makes that probing slower — an emulated
+        // boot is mostly cross-CPU TLB invalidation and TCG serialises all of it — so a
+        // two-processor box costs 177 s to reach a ready agent when both run from reset, and 81 s
+        // when the second is parked. The processors are not taken away, only deferred: they are
+        // present and offline, which is a state Linux can leave by writing one sysfs file.
+        "-append", "root=/dev/vda rw console=tty0 console=ttyAMA0 maxcpus=1",
         "-drive", "if=none,id=system,format=qcow2,file=${image.system.absolutePath}",
         "-device", "virtio-blk-pci,drive=system,romfile=",
         "-drive", "if=none,id=workspace,format=qcow2,file=${image.workspace.absolutePath}",

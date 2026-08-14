@@ -60,20 +60,17 @@ data class GuestSizing(val memoryMb: Int, val processors: Int) {
         /**
          * What a phone with no opinion gets. 2 GB is what a desktop session plus an agent's
          * toolchain fits in, and it is not the binding constraint: under four parallel Python
-         * processes and a compile the guest reported 1.76 GiB still available, no swap, and a flat
-         * major-fault count.
+         * processes and a compile the guest reported 1.76 GiB still available and no swap.
          *
-         * One processor rather than two, which is measured rather than assumed. A second vCPU costs
-         * **105 seconds on every cold boot** (72 s against 177 s, see [MAX_PROCESSORS]) and wins
-         * nothing back on the work Box actually does: single-threaded CPU, a one-file compile and
-         * interpreter startup all measured equal or better at one. It pays only for genuinely
-         * parallel guest work, where four concurrent jobs finished about 40% sooner on two — so the
-         * user who runs builds in here can still pick two, and everyone else stops paying for them.
-         *
-         * At one processor QEMU also drops out of multi-threaded TCG entirely and round-robins,
-         * which is where most of the saving comes from.
+         * Two processors, which was briefly one. A second processor used to cost 105 seconds on
+         * every cold boot — 177 s against 72 s — because every processor online while the kernel
+         * probes devices makes that probing slower. It no longer does: the kernel boots with
+         * `maxcpus=1` and `local-agent-online-cpus.service` hands the rest back once boot is over,
+         * which measured 81 s on a two-processor box. So the boot argument for one processor is
+         * gone, and what is left is the work: four concurrent jobs finish about 40% sooner on two,
+         * which is the shape of an agent compiling and running things at once.
          */
-        val DEFAULT = GuestSizing(memoryMb = 2048, processors = 1)
+        val DEFAULT = GuestSizing(memoryMb = 2048, processors = 2)
 
         private val MEMORY_LADDER_MB = listOf(1024, 2048, 3072)
         private val PROCESSOR_LADDER = listOf(1, 2, 4)

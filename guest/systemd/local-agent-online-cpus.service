@@ -1,0 +1,27 @@
+[Unit]
+Description=Bring the parked processors online now that boot is over
+# The kernel is booted with `maxcpus=1` so that only one processor is up while Linux probes
+# devices and settles udev -- the phase that costs the whole boot. Measured cold boot to a ready
+# agent on a Fold 7: 81 s with the second processor parked against 177 s with it running from the
+# start, on the same two-processor machine. The parking is what makes it cheap; this unit is what
+# hands the processors back.
+#
+# Ordered last on purpose. Every processor that is online during device probing makes that probing
+# slower, because an emulated kernel boot is mostly cross-CPU TLB invalidation and TCG serialises
+# all of it -- so this must not run a moment before the expensive part is done. `local-agentd` is
+# the last thing to start and the thing Box waits for, which makes "after agentd" the same instant
+# as "the box is ready".
+After=local-agentd.service
+Wants=local-agentd.service
+
+[Service]
+Type=oneshot
+# Every processor the board was given, not a fixed count: `-smp` follows the size the user chose,
+# so the set is whatever the kernel found. cpu0 is already up and usually has no `online` file at
+# all, and a processor that cannot be onlined must not fail the unit -- a box with one working
+# processor is worth having, and this is an optimisation rather than a requirement.
+ExecStart=/bin/sh -c 'for cpu in /sys/devices/system/cpu/cpu[0-9]*/online; do [ -w "$cpu" ] && echo 1 > "$cpu" || true; done; exit 0'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
