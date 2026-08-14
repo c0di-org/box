@@ -1,0 +1,239 @@
+name: Release
+
+# A tagged build of the app, delivered as the one release the repository keeps.
+#
+# The trigger is a tag, but a tag is a pointer rather than a promise: `git tag v0.2.0` on a side
+# branch pushes just as happily as one on main, and would otherwise publish whatever it happened
+# to point at. The first job asks git whether the tagged commit is on main and stops if it is not.
+on:
+  push:
+    tags:
+      - "v*"
+  # A dry run: everything up to and including the APK, and nothing published. Worth having,
+  # because the alternative way to find out whether this pipeline works is a real tag.
+  workflow_dispatch:
+
+# Publishing a release and deleting the ones before it are writes to repository contents;
+# deleting the intermediate guest-image artifact is a write to Actions.
+permissions:
+  contents: write
+  actions: write
+
+# Two tags pushed together would otherwise race over which release survives the prune.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  on-main:
+    name: Tag is on main
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Refuse a tag that is not on main
+        # Nothing to check on a manual run: it publishes nothing.
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main. Nothing released."
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main."
+
+  guest-image:
+    name: Guest image
+    needs: on-main
+    # arm64, and not for preference: build-image.sh runs mmdebstrap and npm inside a linux/arm64
+    # container, which is native here and binfmt emulation on an x64 runner -- minutes against
+    # the better part of an hour. The Arm runner images carry no Android SDK, which is why this
+    # is a job of its own and the APK is built elsewhere.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the guest image
+        run: ./guest/build-container.sh
+      - name: Describe what was built
+        run: |
+          cat guest/image/out/image.json
+          du -sh guest/image/out
+      - name: Hand the image to the APK job
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-image
+          path: guest/image/out
+          # The image is qcow2-compressed already; zipping it again costs minutes and saves
+          # nothing. One day, because the release is the delivery and this is only the seam
+          # between two jobs -- the last step of the workflow deletes it outright.
+          compression-level: 0
+          retention-days: 1
+
+  apk:
+    name: APK and release
+    needs: [on-main, guest-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, for the sake of one question: which tag came before this one.
+          # Pruning old releases takes with it the marker GitHub would otherwise use to decide
+          # where generated notes start, so the previous tag is named explicitly below.
+          fetch-depth: 0
+
+      - name: Take the guest image
+        uses: actions/download-artifact@v4
+        with:
+          name: guest-image
+          path: guest/image/out
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # No Gradle cache on purpose. Releases are rare enough that a cache would be evicted
+      # between them more often than it would be hit, and the point of this pipeline is to keep
+      # the repository's storage down to the current release.
+
+      - name: Install the CMake the build asks for
+        # The runner image ships CMake 3.31 and 4.1; AGP wants the SDK's 3.22.1 fork, which is
+        # also what a developer has locally. Installing it explicitly beats letting AGP discover
+        # it is missing and download it mid-build.
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "cmake;3.22.1"
+
+      - name: Tests
+        run: ./gradlew --no-daemon :runtime-qemu:testDebugUnitTest :app:testStockDebugUnitTest
+
+      - name: Guest tests
+        run: |
+          node --test guest/tests/*.mjs
+          python3 -m unittest discover -s guest/tests
+
+      - name: Decode the signing key
+        # Absent secrets, the release APK is signed with the debug key instead: an unsigned APK
+        # cannot be installed at all, and a build nobody can put on a phone is not a delivery.
+        # Which key was used is stated in the release notes, because it is the difference between
+        # an APK that can be upgraded in place later and one that cannot.
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "keystore=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
+            echo "signed_with=the release key" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No RELEASE_KEYSTORE_BASE64 secret; signing with the debug key."
+            echo "keystore=" >> "$GITHUB_OUTPUT"
+            echo "signed_with=the **debug key** (no release keystore is configured), so it cannot be upgraded in place by a later, properly signed build" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the APK
+        env:
+          # ORG_GRADLE_PROJECT_* rather than -P: a password on the command line is a password in
+          # the process list.
+          ORG_GRADLE_PROJECT_boxKeystoreFile: ${{ steps.signing.outputs.keystore }}
+          ORG_GRADLE_PROJECT_boxKeystorePassword: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_boxKeyAlias: ${{ secrets.RELEASE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_boxKeyPassword: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          # The tag names the build, and the run number is the monotonic integer Android insists
+          # on for an upgrade to be an upgrade.
+          ORG_GRADLE_PROJECT_boxVersionName: ${{ github.ref_name }}
+          ORG_GRADLE_PROJECT_boxVersionCode: ${{ github.run_number }}
+        run: ./gradlew --no-daemon :app:assembleStockRelease
+
+      - name: Name it after the tag
+        id: package
+        run: |
+          apk="$(ls app/build/outputs/apk/stock/release/*.apk)"
+          # Slashes because a manual dry run is named after a branch, and `claude/something`
+          # would otherwise be a directory that does not exist rather than a filename.
+          name="box-${GITHUB_REF_NAME//\//-}-stock.apk"
+          mv "$apk" "$RUNNER_TEMP/$name"
+          (cd "$RUNNER_TEMP" && sha256sum "$name" > "$name.sha256")
+          {
+            echo "apk=$RUNNER_TEMP/$name"
+            echo "checksum=$RUNNER_TEMP/$name.sha256"
+            echo "name=$name"
+            echo "size=$(du -h "$RUNNER_TEMP/$name" | cut -f1)"
+            echo "sha256=$(cut -d' ' -f1 < "$RUNNER_TEMP/$name.sha256")"
+          } >> "$GITHUB_OUTPUT"
+          # A dry run publishes nothing, so this is where it reports what it built.
+          echo "Built \`$name\` ($(du -h "$RUNNER_TEMP/$name" | cut -f1)), guest image \`$(jq -r '.id + "@" + .version' guest/image/out/image.json)\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish, and keep only this release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED_WITH: ${{ steps.signing.outputs.signed_with }}
+          APK: ${{ steps.package.outputs.apk }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+          APK_NAME: ${{ steps.package.outputs.name }}
+          APK_SIZE: ${{ steps.package.outputs.size }}
+          APK_SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          image_id="$(jq -r '.id + "@" + .version' guest/image/out/image.json)"
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          The Box app for arm64 Android, with the Linux guest image baked in.
+
+          \`\`\`
+          adb install -r $APK_NAME
+          \`\`\`
+
+          | | |
+          | --- | --- |
+          | APK | \`$APK_NAME\` ($APK_SIZE) |
+          | SHA-256 | \`$APK_SHA256\` |
+          | Guest image | \`$image_id\` |
+          | Signed with | $SIGNED_WITH |
+
+          The APK is arm64-only and the guest is an ARM64 Debian VM; an x86 emulator is not a target.
+          NOTES
+
+          # Generated notes cover the commits since the previous tag. That has to be said out
+          # loud: GitHub would otherwise start from the previous *release*, and this workflow has
+          # just deleted it.
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          notes_range=()
+          if [ -n "$previous_tag" ]; then
+            notes_range=(--notes-start-tag "$previous_tag")
+          fi
+
+          # Re-running the workflow for a tag that already has a release would fail at create,
+          # so the old one goes first. The tag itself stays -- tags cost nothing, and they are
+          # what makes an old release reproducible after its APK is gone.
+          gh release delete "$GITHUB_REF_NAME" --yes 2>/dev/null || true
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --generate-notes "${notes_range[@]}" \
+            "$APK" "$CHECKSUM"
+
+          # Only the current release is kept. Each one carries a ~950 MB APK, so a year of them
+          # is tens of gigabytes of release storage for builds nobody installs. `|| true` because
+          # the first release of a repository has nothing to prune, and grep matching nothing is
+          # an error exit that would fail a release that has already published.
+          superseded="$(gh release list --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -vxF "$GITHUB_REF_NAME" || true)"
+          for old in $superseded; do
+            echo "Deleting superseded release $old"
+            gh release delete "$old" --yes
+          done
+
+      - name: Drop the intermediate guest image
+        # It has done its job, and it is another half a gigabyte until the retention window
+        # expires. Best-effort: a failure here must not fail a release that already published.
+        if: always() && needs.guest-image.outputs.artifact-id
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE \
+            "/repos/$GITHUB_REPOSITORY/actions/artifacts/${{ needs.guest-image.outputs.artifact-id }}"

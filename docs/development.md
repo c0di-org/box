@@ -89,7 +89,72 @@ backpressure are covered without booting anything:
 python3 -m unittest discover -s guest/tests
 ```
 
-There is no CI, and no instrumented or UI tests.
+There are no instrumented or UI tests. All three suites above run again in CI, before a
+release is published.
+
+## Releases
+
+`.github/workflows/release.yml` builds the app and publishes it. Push a tag and it goes:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Three things about it are deliberate.
+
+**Only tags on main.** A tag is a pointer, not a promise — `git tag` on a side branch
+pushes just as happily — so the first job asks git whether the tagged commit is an
+ancestor of `origin/main` and stops the workflow if it is not.
+
+**The guest image is built in CI, not committed.** It is an input to the APK and it is
+gitignored, so the workflow builds it exactly the way you do, with
+`guest/build-container.sh`. That job runs on `ubuntu-24.04-arm` because the builder is a
+`linux/arm64` container: native there, and binfmt emulation on an x64 runner, which is the
+difference between minutes and the better part of an hour. The Arm runner images carry no
+Android SDK, which is why the APK is built in a second job on x64 and the image travels
+between them as a one-day artifact that the last step deletes outright.
+
+**One release at a time.** Each APK is around 950 MB, because the Linux image is inside
+it. After publishing, the workflow deletes every other release. The *tags* stay: they cost
+nothing, and they are what makes an old release reproducible after its APK is gone.
+
+### Signing
+
+With no secrets configured, the release APK is signed with the debug key, and the release
+notes say so. That is not a formality — the debug key is shared by every Android developer
+on earth, and an APK signed with it can never be upgraded in place by a properly signed
+one. It is there because an *unsigned* release APK cannot be installed at all, and a build
+nobody can put on a phone is not a delivery.
+
+To sign for real, set four repository secrets:
+
+| Secret | What it is |
+| --- | --- |
+| `RELEASE_KEYSTORE_BASE64` | the keystore file, base64-encoded |
+| `RELEASE_KEYSTORE_PASSWORD` | its store password |
+| `RELEASE_KEY_ALIAS` | the key inside it |
+| `RELEASE_KEY_PASSWORD` | that key's password |
+
+```bash
+keytool -genkeypair -v -keystore box-release.jks -storetype PKCS12 \
+  -keyalg RSA -keysize 4096 -validity 10000 -alias box
+base64 -i box-release.jks | gh secret set RELEASE_KEYSTORE_BASE64
+```
+
+Keep `box-release.jks` somewhere safe and out of the repository. Losing it means the app
+can never be updated in place again, only uninstalled and reinstalled.
+
+The same properties work locally, which is how to reproduce what CI builds:
+
+```bash
+./gradlew :app:assembleStockRelease \
+  -PboxKeystoreFile=$PWD/box-release.jks -PboxKeystorePassword=... \
+  -PboxKeyAlias=box -PboxKeyPassword=...
+```
+
+`boxVersionName` and `boxVersionCode` are the other two: the workflow passes the tag and
+the run number, so the APK reports the version it was released as. Without them the build
+falls back to the `0.1.0` in `app/build.gradle.kts`, which is what a local build gets.
 
 ## The mark
 
