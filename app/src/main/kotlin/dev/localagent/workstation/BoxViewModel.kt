@@ -22,6 +22,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.runtime.qemu.GuestSizing
 import dev.localagent.runtime.qemu.IExecCallback
 import dev.localagent.runtime.qemu.IFileListCallback
 import dev.localagent.runtime.qemu.IFileReadCallback
@@ -83,6 +84,17 @@ class BoxViewModel @JvmOverloads constructor(
             openFaster = application
                 .getSharedPreferences(GuestAgentBackend.PREFERENCES, Context.MODE_PRIVATE)
                 .getBoolean(OPEN_FASTER_KEY, true),
+            guestSizing = application
+                .getSharedPreferences(GuestAgentBackend.PREFERENCES, Context.MODE_PRIVATE)
+                .let {
+                    GuestSizing(
+                        memoryMb = it.getInt(GUEST_MEMORY_KEY, GuestSizing.DEFAULT.memoryMb),
+                        processors = it.getInt(GUEST_PROCESSORS_KEY, GuestSizing.DEFAULT.processors),
+                    )
+                },
+            // What this phone can be asked for, which is not what QEMU could be asked for. Read
+            // here rather than each time the sheet opens: it is a property of the device.
+            guestSizingChoices = GuestSizing.choicesFor(application),
         ),
     )
     val uiState: StateFlow<BoxUiState> = mutableUiState.asStateFlow()
@@ -1118,8 +1130,32 @@ class BoxViewModel @JvmOverloads constructor(
                 // Carried on the start rather than sent after it: `:computer` is a fresh process
                 // here and has no other way to know, and the broadcast below would arrive before
                 // it had a receiver registered.
-                .putExtra(RuntimeService.EXTRA_KEEP_SAVED, mutableUiState.value.openFaster),
+                .putExtra(RuntimeService.EXTRA_KEEP_SAVED, mutableUiState.value.openFaster)
+                .withGuestSizing(),
         )
+    }
+
+    /** The size of the machine, carried on every start because that is the only time it applies. */
+    private fun Intent.withGuestSizing(): Intent = apply {
+        putExtra(RuntimeService.EXTRA_MEMORY_MB, mutableUiState.value.guestSizing.memoryMb)
+        putExtra(RuntimeService.EXTRA_PROCESSORS, mutableUiState.value.guestSizing.processors)
+    }
+
+    /**
+     * How much of the phone the box gets.
+     *
+     * Takes effect at the next open and never sooner: `-m` and `-smp` are handed to QEMU once, and
+     * a running guest has no idea how to grow. The larger cost is quieter — the size is part of
+     * the machine fingerprint, so a box saved by "Open faster" no longer matches and is discarded
+     * on the way up. Changing this turns one reopen into a full boot, which is why the sheet says
+     * so rather than leaving the user to discover it.
+     */
+    fun setGuestSizing(sizing: GuestSizing) {
+        preferences.edit()
+            .putInt(GUEST_MEMORY_KEY, sizing.memoryMb)
+            .putInt(GUEST_PROCESSORS_KEY, sizing.processors)
+            .apply()
+        mutableUiState.update { it.copy(guestSizing = sizing) }
     }
 
     /**
@@ -1480,6 +1516,8 @@ class BoxViewModel @JvmOverloads constructor(
 
         /** See [setOpenFaster]. Absent means true: saving an idle box is the older behaviour. */
         const val OPEN_FASTER_KEY = "open_faster"
+        const val GUEST_MEMORY_KEY = "guest_memory_mb"
+        const val GUEST_PROCESSORS_KEY = "guest_processors"
 
         /**
          * The image a saved box was last seeded for, so a guest that cannot boot cannot cost a

@@ -190,6 +190,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onPutAway = boxViewModel::putAway,
             onStop = boxViewModel::stop,
             onSetOpenFaster = boxViewModel::setOpenFaster,
+            onSetGuestSizing = boxViewModel::setGuestSizing,
             onRunCommand = boxViewModel::runCommand,
             onSelectFilesPlace = boxViewModel::selectFilesPlace,
             onOpenDirectory = boxViewModel::openDirectory,

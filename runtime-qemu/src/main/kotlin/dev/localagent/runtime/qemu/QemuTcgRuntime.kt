@@ -83,6 +83,23 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     private var exitMonitor: Job? = null
     private var serialLogger: SerialConsoleLogger? = null
 
+    /**
+     * How big the next machine is built. Set by [RuntimeService] from the user's preference before
+     * a start, and only read by a start — a running guest cannot be resized, and a box that is up
+     * keeps whatever it was opened with.
+     */
+    @Volatile var sizing: GuestSizing = GuestSizing.DEFAULT
+
+    /**
+     * The sizing the *running* guest was actually launched with.
+     *
+     * Kept apart from [sizing] because the preference can change under a box that is already open,
+     * and the fingerprint written beside a saved guest has to describe the machine its memory came
+     * out of. Recording the requested value instead would stamp a snapshot with a machine nobody
+     * ever built, and the next open would restore it into the wrong one.
+     */
+    @Volatile private var launchedSizing: GuestSizing = GuestSizing.DEFAULT
+
     init {
         // A box that was put away is not a box that was closed, and this process is not the one
         // that put it away — that process ended with the QEMU it was hosting. The note it left is
@@ -197,7 +214,8 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             // A box that was put away rather than closed. The note is spent here, before QEMU is
             // handed the snapshot rather than after it has loaded it, so a saved guest is loaded
             // at most once — see [RuntimeStorage.clearSuspendedVm] for why that direction.
-            val resuming = pendingResume()
+            val launching = sizing.clamped()
+            val resuming = pendingResume(launching)
             if (resuming != null) {
                 Log.i(TAG, "Reopening a box saved ${System.currentTimeMillis() - resuming.savedAtMillis}ms ago")
                 storage.clearSuspendedVm()
@@ -206,10 +224,15 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
             if (!NativeQemu.isRunning()) {
                 storage.removeStaleSockets()
                 NativeQemu.start(
-                    QemuCommand.boot(storage, resuming?.tag).toTypedArray(),
+                    QemuCommand.boot(storage, resuming?.tag, launching).toTypedArray(),
                     storage.privateRoot.absolutePath,
                 )?.let { error(it) }
                 nativeStarted = true
+                launchedSizing = launching
+                Log.i(
+                    TAG,
+                    "Machine is ${launching.processors} processors and ${launching.memoryMb} MB",
+                )
             }
 
             runtimeState.value = RuntimeState.Connecting
@@ -531,7 +554,7 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
                                 image,
                                 System.currentTimeMillis(),
                                 elapsed,
-                                machine = QemuCommand.machine(storage),
+                                machine = QemuCommand.machine(storage, launchedSizing),
                             ),
                         )
                         qmp.quit()
@@ -709,7 +732,7 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
      * ones and the note is left pointing at memory that belongs to a Debian this device no longer
      * has. Booting cold is always safe; loading the wrong snapshot is not.
      */
-    private fun pendingResume(): SuspendedVm? {
+    private fun pendingResume(launching: GuestSizing): SuspendedVm? {
         val saved = storage.suspendedVm() ?: return null
         val installed = storage.installedIdentity()?.toString()
         if (saved.image != installed) {
@@ -722,7 +745,7 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
         }
         // The same argument one level down: the guest's memory has to go back into the machine it
         // came out of, and an app update can change that machine without changing its Debian.
-        val machine = QemuCommand.machine(storage)
+        val machine = QemuCommand.machine(storage, launching)
         if (saved.machine != machine) {
             Log.w(
                 TAG,

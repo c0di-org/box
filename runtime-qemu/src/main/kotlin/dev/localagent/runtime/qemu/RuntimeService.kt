@@ -353,6 +353,16 @@ class RuntimeService : Service() {
         if (intent?.hasExtra(EXTRA_KEEP_SAVED) == true) {
             keepSaved = intent.getBooleanExtra(EXTRA_KEEP_SAVED, true)
         }
+        // Read on every start rather than only on ACTION_START, for the same reason as the switch
+        // above: this process may have been created by any of them, and the one that finally opens
+        // a box needs the size the user chose. There is no broadcast counterpart — a machine
+        // cannot be resized while it is running, so a change only ever reaches the *next* start.
+        if (intent?.hasExtra(EXTRA_MEMORY_MB) == true || intent?.hasExtra(EXTRA_PROCESSORS) == true) {
+            runtime.sizing = GuestSizing(
+                memoryMb = intent.getIntExtra(EXTRA_MEMORY_MB, GuestSizing.DEFAULT.memoryMb),
+                processors = intent.getIntExtra(EXTRA_PROCESSORS, GuestSizing.DEFAULT.processors),
+            )
+        }
         if (intent?.action == ACTION_START) scope.launch {
             // The box being seeded in this process, if there is one, is now the user's. Clearing
             // the flag before `start()` is what makes the seed's own tail — the warm read and the
@@ -852,6 +862,13 @@ class RuntimeService : Service() {
         const val EXTRA_KEEP_SAVED = "keep_saved"
 
         /**
+         * How big to build the machine — see [GuestSizing]. Travels on the Intent for the same
+         * reason [EXTRA_KEEP_SAVED] does, and unlike it needs no broadcast: QEMU is handed `-m`
+         * and `-smp` once, at launch, so a size the user changes under an open box is a size for
+         * the box after this one.
+         */
+        const val EXTRA_MEMORY_MB = "memory_mb"
+        const val EXTRA_PROCESSORS = "processors"
          * Boot the newly installed image once and save it, so the first open after an update is a
          * restore rather than a cold boot. See [seedSavedBox].
          *

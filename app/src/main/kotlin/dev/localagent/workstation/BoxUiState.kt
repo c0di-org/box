@@ -2,6 +2,8 @@ package dev.localagent.workstation
 
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.runtime.qemu.GuestSizing
+import dev.localagent.runtime.qemu.GuestSizingChoices
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.ConnectService
@@ -155,6 +157,18 @@ data class BoxUiState(
      * True by default, because saving an idle box is what Box did before this was a choice.
      */
     val openFaster: Boolean = true,
+    /**
+     * How big the box is built: guest memory and processors.
+     *
+     * The box that is *open* may be a different size, because a machine cannot be resized under a
+     * running guest — this is what the next one gets. See [BoxViewModel.setGuestSizing].
+     */
+    val guestSizing: GuestSizing = GuestSizing.DEFAULT,
+    /** The sizes this particular phone has room for. Read once, at startup. */
+    val guestSizingChoices: GuestSizingChoices = GuestSizingChoices(
+        memoryMb = listOf(GuestSizing.DEFAULT.memoryMb),
+        processors = listOf(GuestSizing.DEFAULT.processors),
+    ),
     val startingSession: Boolean = false,
     /**
      * The task swiped off the list, still waiting to find out whether the user meant it.

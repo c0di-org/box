@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.runtime.qemu.GuestSizing
 import dev.localagent.workstation.BoxDestination
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
@@ -86,6 +87,7 @@ fun BoxApp(
     onPutAway: () -> Unit,
     onStop: () -> Unit,
     onSetOpenFaster: (Boolean) -> Unit,
+    onSetGuestSizing: (GuestSizing) -> Unit,
     onRunCommand: (String) -> Unit,
     onSelectFilesPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
@@ -396,6 +398,9 @@ fun BoxApp(
             // hides whether it took.
             openFaster = state.openFaster,
             onSetOpenFaster = onSetOpenFaster,
+            guestSizing = state.guestSizing,
+            guestSizingChoices = state.guestSizingChoices,
+            onSetGuestSizing = onSetGuestSizing,
         )
     }
 }
@@ -501,6 +506,7 @@ private fun PreviewBox(state: BoxUiState) {
             onPutAway = {},
             onStop = {},
             onSetOpenFaster = {},
+            onSetGuestSizing = {},
             onRunCommand = {},
             onSelectFilesPlace = {},
             onOpenDirectory = {},

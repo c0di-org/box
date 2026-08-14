@@ -116,6 +116,7 @@ class UiGalleryActivity : ComponentActivity() {
                     onSetDesktopControl = model::control,
                     // The gallery has no runtime to keep a saved copy of.
                     onSetOpenFaster = {},
+                    onSetGuestSizing = {},
                 )
             }
         }

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.runtime.qemu.GuestSizing
+import dev.localagent.runtime.qemu.GuestSizingChoices
 import dev.localagent.workstation.BuildConfig
 import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
@@ -190,6 +193,12 @@ fun DiagnosticsSheet(
     onGitHub: () -> Unit,
     openFaster: Boolean = true,
     onSetOpenFaster: (Boolean) -> Unit = {},
+    guestSizing: GuestSizing = GuestSizing.DEFAULT,
+    guestSizingChoices: GuestSizingChoices = GuestSizingChoices(
+        memoryMb = listOf(guestSizing.memoryMb),
+        processors = listOf(guestSizing.processors),
+    ),
+    onSetGuestSizing: (GuestSizing) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -229,13 +238,14 @@ fun DiagnosticsSheet(
                 DiagnosticRow("System", "Debian / ARM64")
                 // What each line costs the reader, not what it costs the runtime: "QEMU TCG" and
                 // "vCPU" name the implementation, and the sheet is answering "what have I got".
-                DiagnosticRow("Machine", "Emulated • 2 processors • 1 GB memory")
+                DiagnosticRow("Machine", "Emulated • " + machineSummary(guestSizing))
                 DiagnosticRow("Workspace", "/workspace • kept between tasks")
                 DiagnosticRow("Connection", "Private, on this phone")
                 DiagnosticRow("Network", "Outgoing only, through your phone")
                 SignedInRow(signIn, onSignIn)
                 GitHubRow(github, onGitHub)
                 OpenFasterRow(openFaster, onSetOpenFaster)
+                MachineSizeRow(guestSizing, guestSizingChoices, openFaster, onSetGuestSizing)
                 Spacer(Modifier.height(20.dp))
                 when (state) {
                     RuntimeState.NotProvisioned, RuntimeState.Stopped ->
@@ -438,6 +448,93 @@ private fun OpenFasterRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }
+
+/**
+ * How much of the phone the box gets.
+ *
+ * Offered because the one number that is not adjustable is the one everything else waits on: the
+ * guest is fully emulated, so a build inside it is bounded by processors that translate ARM into
+ * ARM, and a toolchain that does not fit in memory does not get slower, it fails. What the phone
+ * can spare is a question about the phone, so [GuestSizing.choicesFor] answers it and this only
+ * draws what came back — a device with four cores is never offered eight.
+ *
+ * Two costs, and both are stated rather than discovered. A bigger box is a fatter `:computer`
+ * process, which is the one Android reaches for first when it needs memory back; and the size is
+ * part of the machine fingerprint, so any box saved by "Open faster" no longer matches the machine
+ * being built and is dropped on the way up. That second line is only shown when there is something
+ * to lose.
+ */
+@Composable
+private fun MachineSizeRow(
+    sizing: GuestSizing,
+    choices: GuestSizingChoices,
+    openFaster: Boolean,
+    onChange: (GuestSizing) -> Unit,
+) {
+    // Nothing to choose between is not a setting. A phone small enough to be offered one memory
+    // size and one processor count gets the plain "Machine" line above and no controls.
+    if (choices.memoryMb.size <= 1 && choices.processors.size <= 1) return
+    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+        Text("Machine size", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "A bigger box builds faster and holds more at once. It also makes Android likelier to " +
+                "close it while you are in another app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (choices.memoryMb.size > 1) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                choices.memoryMb.forEach { megabytes ->
+                    FilterChip(
+                        selected = megabytes == sizing.memoryMb,
+                        onClick = { onChange(sizing.copy(memoryMb = megabytes)) },
+                        label = { Text(memoryLabel(megabytes)) },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+        }
+        if (choices.processors.size > 1) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                choices.processors.forEach { count ->
+                    FilterChip(
+                        selected = count == sizing.processors,
+                        onClick = { onChange(sizing.copy(processors = count)) },
+                        label = { Text(if (count == 1) "1 processor" else "$count processors") },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            // Said here rather than left to be found out, because the second half is expensive and
+            // invisible: a resized machine cannot be handed the memory a differently sized one was
+            // saved from, so the next open is the 95-120 s boot rather than the one-second reopen.
+            if (openFaster) {
+                "Applies the next time you open your box — and that open is a full boot, because " +
+                    "the saved copy was a different machine."
+            } else {
+                "Applies the next time you open your box."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+}
+
+/** "2 processors • 2 GB memory". Whole gigabytes where they are whole, so 1536 still reads right. */
+private fun machineSummary(sizing: GuestSizing): String {
+    val processors = if (sizing.processors == 1) "1 processor" else "${sizing.processors} processors"
+    return "$processors • ${memoryLabel(sizing.memoryMb)} memory"
+}
+
+private fun memoryLabel(megabytes: Int): String =
+    if (megabytes % 1024 == 0) "${megabytes / 1024} GB" else "$megabytes MB"
 
 @Composable
 private fun DiagnosticRow(label: String, value: String) {
