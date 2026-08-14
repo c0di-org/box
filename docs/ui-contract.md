@@ -246,10 +246,18 @@ one that turns into fatigue at the sheet instead.
 
 `Preview` is a guest port. Opening one asks the runtime to forward it — QEMU's user-mode network
 stack does that itself, through the human monitor, with no proxy process and no change to the
-guest — and the panel loads the resulting `http://127.0.0.1:<port>/` in a WebView. The forward is
+guest — and a **sheet** loads the resulting `http://127.0.0.1:<port>/` in a WebView. The forward is
 bound to loopback because a dev server the agent started is for the person holding the phone, not
-for the network they are on, and it is released when the panel closes rather than left to the VM's
+for the network they are on, and it is released when the sheet closes rather than left to the VM's
 lifetime.
+
+A sheet over the current destination, not a panel on the computer, and not a destination of its
+own. The offer is a button in the transcript, so opening one used to navigate to the computer and
+float the page over the desktop: the user lost the conversation and the composer they were in the
+middle of, and a page written for a window arrived as a card over an xterm. Previews are looked at,
+not worked in, which is what every other sheet in Box is for. The url lives in the sheet's header
+rather than over the page, back walks the page's own history before it closes the sheet, and
+dismissing returns to an unchanged conversation because none of it was ever left.
 
 `Document` exists because most of what an agent makes needs no server. Requiring one to show a
 picture would mean starting a web server to hand over a PNG — absurd on a machine this size. It
