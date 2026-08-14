@@ -347,13 +347,25 @@ class RuntimeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        promoteToForeground()
+        promoteToForeground(preparing = intent?.action == ACTION_SEED)
         // Carried on every start, so a service that has just been created knows the setting before
         // it has a box to apply it to. Changes under a running box arrive by broadcast instead.
         if (intent?.hasExtra(EXTRA_KEEP_SAVED) == true) {
             keepSaved = intent.getBooleanExtra(EXTRA_KEEP_SAVED, true)
         }
         if (intent?.action == ACTION_START) scope.launch {
+            // The box being seeded in this process, if there is one, is now the user's. Clearing
+            // the flag before `start()` is what makes the seed's own tail — the warm read and the
+            // save — stand down; the boot itself carries on, so what the user waits for is the
+            // remainder of a boot already in progress rather than a fresh one.
+            if (seeding) {
+                seeding = false
+                Log.i(TAG, "Open arrived during a seed; the box being prepared is now the user's")
+                // The idle timer [publishState] withheld while this was a seed. Only needed when
+                // the box is already up: a seed still booting reaches Ready with the flag clear
+                // and is given one there, like any other box.
+                if (runtime.state().value == RuntimeState.Ready) watchForIdle()
+            }
             // Starting before the APK assets are installed is what "no verified guest image"
             // means; provisioning is part of the same user gesture.
             if (!runtime.isProvisioned()) {
@@ -374,6 +386,7 @@ class RuntimeService : Service() {
                 .onSuccess { Log.i(TAG, "QEMU runtime launch accepted") }
                 .onFailure { Log.e(TAG, "QEMU failed to start", it) }
         }
+        if (intent?.action == ACTION_SEED) scope.launch { seedSavedBox(startId) }
         if (intent?.action == ACTION_STOP) scope.launch {
             runtime.stop()
                 .onFailure { Log.e(TAG, "QEMU failed to stop", it) }
@@ -438,6 +451,113 @@ class RuntimeService : Service() {
         return START_NOT_STICKY
     }
 
+    /**
+     * Boots the newly installed image once, reads the harness through the guest's page cache, and
+     * saves it — all before anyone has asked for a box.
+     *
+     * This exists because an image update is the one open "Open faster" could never help with.
+     * `RuntimeStorage` drops the suspend note whenever a provisioning plan is non-empty, and it is
+     * right to: the snapshot lives inside the system disk being replaced. The consequence is that
+     * the slow path is not the rare one — it follows every Box update that carries a new guest,
+     * which is exactly when someone has just installed something and is looking at it.
+     *
+     * Nothing here is a new mechanism. [QemuTcgRuntime.suspendRuntime] already saves and quits, and
+     * `savevm` writes the guest's memory, which includes the page cache — so a snapshot taken after
+     * reading the harness carries the expensive half of a first task with it. What changes is
+     * *when* the save is asked for, not what it does.
+     *
+     * Two things it deliberately does not do. It does not start a CLI: [QemuTcgRuntime.quiesceGuest]
+     * reaps the guest's children before saving, so a restored box has an idle agentd and no
+     * `claude`, and a warm process from days ago is not worth wanting — agentd would kill it on
+     * reconnect anyway. And it does not hold the user behind it: see [seeding].
+     */
+    private suspend fun seedSavedBox(startId: Int) {
+        // "Open faster" off is a user who has weighed storage against a fast open and chosen the
+        // storage. A seeded snapshot *is* that storage — ~1.27 GB of it, measured, because the
+        // warm below is what makes it big — so there is nothing here worth a boot.
+        if (!keepSaved) {
+            Log.i(TAG, "Not seeding a saved box: Open faster is off")
+            return standDown(startId)
+        }
+        // Nothing pending. The app process decides this too, from its own copy of the storage, but
+        // it reads it before the gesture and this runs after — so the cheap check happens twice
+        // rather than trusting a fact that may have aged across a process start.
+        if (runtime.isProvisioned()) {
+            Log.i(TAG, "Not seeding a saved box: ${runtime.bundledImage()} is already installed")
+            return standDown(startId)
+        }
+
+        seeding = true
+        val began = SystemClock.elapsedRealtime()
+        Log.i(TAG, "Seeding a saved box for ${runtime.bundledImage()} " +
+            "(installed: ${runtime.installedImage() ?: "none"})")
+
+        val provisioned = runtime.provision()
+        if (provisioned.isFailure) {
+            Log.e(TAG, "Seeding failed to provision the guest image", provisioned.exceptionOrNull())
+            seeding = false
+            return standDown(startId)
+        }
+        Log.i(TAG, "Seed provisioned the guest image in ${SystemClock.elapsedRealtime() - began}ms")
+
+        val started = runtime.start()
+        if (started.isFailure) {
+            Log.e(TAG, "Seeding failed to boot the guest", started.exceptionOrNull())
+            seeding = false
+            return standDown(startId)
+        }
+        Log.i(TAG, "Seed reached a ready agent in ${SystemClock.elapsedRealtime() - began}ms")
+
+        // From here every step re-reads the flag, because the user can arrive at any of them. An
+        // adopted seed simply stops doing seed things: the box stays up, this process keeps
+        // serving it, and the notice posted over it was replaced by the ordinary one when
+        // [ACTION_START] came through.
+        if (!seeding) return
+
+        val warmedFrom = SystemClock.elapsedRealtime()
+        runCatching { runtime.exec(ExecRequest(listOf("/bin/sh", "-lc", WARM_COMMAND), timeoutSeconds = WARM_TIMEOUT_SECONDS)) }
+            .onSuccess { Log.i(TAG, "Seed warmed the harness in ${SystemClock.elapsedRealtime() - warmedFrom}ms (exit=${it.exitCode})") }
+            // Saving it unwarmed is worse than it sounds and still worth doing. Measured, an
+            // unwarmed snapshot makes the *first task* slower than a cold boot would have —
+            // 34.6 s to import the SDK against 12.4 s — because `savevm` writes the vmstate into
+            // the same qcow2 the guest reads from. But that is twenty seconds against the hundred
+            // and more this saves on the boot, so the arithmetic still points one way.
+            .onFailure { Log.w(TAG, "Seed could not warm the harness; saving it unwarmed", it) }
+
+        if (!seeding) return
+
+        // The one genuinely racy moment, and it is bounded. `savevm` takes 1.7-2.6 s on this
+        // phone, and an Open landing inside it waits on the same lifecycle mutex, then finds a
+        // process that has spent its single QEMU run. What the user gets is the box saved a second
+        // ago, described as saved and reopened in about seven by the next process -- which is the
+        // ordinary "pick up where you left off" path, not a broken one.
+        runCatching { runtime.suspendRuntime() }
+            .onSuccess {
+                Log.i(TAG, "Seeded a saved box in ${SystemClock.elapsedRealtime() - began}ms total")
+                seeding = false
+                standDown(startId)
+            }
+            .onFailure { error ->
+                Log.e(TAG, "Could not save the box this seed booted", error)
+                seeding = false
+                // A box that could not be saved is still a working box, and the user may well be
+                // about to open it. Leaving it up costs battery until the idle timer fires, which
+                // is the same bargain every other unsaved box strikes.
+                if (runtime.state().value != RuntimeState.Ready) standDown(startId)
+            }
+    }
+
+    /**
+     * Ends a seed that has nothing left to do, without taking a real box down with it.
+     *
+     * `stopSelf(startId)` rather than `stopSelf()`: an [ACTION_START] may have arrived while this
+     * was deciding, and the unqualified form would stop the service out from under it.
+     */
+    private fun standDown(startId: Int) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
+    }
+
     private fun isDebuggable(): Boolean =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
@@ -449,6 +569,16 @@ class RuntimeService : Service() {
      * slower than the one they had yesterday, to save storage nobody had asked to reclaim.
      */
     @Volatile private var keepSaved = true
+
+    /**
+     * Whether the VM in this process is a box nobody asked for.
+     *
+     * Set by [ACTION_SEED] and cleared the moment a real [ACTION_START] arrives, which is the whole
+     * of "interruptible". A seed is an ordinary boot that happens to end in a save, so a user who
+     * opens Box while one is under way does not queue behind it and does not cancel it — they take
+     * it over, and inherit however much of the boot has already happened.
+     */
+    @Volatile private var seeding = false
 
     private fun touch() = lastGuestActivity.set(SystemClock.elapsedRealtime())
 
@@ -511,7 +641,12 @@ class RuntimeService : Service() {
     private fun publishState(state: RuntimeState) {
         if (state == RuntimeState.Ready) {
             touch()
-            watchForIdle()
+            // A box nobody asked for ends when the seed says so, not when a timer notices that
+            // nobody is using it. Reading ~300 MB of harness through an emulated disk can outlast
+            // the three-minute save timer comfortably, and the watcher firing mid-warm would put
+            // two saves on the same guest — which is exactly how a box ends up quiesced but
+            // unsaved. An adopted seed gets its timer back where the flag is cleared.
+            if (!seeding) watchForIdle()
         } else {
             idleWatch?.cancel()
             idleWatch = null
@@ -561,7 +696,7 @@ class RuntimeService : Service() {
      * is told not to, and the only other route to closing it is two menus deep inside the app —
      * which is the wrong place for a decision someone makes while looking at their battery screen.
      */
-    private fun promoteToForeground() {
+    private fun promoteToForeground(preparing: Boolean = false) {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(
             CHANNEL_ID,
@@ -572,8 +707,15 @@ class RuntimeService : Service() {
         val putAway = serviceAction(ACTION_SUSPEND, requestCode = 1)
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_box_notification)
-            .setContentTitle("Your box is open")
-            .setContentText("Debian is running on this phone.")
+            // A seeded box is the one case where this notice appears over a box nobody asked for,
+            // so it says what is actually happening. Claiming "your box is open" there would be
+            // both untrue and alarming: the user updated an app and got a machine they never
+            // started. Naming the update is what makes the battery it is spending make sense.
+            .setContentTitle(if (preparing) "Getting your box ready" else "Your box is open")
+            .setContentText(
+                if (preparing) "Box updated Debian, so the next time you open it is quick."
+                else "Debian is running on this phone.",
+            )
             .setOngoing(true)
             .apply { openAppIntent()?.let(::setContentIntent) }
             // Two ways out, because they are not the same offer and the shade is where the
@@ -708,6 +850,35 @@ class RuntimeService : Service() {
          */
         const val ACTION_SET_KEEP_SAVED = "dev.localagent.runtime.qemu.SET_KEEP_SAVED"
         const val EXTRA_KEEP_SAVED = "keep_saved"
+
+        /**
+         * Boot the newly installed image once and save it, so the first open after an update is a
+         * restore rather than a cold boot. See [seedSavedBox].
+         *
+         * Carries [EXTRA_KEEP_SAVED] like [ACTION_START] does, and for the same reason: this is the
+         * first thing `:computer` hears in a process that has just been created, and the setting is
+         * what decides whether the work is wanted at all.
+         */
+        const val ACTION_SEED = "dev.localagent.runtime.qemu.SEED"
+
+        /**
+         * What a seeded box reads before it is saved.
+         *
+         * `cat` over the harness rather than anything cleverer, because the only thing that has to
+         * happen is that these bytes pass through the guest's page cache — which is what `savevm`
+         * then writes out. `-exec cat {} +` rather than one process per file: under TCG a fork
+         * costs enough that spawning a couple of thousand would outweigh the read being hidden.
+         */
+        private const val WARM_COMMAND =
+            "find /opt/local-agent/harness -type f -exec cat {} + > /dev/null 2>&1; exit 0"
+
+        /**
+         * Long enough for the read above, which took 178 s on a Fold 7 and is the longest thing
+         * this service asks of a guest. A warm that runs out of time is logged and the box is
+         * saved anyway.
+         */
+        private const val WARM_TIMEOUT_SECONDS = 600
+
 
         /**
          * Reinstall the guest image, keeping `/workspace`. Debuggable builds only.

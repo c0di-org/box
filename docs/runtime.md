@@ -243,7 +243,8 @@ Nothing new is needed to do it. `suspendRuntime()` already saves and quits; `Sus
 already records the image identity and machine that make a note refusable. The change is
 *when* it is called, not what it does.
 
-Open questions, none of them answered yet:
+Open questions, none of them answered when this was written. All four are answered below,
+and two of them differently than expected:
 
 - **When to run it.** A background boot costs battery and heat on a phone that just took an
   app update. Opportunistic — charging, screen off — is the obvious answer and the obvious
@@ -333,6 +334,10 @@ The order is therefore: fix the fan-out, re-measure this table, and only then de
 whether the boot that remains is worth 430 MB of somebody's phone. The open questions
 above keep their force — they are simply not the next thing to answer.
 
+(All of that happened. The fan-out was fixed and the table re-measured below; the seeded
+snapshot was then measured and built. Two figures in this section did not survive it: the
+import is not a 44 s operation, and the snapshot is not 430 MB once it is worth having.)
+
 ### The fan-out, fixed
 
 It was not a missing guard. The guard was there and was being defeated. The outbox does
@@ -366,6 +371,148 @@ after three minutes instead of fifteen, or closes it instead of saving, and says
 saved copy costs about 430 MB. A seeded snapshot would extend that same setting to the
 one open it cannot help with — the first after an update — and it should be measured
 against this table rather than the old one.
+
+### The cheaper idea, measured first and thrown away
+
+The obvious objection to seeding a snapshot is that it might not be needed. The guest spends
+almost all of its boot waiting on emulated udev, and during all of it the disk holding the
+harness is never touched — so reading the harness *during* the boot should capture the same
+page-cache win with no snapshot, no extra storage and no background boot at all. That is a
+much cheaper idea, and it was measured before the expensive one was built.
+
+It does not work, and the reason is worth keeping. A systemd unit ordered only against
+`local-fs.target`, `Nice=19` and `IOSchedulingClass=idle`, reading `/opt/local-agent/harness`
+with `find -exec cat {} +`:
+
+| | without it | with it |
+| --- | --- | --- |
+| Tap Open → ready agent | 172.6 s, 192.7 s | 193.2 s |
+| First SDK import after Ready | 12.4 s | **56.5 s** |
+| First `claude --version` after Ready | 12.1 s | **34.7 s** |
+
+The boot itself is unchanged — 193.2 s sits inside the spread of the two runs without it, so
+nothing here says the unit slowed the boot down. What it did was miss its own deadline. The
+guest reached Ready with `Cached` at 135 MB and the read still going; ninety seconds later
+`Cached` was 831 MB and the `cat` had only then finished. So the work did not fill the dead
+time before the box was ready — it ran straight through it and out the other side, into the
+first thing the user does, and made that four times slower.
+
+The premise was the mistake. The udev wait is not idle capacity waiting to be spent: under
+TCG the two emulated cores are the scarce thing, and copying several hundred megabytes
+through the guest's kernel costs exactly the CPU the boot is short of. "The disk is idle, so
+reading is free" is a claim about a real machine. The unit and the kernel-command-line switch
+that made it measurable were both removed.
+
+### What the 44 s in the table above actually is
+
+Measured directly inside the guest — one `node -e` timing `import()`, and `claude --version`
+around `date +%s%N` — rather than inferred from the gap between two events in a session log:
+
+| | cold | warm |
+| --- | --- | --- |
+| `import('@anthropic-ai/claude-agent-sdk')` | 12.4 s, 20.1 s | 6.1 s, 7.0 s |
+| `claude --version` | 12.1 s, 13.4 s | 4.2 s, 5.2 s |
+| bare `node -e 0` | — | 2.5 s |
+
+So the import is not a 44 s operation. The 44 s span in the fan-out table is measured from
+Box's own "Starting Claude Code…" label to the harness's `session_started`, and the import is
+between a quarter and a half of it; the rest is agentd starting a process, node itself, and
+the harness parsing. That matters here because it re-prices the whole exercise: the page
+cache was supposed to be half the win, and on these numbers it is worth ten to fifteen
+seconds, not thirty-five. **The boot is the win. The cache is a bonus.**
+
+### Seeding a snapshot: built, and what "warm" had to mean
+
+Four ways of arriving at a first task, same phone, same image, `/workspace` untouched
+throughout. "Disk" is what the snapshot adds to a freshly provisioned 807 MB `system.qcow2`.
+
+| | reopen | first SDK import | first `claude --version` | disk |
+| --- | --- | --- | --- | --- |
+| Cold boot, no snapshot | 103–193 s | 12.4 s, 20.1 s | 12.1 s, 13.4 s | — |
+| Saved as soon as agentd answered | **1.2 s** | 40.7 s | 24.4 s | +459 MB |
+| Saved after settling 130 s | **2.2 s** | 34.6 s | 18.2 s | +864 MB |
+| Saved after reading the harness | 7.3 s | **9.0 s**, 14.4 s | **4.2 s**, 5.2 s | +1.27 GB |
+
+The second and third rows are the surprise, and they are what decides the design: **an
+unwarmed snapshot is worse than no snapshot at all** for the first task — 34.6 s against
+12.4 s cold, on a guest that is not busy. `savevm` writes the vmstate into the same qcow2 the
+guest boots from, so every later read of the base image is threaded through a larger and more
+fragmented file. Saving a cold guest buys back the boot and then hands part of it straight
+back on the first thing the user asks for.
+
+Reading the harness first is what repairs that, and it repairs it decisively. Adding to a
+first task the reopen it has to pay for: 20.5 s warmed, against 55 s settled, 66 s saved
+immediately, and 135–226 s cold.
+
+That also answers the question of whether `claude --version` should be run as well as `cat`.
+It should not. The `cat` covers the CLI's own bytes — that is why `claude --version` on a
+warmed box is 4.2 s, which is the fastest this has ever been measured, better than the 4.35 s
+in the fan-out table. There is no headroom left for running the binary to find, and doing it
+would add process start-up to the seed and more dirty memory to the snapshot.
+
+The cost is not small and should be said plainly: **the warm is what makes the snapshot big.**
++1.27 GB against the +459 MB an unwarmed one costs, because the warm's whole purpose is to put
+several hundred megabytes of file into guest memory, and `savevm` writes guest memory. It also
+makes the reopen six seconds slower for the same reason. Both are paid to make the first task
+three times faster, and on these numbers that is the right way round — but the "about 430 MB"
+the "Open faster" switch quotes describes an idle box that has not read much, not this.
+
+### When it runs, and what it refuses
+
+`RuntimeService.ACTION_SEED` provisions, boots, reads the harness and saves, once. End to end
+on the phone: 3.0 s to provision, 102.6 s to a ready agent, 178.3 s to read the harness,
+2.6 s to save — **286 s** for an open that then costs 7.3 s instead of 103–193 s.
+
+The trigger is app launch, not a charging window, and that is a decision rather than a
+shortcut. "Charging and idle" sounds careful and is the way to build this and never ship it:
+on a phone that is rarely plugged in it means the seeding never happens and the cold path
+stays normal. Launch is the moment the person is *in Box*, which is both when they are most
+likely to open their box and when a notice about it is least of a surprise — and the notice
+says what is true, "Getting your box ready", not that a box they never started is open.
+
+It refuses in five cases, all in `SeedDecision` with unit tests: "Open faster" off (a seeded
+snapshot *is* the storage that setting declines), the bundled image already installed, a
+device with no image at all (a first install has no habit to serve and runs setup in front of
+the user anyway), an image already attempted (so a guest that cannot boot cannot cost a boot
+on every launch), and battery saver or a nearly flat phone.
+
+That last one is not hypothetical. The phone this was measured on had battery saver on at 79%
+and plugged in — Samsung's sticky setting — and the first end-to-end run correctly refused to
+seed. It is the honest reading of an explicit instruction, but it is the same shape of trap as
+"charging and idle": **a phone left in battery saver never seeds, and its owner never sees this
+feature.** Worth knowing before the number of people in that state is guessed at.
+
+### Being interrupted
+
+A seed is an ordinary boot that happens to end in a save, so an Open arriving during one does
+not cancel it and does not queue behind it — it takes it over. `RuntimeService.seeding` is
+cleared by `ACTION_START`, the warm and the save stand down, the notice becomes the ordinary
+one, and the box is simply the user's. Measured: a seed interrupted 45 s into its boot reached
+a ready agent at 108 s, so the user waited 63 s rather than the full boot, and nothing was
+saved behind their back.
+
+Two smaller things fall out of that. The idle watcher is withheld while a box is a seed and
+handed back when it is adopted — without that, a three-minute save timer fires in the middle
+of a three-minute warm and two saves race on one guest, which is how a box ends up quiesced
+but unsaved. And there is one genuinely racy moment left, the ~2.6 s of `savevm`: an Open
+landing inside it waits on the lifecycle mutex and then finds a process that has spent its one
+QEMU run. What the user gets is the box that was saved a second ago, described as saved and
+reopened in about a second by the next process — the ordinary "pick up where you left off"
+path, not a broken one.
+
+### Shipping a prebuilt snapshot: ruled out
+
+Building the snapshot into the image would remove the on-device boot entirely, and it cannot
+be done. A snapshot is memory that has to go back into the machine it came out of, and
+`-loadvm` does not decline politely — it fails *after* rolling the disks back toward the
+snapshot. `SuspendedVm.machine` exists because that mismatch is already a real failure on this
+project: it is a hash of the whole QEMU command line, and it changed once already when the VNC
+server was given a tablet and a keyboard. A snapshot shipped in an image would be tied to the
+exact QEMU build and device set of the app version that produced it, and would have to be
+rebuilt and re-shipped for any change to either — including changes that cannot invalidate it,
+since the fingerprint is deliberately over-sensitive. The seeded snapshot is made on the device
+that will load it, by the build that will load it, which is the only version of this that is
+safe.
 
 ## Current implementation state
 
