@@ -4,6 +4,7 @@ import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.GuestSizing
 import dev.localagent.runtime.qemu.GuestSizingChoices
+import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
@@ -371,6 +372,30 @@ data class BoxUiState(
      */
     val agentAtWork: Boolean
         get() = sessions.any { it.status == SessionStatus.Active }
+
+    /**
+     * Whether the work the transcript is still showing has actually stopped.
+     *
+     * [Transcript.activity] is folded from the session log, so it only ever moves when an event
+     * arrives — and a harness killed along with its process sends no last event. Its final word
+     * stays on screen indefinitely, which is how a computer Android has already reclaimed goes on
+     * presenting as one that is thinking. Observed on hardware: `:computer` was SIGKILLed two
+     * minutes into a turn and the conversation claimed another twenty-four minutes of work, over a
+     * box that was plainly shut.
+     *
+     * The pipe's health is the half that knows better, so it is what decides. A dropped pipe ends
+     * that harness for good even where the runtime comes back — the sessions die with the process
+     * and only their logs survive — so a retry being pending is no reason to keep a spinner
+     * running. The row stays where it is and says it failed; see `ActivityRow`.
+     */
+    val agentStopped: Boolean
+        get() {
+            val activity = transcript?.activity ?: return false
+            val claimsWork = activity is AgentActivity.Thinking ||
+                activity is AgentActivity.Working ||
+                activity is AgentActivity.Starting
+            return claimsWork && connection !is SessionConnection.Live
+        }
 }
 
 /** A forwarded guest port, and the address on the phone that reaches it. */
