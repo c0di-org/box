@@ -137,11 +137,12 @@ let permissionMode = 'default';
 /**
  * Which model answers, or null for whichever one Claude Code would have picked.
  *
- * An *alias* — `opus`, `sonnet`, `haiku` — rather than a wire id like `claude-opus-5`, and that is
- * the whole reason this is a string the app chooses from a short list rather than a version Box
- * pins. An alias is resolved by the CLI in the guest, so it names the current model of that tier
- * on the day the turn runs; a pinned id names one model forever and goes stale the week after,
- * inside a guest image that costs a rebuild and a re-provision to correct.
+ * A full model id — `claude-opus-5`, `claude-opus-4-5` — and not an alias like `opus`. An alias
+ * resolves to one model per family, which is exactly the fact this setting exists to expose: the
+ * difference between Opus 4.5 and Opus 5 is invisible under `opus`, and a person who wants the
+ * older one on purpose has no way to say so. Box's list of ids cannot drift from the CLI that
+ * resolves them, because that CLI is baked into this image and the image is built from the same
+ * tree as the app.
  *
  * Null, not a default of Box's own choosing, for the same reason: with the option absent the CLI
  * uses whatever it considers its default, which is one fewer thing for Box to be wrong about.

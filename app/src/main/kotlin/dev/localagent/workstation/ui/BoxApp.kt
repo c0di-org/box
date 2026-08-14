@@ -250,6 +250,7 @@ fun BoxApp(
                     onConnectGitHub = onResumeConnection,
                     onDeclineConnection = onDeclineConnection,
                     onSetPermissionMode = onSetPermissionMode,
+                    onSetAgentModel = onSetAgentModel,
                     onAttachPhoto = onAttachPhoto,
                     onAttachFile = onAttachFile,
                     onRemoveAttachment = onRemoveAttachment,
@@ -404,7 +405,6 @@ fun BoxApp(
             guestSizingChoices = state.guestSizingChoices,
             onSetGuestSizing = onSetGuestSizing,
             agentModel = state.agentModel,
-            onSetAgentModel = onSetAgentModel,
         )
     }
 }

@@ -201,7 +201,6 @@ fun DiagnosticsSheet(
     ),
     onSetGuestSizing: (GuestSizing) -> Unit = {},
     agentModel: AgentModel = AgentModel.DEFAULT,
-    onSetAgentModel: (AgentModel) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -249,7 +248,6 @@ fun DiagnosticsSheet(
                 SignedInRow(signIn, onSignIn)
                 GitHubRow(github, onGitHub)
                 OpenFasterRow(openFaster, onSetOpenFaster)
-                ModelRow(agentModel, onSetAgentModel)
                 MachineSizeRow(guestSizing, guestSizingChoices, openFaster, onSetGuestSizing)
                 Spacer(Modifier.height(20.dp))
                 when (state) {
@@ -450,57 +448,6 @@ private fun OpenFasterRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
             )
         }
         Switch(checked = enabled, onCheckedChange = onChange)
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-}
-
-/**
- * Which model the agent answers with.
- *
- * On this sheet rather than in the conversation because it is one setting for the box, like the
- * permission mode — and unlike that one, it is not a thought people have mid-sheet, so it does not
- * earn a fourth control on the composer's row.
- *
- * The chips are tiers, not versions, because that is what the guest is told: an alias the CLI
- * resolves when the turn runs. So this row keeps saying the true thing after a new Opus ships,
- * which a "5" printed here would not — and correcting a version in a shipped guest image is a
- * rebuild and a re-provision, not a string change.
- *
- * The line underneath is the one thing that would otherwise be guessed at. Every other setting on
- * this sheet waits for the box to be reopened; this one reaches conversations that are running.
- */
-@Composable
-private fun ModelRow(model: AgentModel, onChange: (AgentModel) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-        Text("Model", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(2.dp))
-        Text(
-            model.summary,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AgentModel.entries.forEach { option ->
-                FilterChip(
-                    selected = option == model,
-                    onClick = { onChange(option) },
-                    label = { Text(option.label) },
-                    // The chip says a tier; a screen reader gets the sentence the sighted reader
-                    // gets from the line above, which changes as the selection does.
-                    modifier = Modifier.semantics {
-                        contentDescription = "${option.label}. ${option.summary}"
-                    },
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Applies to your next message, including in tasks that are already running.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }

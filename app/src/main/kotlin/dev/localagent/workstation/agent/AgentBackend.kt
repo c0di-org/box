@@ -162,32 +162,46 @@ enum class AgentPermissionMode(val wire: String) {
 }
 
 /**
- * Which model answers, as a tier rather than a version.
+ * Which model answers, named exactly rather than by tier.
  *
- * [wire] is a model *alias*, and that is the load-bearing decision here. The guest resolves an
- * alias when the turn runs, so `opus` means whichever Opus is current that day; a wire id like
- * `claude-opus-5` would mean one model forever, and correcting it later means rebuilding the guest
- * image and re-provisioning every box that already exists. The names below carry no version for
- * the same reason — a label reading "Opus 5" would be a version pinned in a string resource, going
- * stale in exactly the place the alias was chosen to avoid.
+ * [wire] is a full model id and not an alias like `opus`, which is the correction that matters:
+ * an alias resolves to one model per family, so a person who wants *this* Opus rather than the
+ * newest one has no way to say so, and — worse — cannot see which one they are getting. The whole
+ * question this control exists to answer is "am I on 4.5 or 5", and an alias is precisely the
+ * thing that hides it.
  *
- * Three tiers, because that is the shape of the choice: how capable, against how fast and how much
- * of the plan it spends. Adding a fourth is one entry — the guest takes any alias its CLI knows.
+ * The usual objection to pinned ids is that they go stale. They cannot drift *silently* here: the
+ * Claude Code that resolves them is baked into the guest image, and the image is built from this
+ * same tree, so a rebuild that teaches the guest a new model is a build that also ships this list.
+ * They rot together or not at all.
+ *
+ * Ordered as offered, most capable first. Cost falls with the family and not within it —
+ * [Opus45] bills at the same rate as [Opus5], which is worth saying on the control rather than
+ * leaving someone to pick the older model as a saving it is not.
  */
 enum class AgentModel(val wire: String, val label: String, val summary: String) {
-    /** The default, and the one Box is designed around: hard, long-running work. */
-    Opus("opus", "Opus", "Best at long, complicated work"),
+    /** The default: the current Opus, and what Box is designed around. */
+    Opus5("claude-opus-5", "Opus 5", "Best at long, complicated work"),
 
-    /** Nearly Opus on code and tool use, and quicker to answer. */
-    Sonnet("sonnet", "Sonnet", "Nearly as capable, faster"),
+    /** Kept because "the one I had yesterday" is a real thing to want after a model changes. */
+    Opus45("claude-opus-4-5", "Opus 4.5", "The older Opus. Costs the same as Opus 5"),
+
+    /** The first step that actually costs less: near-Opus on code, at Sonnet's rate. */
+    Sonnet5("claude-sonnet-5", "Sonnet 5", "Nearly as capable, and cheaper"),
 
     /** For short, well-specified things where waiting is the cost that matters. */
-    Haiku("haiku", "Haiku", "Fastest, for simple tasks");
+    Haiku45("claude-haiku-4-5", "Haiku 4.5", "Cheapest and fastest, for simple work");
 
     companion object {
-        val DEFAULT = Opus
+        val DEFAULT = Opus5
 
-        /** Tolerant of a name written by an older or newer Box than this one. */
+        /**
+         * Tolerant of a name written by an older or newer Box than this one.
+         *
+         * Falls back to [DEFAULT] rather than to whatever was stored, because a model this build
+         * cannot name is one it cannot draw either, and a picker showing nothing selected is a
+         * worse answer than a picker showing the default.
+         */
         fun ofName(name: String?): AgentModel =
             entries.firstOrNull { it.name == name } ?: DEFAULT
     }

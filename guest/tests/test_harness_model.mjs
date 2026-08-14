@@ -129,7 +129,7 @@ function run(commands, { sdk = ECHO_MODEL_SDK, boxModel } = {}) {
   });
 }
 
-/** ["opus|hello", ...] — which model took each turn, and what it was asked. */
+/** ["claude-opus-5|hello", ...] — which model took each turn, and what it was asked. */
 const turns = (events) =>
   events.filter((event) => event.type === 'message' && event.text.startsWith('SAW>'))
     .map((event) => event.text.slice(4));
@@ -145,10 +145,10 @@ test('the model a session opens on comes from its environment, before any line i
   // call at all.
   const events = await run([{ type: 'prompt', text: 'hello' }], {
     sdk: NO_SET_MODEL_SDK,
-    boxModel: 'sonnet',
+    boxModel: 'claude-sonnet-5',
   });
 
-  assert.deepEqual(turns(events), ['sonnet|hello']);
+  assert.deepEqual(turns(events), ['claude-sonnet-5|hello']);
   assert.deepEqual(errors(events), []);
 });
 
@@ -162,66 +162,66 @@ test('an unstated model leaves the choice to Claude Code', async () => {
 test('a model sent as a command still reaches the first turn', async () => {
   // The other door, and the one Box uses on a session that is already up. It lands before the
   // first turn because a prompt is queued behind the settings that arrived with it.
-  const events = await run([{ type: 'model', model: 'sonnet' }, { type: 'prompt', text: 'hello' }]);
+  const events = await run([{ type: 'model', model: 'claude-sonnet-5' }, { type: 'prompt', text: 'hello' }]);
 
-  assert.deepEqual(turns(events), ['sonnet|hello']);
+  assert.deepEqual(turns(events), ['claude-sonnet-5|hello']);
   // Into the log too, because the transcript is the record of which model said what.
-  assert.deepEqual(models(events), ['sonnet']);
+  assert.deepEqual(models(events), ['claude-sonnet-5']);
 });
 
 test('changing it mid-session moves the session, not just the next one', async () => {
   const events = await run([
     { type: 'prompt', text: 'one' },
-    { type: 'model', model: 'haiku' },
+    { type: 'model', model: 'claude-haiku-4-5' },
     { type: 'prompt', text: 'two' },
-  ], { boxModel: 'opus' });
+  ], { boxModel: 'claude-opus-5' });
 
-  assert.deepEqual(turns(events), ['opus|one', 'haiku|two']);
-  assert.deepEqual(models(events), ['haiku']);
+  assert.deepEqual(turns(events), ['claude-opus-5|one', 'claude-haiku-4-5|two']);
+  assert.deepEqual(models(events), ['claude-haiku-4-5']);
   assert.deepEqual(errors(events), []);
 });
 
 test('setting the model it is already on says nothing to anyone', async () => {
-  // Box broadcasts standing settings to every session on attach, so a session opening on `opus`
-  // and immediately being told `opus` is the ordinary case rather than an odd one — and it must
+  // Box broadcasts standing settings to every session on attach, so a session opening on Opus 5
+  // and immediately being told Opus 5 is the ordinary case rather than an odd one — and it must
   // cost neither a control round trip nor a second line in the transcript.
   const events = await run([
-    { type: 'model', model: 'opus' },
-    { type: 'model', model: 'opus' },
+    { type: 'model', model: 'claude-opus-5' },
+    { type: 'model', model: 'claude-opus-5' },
     { type: 'prompt', text: 'hello' },
-  ], { boxModel: 'opus' });
+  ], { boxModel: 'claude-opus-5' });
 
   assert.deepEqual(models(events), []);
-  assert.deepEqual(turns(events), ['opus|hello']);
+  assert.deepEqual(turns(events), ['claude-opus-5|hello']);
 });
 
 test('a Claude Code too old to switch says so, rather than appearing to have switched', async () => {
   const events = await run([
     { type: 'prompt', text: 'one' },
-    { type: 'model', model: 'haiku' },
+    { type: 'model', model: 'claude-haiku-4-5' },
     { type: 'prompt', text: 'two' },
-  ], { sdk: NO_SET_MODEL_SDK, boxModel: 'opus' });
+  ], { sdk: NO_SET_MODEL_SDK, boxModel: 'claude-opus-5' });
 
   // The session it was asked about cannot move.
-  assert.deepEqual(turns(events), ['opus|one', 'opus|two']);
+  assert.deepEqual(turns(events), ['claude-opus-5|one', 'claude-opus-5|two']);
   // But it is reported rather than silently ignored, and the choice is kept for the next session
   // — which opens on it through the environment, no `setModel` required.
   assert.equal(errors(events).length, 1);
   assert.match(errors(events)[0].message, /could not change which model/i);
-  assert.deepEqual(models(events), ['haiku']);
+  assert.deepEqual(models(events), ['claude-haiku-4-5']);
 });
 
 test('a refused change is rolled back, so the log never claims a model that was not used', async () => {
   const events = await run([
     { type: 'prompt', text: 'one' },
-    { type: 'model', model: 'sonnet' },
+    { type: 'model', model: 'claude-sonnet-5' },
     { type: 'prompt', text: 'two' },
-  ], { sdk: REFUSING_SDK, boxModel: 'opus' });
+  ], { sdk: REFUSING_SDK, boxModel: 'claude-opus-5' });
 
   // The stub refuses every switch, so both turns ran on the model the session opened with.
-  assert.deepEqual(turns(events), ['opus|one', 'opus|two']);
+  assert.deepEqual(turns(events), ['claude-opus-5|one', 'claude-opus-5|two']);
   assert.equal(errors(events).length, 1);
   // Said twice on purpose: asked for, then taken back. A transcript that stopped at the first
   // would be a record of a change that did not happen.
-  assert.deepEqual(models(events), ['sonnet', 'opus']);
+  assert.deepEqual(models(events), ['claude-sonnet-5', 'claude-opus-5']);
 });

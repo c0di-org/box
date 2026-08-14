@@ -77,6 +77,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -90,6 +92,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.agent.AgentActivity
+import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.ConnectRequest
@@ -133,6 +136,7 @@ fun ConversationPane(
     onConnectGitHub: () -> Unit = {},
     onDeclineConnection: () -> Unit = {},
     onSetPermissionMode: (AgentPermissionMode) -> Unit = {},
+    onSetAgentModel: (AgentModel) -> Unit = {},
     onAttachPhoto: (() -> Unit)? = null,
     onAttachFile: (() -> Unit)? = null,
     onRemoveAttachment: (Attachment) -> Unit = {},
@@ -289,6 +293,8 @@ fun ConversationPane(
             onSend = onSend,
             mode = state.permissionMode,
             onModeChange = onSetPermissionMode,
+            model = state.agentModel,
+            onModelChange = onSetAgentModel,
             attachments = state.pendingAttachments,
             onAttachPhoto = onAttachPhoto,
             onAttachFile = onAttachFile,
@@ -893,6 +899,9 @@ internal fun Composer(
     mode: AgentPermissionMode = AgentPermissionMode.Ask,
     /** Null where the setting has nowhere to go — the opening hero shares this composer. */
     onModeChange: ((AgentPermissionMode) -> Unit)? = null,
+    model: AgentModel = AgentModel.DEFAULT,
+    /** Null in the same places [onModeChange] is, and for the same reason. */
+    onModelChange: ((AgentModel) -> Unit)? = null,
     /** What the user has picked or shared in and not sent yet. Drawn above the text. */
     attachments: List<Attachment> = emptyList(),
     /**
@@ -908,6 +917,7 @@ internal fun Composer(
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var modeMenuOpen by remember { mutableStateOf(false) }
+    var modelMenuOpen by remember { mutableStateOf(false) }
     var attachMenuOpen by remember { mutableStateOf(false) }
     // A picture on its own is a message: "look at this" is often the whole thought, and asking for
     // a word alongside it would be Box requiring something it does not need.
@@ -1061,6 +1071,18 @@ internal fun Composer(
                         }
                     },
                 )
+                if (onModelChange != null) {
+                    ModelControl(
+                        model = model,
+                        open = modelMenuOpen,
+                        onOpen = { modelMenuOpen = true },
+                        onDismiss = { modelMenuOpen = false },
+                        onPick = {
+                            modelMenuOpen = false
+                            onModelChange(it)
+                        },
+                    )
+                }
                 if (onModeChange != null) {
                     ModeControl(
                         mode = mode,
@@ -1143,6 +1165,89 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
                     contentDescription = "Remove ${attachment.name}",
                     modifier = Modifier.size(15.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Which model answers, on the composer because the answer changes mid-conversation.
+ *
+ * This is the one setting people move *during* a task rather than before it: plan the work on
+ * Opus, hand the mechanical half to Haiku, come back for the review. Behind the box sheet — where
+ * this started — that flow costs a trip out of the conversation each way, which is enough friction
+ * that nobody does it and the box quietly runs everything on one model.
+ *
+ * The name is spelled out rather than reduced to a glyph, unlike the permission control beside it.
+ * A mode has three values and a caution sign; a model has a *version*, and "Opus 4.5" and "Opus 5"
+ * are the same icon. Showing the label is the entire point of the control — someone who cannot
+ * read which model is answering has not been given the choice, only the illusion of it.
+ *
+ * Box-wide, exactly like the permission mode: the menu changes every conversation, not this one.
+ */
+@Composable
+private fun ModelControl(
+    model: AgentModel,
+    open: Boolean,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    onPick: (AgentModel) -> Unit,
+) {
+    Box {
+        Row(
+            Modifier
+                .height(44.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onOpen)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                model.label,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.semantics {
+                    contentDescription = "Model: ${model.label}. ${model.summary}"
+                },
+            )
+            Icon(
+                Icons.Outlined.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = onDismiss) {
+            AgentModel.entries.forEach { option ->
+                DropdownMenuItem(
+                    onClick = { onPick(option) },
+                    leadingIcon = {
+                        // Only the one in force draws anything. A per-model glyph would be four
+                        // icons for four names that already differ by name.
+                        if (option == model) {
+                            Icon(
+                                Icons.Outlined.Check,
+                                contentDescription = "in use",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Spacer(Modifier.size(18.dp))
+                        }
+                    },
+                    text = {
+                        Column {
+                            Text(option.label, fontSize = 14.sp)
+                            Text(
+                                option.summary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
                 )
             }
         }
