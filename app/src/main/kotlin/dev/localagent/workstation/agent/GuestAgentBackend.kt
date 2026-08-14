@@ -59,8 +59,8 @@ class GuestAgentBackend(
     private val records = ConcurrentHashMap<String, Record>()
     private val store = SessionStore(appContext)
 
-    // The same file MainActivity and OpeningHistory use. Box has no settings screen and one
-    // setting; a store of its own would be more machinery than the thing being stored.
+    // The same file MainActivity and OpeningHistory use. Box's settings are a handful of keys
+    // read in two processes; a store of its own would be more machinery than the thing stored.
     private val preferences =
         appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
@@ -85,6 +85,28 @@ class GuestAgentBackend(
 
     private fun permissionModeCommand(mode: AgentPermissionMode) =
         mapOf("type" to "permission_mode", "mode" to mode.wire)
+
+    private val modelState = MutableStateFlow(
+        AgentModel.ofName(preferences.getString(MODEL_KEY, null)),
+    )
+    override val agentModel: StateFlow<AgentModel> = modelState.asStateFlow()
+
+    /**
+     * Persisted and broadcast exactly like the permission mode, and for the same reasons.
+     *
+     * Worth one note of its own: this reaches a *running* session. The harness asks the SDK to
+     * switch, so a conversation mid-task answers its next turn as the new model without being
+     * restarted — which is the difference between a model setting and the machine size next to it
+     * on the same sheet, where a change waits for the box to be reopened.
+     */
+    override suspend fun setAgentModel(model: AgentModel) {
+        modelState.value = model
+        preferences.edit().putString(MODEL_KEY, model.name).apply()
+        records.values.forEach { it.write(modelCommand(model)) }
+    }
+
+    private fun modelCommand(model: AgentModel) =
+        mapOf("type" to "model", "model" to model.wire)
 
     /**
      * The last window Box was read in, held only in memory.
@@ -563,6 +585,13 @@ class GuestAgentBackend(
                     record.workingDirectory,
                     Bundle().apply {
                         putString("BOX_SESSION_CWD", record.workingDirectory)
+                        // Also sent as a standing setting the moment this attaches, and the
+                        // duplication is deliberate: the harness builds its query before it has
+                        // read a single line of stdin, so a session that learned its model only
+                        // from the command would open on the CLI's default and be corrected a
+                        // round trip later — through a call an older Claude Code may not have.
+                        // The command is what moves a session already running.
+                        putString("BOX_MODEL", modelState.value.wire)
                         // The credential is read by the harness from this path. It is never placed
                         // in the environment itself, which would put it in an open payload.
                         putString("BOX_CREDENTIAL_FILE", CREDENTIAL_PATH)
@@ -604,14 +633,16 @@ class GuestAgentBackend(
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
             if (session != null) {
                 // Whatever the user asked for while the computer was still starting — with the
-                // standing settings ahead of it. Every harness process starts out asking and knowing
-                // nothing about the window, including one that came back after `:computer` died, so
-                // a prompt delivered before them would run its first turn under a setting the user
-                // had already changed, or write for a screen it cannot see. This is the one place
+                // standing settings ahead of it. Every harness process starts out asking, on no
+                // particular model, and knowing nothing about the window, including one that came
+                // back after `:computer` died, so a prompt delivered before them would run its
+                // first turn under a setting the user had already changed, on a model they had
+                // changed away from, or write for a screen it cannot see. This is the one place
                 // all of those orders meet, so it is the only place that can promise them.
                 record.flushOutbox(
                     first = listOfNotNull(
                         permissionModeCommand(modeState.value),
+                        modelCommand(modelState.value),
                         viewport?.let(::viewportCommand),
                     ),
                 )
@@ -792,6 +823,7 @@ class GuestAgentBackend(
         const val BIND_TIMEOUT_MILLIS = 4_000L
         const val PREFERENCES = "box_product"
         const val MODE_KEY = "agent_permission_mode"
+        const val MODEL_KEY = "agent_model"
 
         /** What a task is called before anybody has said anything in it. */
         const val UNNAMED = "New task"
@@ -836,7 +868,9 @@ class GuestAgentBackend(
  * broadcast to `records.values` cannot reintroduce the fan-out by forgetting to say so.
  */
 internal fun isStandingSetting(command: Map<String, Any>): Boolean =
-    command["type"] == "permission_mode" || command["type"] == "viewport"
+    command["type"] == "permission_mode" ||
+        command["type"] == "model" ||
+        command["type"] == "viewport"
 
 internal fun attachPlan(runtimeReady: Boolean, opened: Boolean, hasHistory: Boolean): AttachPlan =
     when {

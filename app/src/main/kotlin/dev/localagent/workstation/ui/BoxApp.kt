@@ -44,6 +44,7 @@ import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.FilesPlace
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.ComputerPanel
+import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Attachment
@@ -88,6 +89,7 @@ fun BoxApp(
     onStop: () -> Unit,
     onSetOpenFaster: (Boolean) -> Unit,
     onSetGuestSizing: (GuestSizing) -> Unit,
+    onSetAgentModel: (AgentModel) -> Unit,
     onRunCommand: (String) -> Unit,
     onSelectFilesPlace: (FilesPlace) -> Unit,
     onOpenDirectory: (String) -> Unit,
@@ -401,6 +403,8 @@ fun BoxApp(
             guestSizing = state.guestSizing,
             guestSizingChoices = state.guestSizingChoices,
             onSetGuestSizing = onSetGuestSizing,
+            agentModel = state.agentModel,
+            onSetAgentModel = onSetAgentModel,
         )
     }
 }
@@ -507,6 +511,7 @@ private fun PreviewBox(state: BoxUiState) {
             onStop = {},
             onSetOpenFaster = {},
             onSetGuestSizing = {},
+            onSetAgentModel = {},
             onRunCommand = {},
             onSelectFilesPlace = {},
             onOpenDirectory = {},

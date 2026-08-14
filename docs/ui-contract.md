@@ -158,6 +158,8 @@ interface AgentBackend {
     val sessions: StateFlow<List<SessionSummary>>
     val permissionMode: StateFlow<AgentPermissionMode>
     suspend fun setPermissionMode(mode: AgentPermissionMode)
+    val agentModel: StateFlow<AgentModel>
+    suspend fun setAgentModel(model: AgentModel)
     suspend fun setViewport(viewport: AgentViewport)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
@@ -188,6 +190,32 @@ command, `{"type": "permission_mode", "mode": "bypassPermissions"}`, told to a s
 first prompt and again whenever it changes. Anything but `Ask` is drawn as a banner above every
 conversation for as long as it is in force — a box that is silently approving everything looks
 exactly like a box with nothing to approve, and that is the one confusion this must never cause.
+
+`agentModel` is the third setting of the same shape — one value for the whole box, persisted, and
+stated to every session. It carries a model *alias* (`opus`, `sonnet`, `haiku`), never a wire id
+like `claude-opus-5`: the alias is resolved by the CLI in the guest at the moment the turn runs, so
+it names the current model of that tier forever, while a pinned id names one model and goes stale
+inside an image that costs a rebuild and a re-provision to correct. For the same reason nothing in
+the UI prints a version number beside it.
+
+It is the one standing setting that travels **two** ways, and both are load-bearing. A new session
+is opened with `BOX_MODEL` in its environment, because the harness builds its query before it has
+read a single line of stdin — the reader is attached first, but a line from a pipe is I/O and
+`query()` is reached in the microtask before any of it is delivered. A session that learned its
+model only from the command would therefore open on the CLI's default and be corrected a round trip
+later, through a `setModel` an older Claude Code may not have. The command,
+`{"type": "model", "model": "sonnet"}`, is what moves a session that is *already running*: the
+harness asks the SDK to switch, so a conversation mid-task answers its next turn as the new model
+without being restarted. That is the difference between this and the machine size on the same
+sheet, where a change waits for the box to be reopened.
+
+A switch the guest cannot make has to reach the transcript, and both failures are pinned in
+`test_harness_model.mjs`. A Claude Code too old to have `setModel` reports rather than appearing to
+have switched, and keeps the choice for the next session, which opens on it through the
+environment. A refused switch is rolled back — in the harness *and* in the log, which emits the
+model twice, asked for and then taken back. Silence in either case would leave Box drawing one
+model over a session answering as another, and the only visible difference between those two is how
+good the answers are.
 
 `bypassPermissions` has one more requirement, and missing it is silent. The CLI refuses the mode
 outright — at launch and through `setPermissionMode`, whose rejection reads "the session was not

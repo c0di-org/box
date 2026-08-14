@@ -13,8 +13,8 @@ import org.junit.Test
  * the moment the guest is up. Anything that lands in it therefore costs a `claude` process.
  *
  * A turn is worth one: someone typed it at a shut box. A standing setting is not, and does not
- * need one, because `onAttached` states the current mode and viewport to every harness before
- * anything else it reads.
+ * need one, because `onAttached` states the current mode, model and viewport to every harness
+ * before anything else it reads.
  *
  * Getting this wrong does not fail anywhere. It just quietly starts a harness per conversation on
  * the next open — which is exactly what happened once the UI began broadcasting the viewport on
@@ -25,6 +25,7 @@ class StandingSettingTest {
     @Test
     fun `the settings broadcast to every session are not held for the ones that are idle`() {
         assertTrue(isStandingSetting(mapOf("type" to "permission_mode", "mode" to "ask")))
+        assertTrue(isStandingSetting(mapOf("type" to "model", "model" to "opus")))
         assertTrue(
             isStandingSetting(
                 mapOf(

@@ -34,6 +34,7 @@ import dev.localagent.runtime.qemu.RuntimeStorage
 import dev.localagent.runtime.qemu.shared.SharedFolder
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.AgentEvent
+import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.AgentViewport
@@ -325,6 +326,11 @@ class BoxViewModel @JvmOverloads constructor(
                 mutableUiState.update { it.copy(permissionMode = mode) }
             }
         }
+        viewModelScope.launch {
+            agents.agentModel.collect { model ->
+                mutableUiState.update { it.copy(agentModel = model) }
+            }
+        }
     }
 
     /**
@@ -336,6 +342,16 @@ class BoxViewModel @JvmOverloads constructor(
      */
     fun setPermissionMode(mode: AgentPermissionMode) {
         viewModelScope.launch { agents.setPermissionMode(mode) }
+    }
+
+    /**
+     * Changing which model answers. One writer, for the same reason as the mode above.
+     *
+     * Unlike the machine size on the same sheet, this needs nothing reopened: the backend tells
+     * every running harness, and each one asks its session to switch for the next turn.
+     */
+    fun setAgentModel(model: AgentModel) {
+        viewModelScope.launch { agents.setAgentModel(model) }
     }
 
     /**

@@ -58,6 +58,18 @@ class FakeAgentBackend(
     }
 
     /**
+     * Remembered so the control reads back, and read by nothing else: the scripted replies were
+     * written by a person, and pretending Haiku would have said them faster would be a fiction
+     * about a model rather than about a conversation.
+     */
+    private val modelState = MutableStateFlow(AgentModel.DEFAULT)
+    override val agentModel: StateFlow<AgentModel> = modelState.asStateFlow()
+
+    override suspend fun setAgentModel(model: AgentModel) {
+        modelState.value = model
+    }
+
+    /**
      * Kept, and read by nothing. The scripted flows say the same words at every size — a fake that
      * rewrote itself for a wide window would be demonstrating a behaviour no real agent has yet.
      * It is stored rather than dropped so a test can ask what the UI reported.

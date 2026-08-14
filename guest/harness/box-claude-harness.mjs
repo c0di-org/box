@@ -134,6 +134,27 @@ let activeQuery = null;
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
 let permissionMode = 'default';
 
+/**
+ * Which model answers, or null for whichever one Claude Code would have picked.
+ *
+ * An *alias* — `opus`, `sonnet`, `haiku` — rather than a wire id like `claude-opus-5`, and that is
+ * the whole reason this is a string the app chooses from a short list rather than a version Box
+ * pins. An alias is resolved by the CLI in the guest, so it names the current model of that tier
+ * on the day the turn runs; a pinned id names one model forever and goes stale the week after,
+ * inside a guest image that costs a rebuild and a re-provision to correct.
+ *
+ * Null, not a default of Box's own choosing, for the same reason: with the option absent the CLI
+ * uses whatever it considers its default, which is one fewer thing for Box to be wrong about.
+ *
+ * Arrives two ways, and needs both. The environment is what a *new* session opens on, and it is
+ * read here because the query is built before stdin has been read even once — the reader is
+ * attached first, but a line from a pipe is I/O, and `query()` is reached in the microtask before
+ * any of it is delivered. A model sent only as a command would therefore build every query on the
+ * CLI's default and correct it a round trip later, which needs a `setModel` the CLI may not have.
+ * The command is what moves a session that is *already running*; see the `model` case below.
+ */
+let model = (process.env.BOX_MODEL ?? '').trim() || null;
+
 /** Set by `interrupt`, cleared by the turn it stops. See the `result` case in the main loop. */
 let interruptRequested = false;
 
@@ -357,6 +378,47 @@ function handleCommand(line) {
       // Into the log as well as into the SDK. The transcript is the record of what happened, and
       // "nothing asked for the next hour" is only honest if the log says why.
       emit({ type: 'permission_mode', mode });
+      break;
+    }
+    case 'model': {
+      // Empty means "whatever Claude Code picks", which is a real choice and not a missing one.
+      const next = String(command.model ?? '').trim() || null;
+      if (next === model) return;
+      const previous = model;
+      model = next;
+      // The same two paths as the permission mode above, and for the same reason: a query that
+      // does not exist yet reads the variable when it is built, and one already running has to be
+      // told, because the model is fixed at query time and every later turn would keep using it.
+      //
+      // Unlike `setPermissionMode`, this one *is* in the SDK's published types, so its absence
+      // means an older CLI in the image rather than an undocumented call — which is worth saying
+      // out loud, because the symptom is otherwise "the picker does nothing".
+      if (activeQuery && typeof activeQuery.setModel === 'function') {
+        activeQuery.setModel(next ?? undefined).catch((error) => {
+          // Rolled back for the next query as well as this one: a model the CLI refused is not a
+          // model the following session should open on. The report is the point — a silent failure
+          // here leaves Box drawing one model over a session answering as another, and the only
+          // visible difference between them is how good the answers are.
+          model = previous;
+          diagnostic(`could not change model: ${error?.message ?? error}`);
+          emit({
+            type: 'error',
+            message: 'Box could not change which model is answering.',
+            detail: `This session is still using ${previous ?? 'the default model'}.`,
+            recoverable: false,
+          });
+          emit({ type: 'model', model: previous });
+        });
+      } else if (activeQuery) {
+        diagnostic('this Claude Code cannot change model mid-session');
+        emit({
+          type: 'error',
+          message: 'Box could not change which model is answering.',
+          detail: 'The agent in this box is too old to switch models. A new task will use it.',
+          recoverable: false,
+        });
+      }
+      emit({ type: 'model', model: next });
       break;
     }
     case 'viewport': {
@@ -1543,6 +1605,9 @@ async function main() {
       // dropping it when the mode is permissive would mean rebuilding the query to get it back.
       canUseTool,
       permissionMode,
+      // Spread rather than passed as null: the option's own default is "the CLI decides", and an
+      // explicit null is not the same as an absent key to every version of it.
+      ...(model ? { model } : {}),
       // The one option without which "Approve everything" is a lie.
       //
       // `bypassPermissions` is not a mode a session may simply be put into: the CLI refuses it

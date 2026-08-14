@@ -4,6 +4,7 @@ import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.GuestSizing
 import dev.localagent.runtime.qemu.GuestSizingChoices
+import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.ConnectService
@@ -151,6 +152,8 @@ data class BoxUiState(
      * because it is a statement about the user's trust, not about a session.
      */
     val permissionMode: AgentPermissionMode = AgentPermissionMode.Ask,
+    /** Which model the agents answer with. Like [permissionMode], one value for the whole box. */
+    val agentModel: AgentModel = AgentModel.DEFAULT,
     /**
      * "Open faster": whether an idle box is saved rather than closed.
      *

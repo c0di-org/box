@@ -27,6 +27,20 @@ interface AgentBackend {
     suspend fun setPermissionMode(mode: AgentPermissionMode)
 
     /**
+     * Which model the harnesses answer with.
+     *
+     * Shaped like [permissionMode] because it is the same kind of fact: one setting for the box
+     * rather than one per conversation. A per-conversation model would be defensible — different
+     * tasks deserve different models — but it is not what "only one agent" currently means, and a
+     * setting that is box-wide until the first person asks otherwise is the cheaper thing to be
+     * wrong about.
+     */
+    val agentModel: StateFlow<AgentModel>
+
+    /** Applies to every session, running and future, and survives the app being killed. */
+    suspend fun setAgentModel(model: AgentModel)
+
+    /**
      * What Box is being read on right now, told to every session and re-told whenever it changes.
      *
      * Like [setPermissionMode] in shape and for the same reason: it is one fact about the box as a
@@ -144,6 +158,38 @@ enum class AgentPermissionMode(val wire: String) {
         this == Ask -> false
         this == AcceptEdits -> ask is PermissionAsk.EditFile
         else -> true
+    }
+}
+
+/**
+ * Which model answers, as a tier rather than a version.
+ *
+ * [wire] is a model *alias*, and that is the load-bearing decision here. The guest resolves an
+ * alias when the turn runs, so `opus` means whichever Opus is current that day; a wire id like
+ * `claude-opus-5` would mean one model forever, and correcting it later means rebuilding the guest
+ * image and re-provisioning every box that already exists. The names below carry no version for
+ * the same reason — a label reading "Opus 5" would be a version pinned in a string resource, going
+ * stale in exactly the place the alias was chosen to avoid.
+ *
+ * Three tiers, because that is the shape of the choice: how capable, against how fast and how much
+ * of the plan it spends. Adding a fourth is one entry — the guest takes any alias its CLI knows.
+ */
+enum class AgentModel(val wire: String, val label: String, val summary: String) {
+    /** The default, and the one Box is designed around: hard, long-running work. */
+    Opus("opus", "Opus", "Best at long, complicated work"),
+
+    /** Nearly Opus on code and tool use, and quicker to answer. */
+    Sonnet("sonnet", "Sonnet", "Nearly as capable, faster"),
+
+    /** For short, well-specified things where waiting is the cost that matters. */
+    Haiku("haiku", "Haiku", "Fastest, for simple tasks");
+
+    companion object {
+        val DEFAULT = Opus
+
+        /** Tolerant of a name written by an older or newer Box than this one. */
+        fun ofName(name: String?): AgentModel =
+            entries.firstOrNull { it.name == name } ?: DEFAULT
     }
 }
 
