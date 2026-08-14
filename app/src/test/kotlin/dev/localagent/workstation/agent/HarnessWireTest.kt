@@ -456,4 +456,26 @@ class HarnessWireTest {
         )
         assertNotNull(event as? AgentEvent.ConnectResolved)
     }
+
+    @Test
+    fun `the wait for a harness to come up is Box speaking, not the agent`() {
+        val event = parse(
+            """{"v":1,"type":"activity","activity":{"kind":"starting","label":"Getting Claude Code ready"}}""",
+        )
+        val activity = (event as AgentEvent.ActivityChanged).activity
+        // Not Thinking: on a fully emulated guest this wait is minutes long, and drawing it as the
+        // agent's own activity line had the CLI appearing to answer before the process existed.
+        assertEquals(AgentActivity.Starting("Getting Claude Code ready"), activity)
+    }
+
+    @Test
+    fun `a label that already ends in an ellipsis does not get a second one`() {
+        // The view appends its own. A guest image older than this app sends the ellipsis itself,
+        // which rendered as "Starting Claude Code......" on the device.
+        val event = parse(
+            """{"v":1,"type":"activity","activity":{"kind":"thinking","label":"Starting session…"}}""",
+        )
+        val activity = (event as AgentEvent.ActivityChanged).activity
+        assertEquals(AgentActivity.Thinking("Starting session"), activity)
+    }
 }

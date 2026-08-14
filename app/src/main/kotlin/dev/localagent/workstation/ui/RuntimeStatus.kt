@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -188,6 +189,8 @@ fun DiagnosticsSheet(
     onStop: () -> Unit,
     onSignIn: () -> Unit,
     onGitHub: () -> Unit,
+    openFaster: Boolean = true,
+    onSetOpenFaster: (Boolean) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -233,6 +236,7 @@ fun DiagnosticsSheet(
                 DiagnosticRow("Network", "Outgoing only, through your phone")
                 SignedInRow(signIn, onSignIn)
                 GitHubRow(github, onGitHub)
+                OpenFasterRow(openFaster, onSetOpenFaster)
                 Spacer(Modifier.height(20.dp))
                 when (state) {
                     RuntimeState.NotProvisioned, RuntimeState.Stopped ->
@@ -394,6 +398,37 @@ private fun GitHubRow(github: GitHubAuth.State, onGitHub: () -> Unit) {
                 }
             }
         }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+}
+
+/**
+ * The one switch on this sheet: whether Box keeps a saved copy of the guest.
+ *
+ * Phrased as what the user gets and what it costs, in that order, because both halves are real.
+ * A saved box reopens in about a second against the 95–120 s a cold boot takes on this hardware;
+ * the saving is ~430 MB of guest memory written inside the system disk, which is a noticeable
+ * slice of a phone.
+ *
+ * On by default, which is not a nudge — it is what Box already did before there was a choice, and
+ * defaulting a new switch to off would have made every existing box slower overnight.
+ */
+@Composable
+private fun OpenFasterRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text("Open faster", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "Box keeps a saved copy, so it opens in about a second. Uses around 430 MB.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = enabled, onCheckedChange = onChange)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }

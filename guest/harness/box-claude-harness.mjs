@@ -1529,7 +1529,7 @@ async function main() {
   //
   // Not during sign-in, which has its own screen and no transcript to narrate into.
   if (!authMode) {
-    emit({ type: 'activity', activity: { kind: 'thinking', label: 'Starting Claude Code…' } });
+    emit({ type: 'activity', activity: { kind: 'starting', label: 'Getting Claude Code ready' } });
   }
 
   const sdk = await loadSdk();
@@ -1560,7 +1560,7 @@ async function main() {
 
   // The import is behind us; what is left is the CLI's own start-up, which is the longer half.
   // A second label is the only progress signal available for a wait with no output of its own.
-  emit({ type: 'activity', activity: { kind: 'thinking', label: 'Starting session…' } });
+  emit({ type: 'activity', activity: { kind: 'starting', label: 'Waking the agent' } });
 
   const box = await boxServer(sdk);
 

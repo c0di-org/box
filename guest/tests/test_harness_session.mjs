@@ -210,15 +210,21 @@ test('the wait for Claude Code to start is narrated rather than silent', async (
   // what is pinned here is the order: the label is out before anything that could be slow begins.
   const first = events[0];
   assert.equal(first.type, 'activity');
-  assert.equal(first.activity.kind, 'thinking');
-  assert.match(first.activity.label, /Starting Claude Code/);
+  // `starting`, not `thinking`: there is no agent behind this wait, and saying `thinking` made
+  // Box draw it as the agent's own activity line -- the CLI appearing to answer before it existed.
+  assert.equal(first.activity.kind, 'starting');
+  assert.match(first.activity.label, /Claude Code/);
   assert.ok(events.indexOf(first) < events.findIndex((event) => event.type === 'session_started'));
 
   // And a second, so the longer half of the wait is not the same frame as the first half.
   const labels = events
     .filter((event) => event.type === 'activity' && event.activity.label)
     .map((event) => event.activity.label);
-  assert.deepEqual(labels.slice(0, 2), ['Starting Claude Code…', 'Starting session…']);
+  assert.deepEqual(labels.slice(0, 2), ['Getting Claude Code ready', 'Waking the agent']);
+
+  // No trailing ellipsis on the wire. The view appends its own, and a label carrying one rendered
+  // as "Starting Claude Code......" on the device.
+  for (const label of labels.slice(0, 2)) assert.ok(!label.endsWith('\u2026'), label);
 });
 
 test('denying reaches the harness as a denial rather than a silent allow', async () => {

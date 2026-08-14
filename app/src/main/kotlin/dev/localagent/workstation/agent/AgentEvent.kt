@@ -484,6 +484,22 @@ sealed interface AgentActivity {
     data object Idle : AgentActivity
     data class Thinking(val label: String? = null) : AgentActivity
     data class Working(val label: String) : AgentActivity
+
+    /**
+     * The harness is coming up; there is no agent behind it yet.
+     *
+     * Separate from [Thinking] because the two make different claims. "Thinking" is the agent
+     * describing itself, and the wait before the CLI exists is minutes long on this hardware — so
+     * borrowing the agent's voice for it puts words in the mouth of a process that has not
+     * started. This is Box reporting on its own machinery, and the UI draws it as Box rather than
+     * as a turn.
+     *
+     * Deliberately outside [Transcript.isBusy]: there is nothing to interrupt, so the header must
+     * not offer "Stop", and the composer stays live because anything typed here is queued and
+     * delivered the moment the harness answers.
+     */
+    data class Starting(val label: String) : AgentActivity
+
     data class AwaitingPermission(val requestId: String) : AgentActivity
 
     /** The agent asked a question and is parked until the user replies. */
