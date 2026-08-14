@@ -24,18 +24,17 @@ enum class GuestImageOwner {
 /**
  * What a payload *is*, as opposed to what it happens to be called.
  *
- * The build once shipped four names in a fixed order and three places agreed on that order by
- * hand. A role says which of the four a file is, so the manifest can rename `base-system.qcow2`
- * or a different image can call it something else without anything downstream noticing.
+ * The build once shipped four names in a fixed order that three places agreed on by hand. A role
+ * says which of the four a file is, so a manifest can rename `base-system.qcow2` without anything
+ * downstream noticing.
  *
  * @param wire the value used in `image.json`; changing one breaks every manifest already built.
- * @param installedName the name the payload is stored under on the device. Deliberately *not* the
- *   manifest's filename: two images may use different source names for the same role, and the
- *   installed layout should not inherit that. These match the historical flat names, which is what
- *   lets an already-provisioned device migrate by moving files rather than re-downloading them.
- * @param rewritable true when QEMU only ever reads the file, so a copy that fails verification can
- *   simply be replaced. The disks are false: the guest writes to them from its first boot, so
- *   their bytes stop matching the manifest immediately and a hash says nothing about their health.
+ * @param installedName the name the payload is stored under on the device — deliberately *not* the
+ *   manifest's filename, since two images may use different source names for one role. These match
+ *   the historical flat names, which lets an already-provisioned device migrate by moving files.
+ * @param rewritable true when QEMU only ever reads the file, so a copy failing verification can be
+ *   replaced. The disks are false: the guest writes to them from its first boot, so their bytes
+ *   stop matching the manifest immediately and a hash says nothing about their health.
  */
 enum class GuestImageRole(
     val wire: String,
@@ -122,13 +121,12 @@ data class GuestImageManifest(
     /**
      * The directory name this image's files live under.
      *
-     * The id and *not* the version, which is worth being explicit about because the obvious
-     * reading of "keyed by id and version" is a path containing both. A version in the path would
-     * mean every rebuilt image arrives at a directory with no workspace in it, and the user's
-     * Linux machine would be silently replaced by an empty one on each update — the exact
-     * accident this whole change exists to make impossible. Versions of one image are the same
-     * machine brought up to date, so they share a directory; different ids are different machines,
-     * so they do not. The version's job is the identity check, not the layout.
+     * The id and *not* the version, which is worth being explicit about because the obvious reading
+     * of "keyed by id and version" is a path containing both. A version in the path would mean
+     * every rebuilt image arrives at a directory with no workspace in it, silently replacing the
+     * user's Linux machine with an empty one on each update — the exact accident this exists to
+     * make impossible. Versions of one image are the same machine brought up to date and share a
+     * directory; different ids are different machines. The version's job is the identity check.
      *
      * Safe as a path element because [parse] refuses an id that is not.
      */

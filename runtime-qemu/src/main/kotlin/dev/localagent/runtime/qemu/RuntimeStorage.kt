@@ -251,17 +251,15 @@ class RuntimeStorage(context: Context) {
     /**
      * Unpack QEMU's data files where QEMU can reach them.
      *
-     * Called on every start, not from provisioning. Provisioning runs once, when there is no guest
-     * disk yet; these files belong to the *APK*, so an app update that changes them has to reach a
-     * device whose disks are already in place — and that device never provisions again. Rewriting
-     * them each start is a few kilobytes and keeps them matched to the installed build.
+     * On every start, not from provisioning. Provisioning runs once, when there is no guest disk
+     * yet; these files belong to the *APK*, so an app update changing them has to reach a device
+     * whose disks are already in place — and that device never provisions again. Rewriting them
+     * each start is a few kilobytes and keeps them matched to the installed build. Deliberately the
+     * opposite of the rule for the disks, which are the user's work and are never replaced.
      *
-     * That is deliberately the opposite of the rule for the disks, which are the user's work and
-     * are never replaced once present.
-     *
-     * Not checksum-verified like the boot set. Those are large payloads assembled by a separate
-     * build step where a truncated copy is a real possibility; these are small files read straight
-     * out of the APK, and a corrupt one means the APK itself is corrupt.
+     * Not checksum-verified like the boot set: those are large payloads assembled by a separate
+     * build step where a truncated copy is possible, while these are small files read straight out
+     * of the APK, and a corrupt one means the APK itself is corrupt.
      */
     fun installQemuData() {
         val assets = appContext.assets

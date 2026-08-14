@@ -3,21 +3,19 @@ package dev.localagent.workstation.computer
 /**
  * Where the pointer is, in guest pixels, and the only thing allowed to say so.
  *
- * RFB has no relative mode: every pointer message carries an absolute coordinate, and the guest
+ * RFB has no relative mode: every pointer message carries an absolute coordinate and the guest
  * warps its cursor to whatever arrives. A trackpad is relative by definition, so somebody has to
- * hold the integral of the deltas — and it has to be exactly one somebody, because there are three
- * surfaces sending motion at the same machine. Touch on the desktop, touch on the on-screen
- * keyboard once it has become a trackpad, and a real mouse under DeX all move *this*, and the
- * absolute coordinate it hands to the transport is what keeps them from disagreeing.
+ * hold the integral of the deltas — and exactly one somebody, because three surfaces send motion at
+ * the same machine: touch on the desktop, touch on the keyboard once it has become a trackpad, and
+ * a real mouse under DeX.
  *
- * Integrating deltas into an absolute position sounds like the drift trap the
- * [DesktopView][dev.localagent.workstation.ui.DesktopView] comment warns about, and it is the
- * opposite: drift needs two authorities, one guessing what the other has done. Here the guest has
- * no opinion of its own to drift from. It is told, every time.
+ * Integrating deltas into an absolute position sounds like the drift trap [DesktopView] warns
+ * about and is the opposite: drift needs two authorities, one guessing what the other did. Here
+ * the guest has no opinion to drift from — it is told, every time.
  *
- * Sub-pixel state is kept in floats. A slow drag on a phone panel showing a guest at roughly 1:1
- * produces deltas well under a pixel, and rounding each one on its own throws all of them away —
- * which reads, to the hand doing it, as a pointer with a dead zone.
+ * Sub-pixel state is kept in floats. A slow drag on a panel showing the guest at roughly 1:1
+ * produces deltas well under a pixel, and rounding each on its own throws all of them away, which
+ * reads to the hand doing it as a pointer with a dead zone.
  */
 internal class GuestPointer(private val send: (DesktopInput) -> Unit) {
 

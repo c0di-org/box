@@ -16,39 +16,29 @@ import java.io.File
 /**
  * When a sync happens.
  *
- * Lives in `:computer` rather than in the UI process, for the reason the session log lives here
- * too: Android kills the Compose process whenever it likes, and an agent working through a task
- * while the phone is in a pocket is the normal case, not the edge one. A sync that needed the UI
- * to be alive would not run at the moment it most matters. The folder is under `filesDir`, which
- * is one directory per app rather than per process, so both sides see the same files.
+ * Lives in `:computer` rather than the UI process, for the reason the session log does: Android
+ * kills the Compose process whenever it likes, and an agent working while the phone is pocketed is
+ * the normal case. A sync needing the UI alive would not run when it most matters. The folder is
+ * under `filesDir`, one directory per app rather than per process, so both sides see one tree.
  *
- * ### The three triggers
+ * Three triggers:
  *
- * **The box finishes booting.** Everything the user put in the folder while it was closed goes in
- * at once. This is also the pass that creates `/workspace/shared`, so an agent finds the place
- * already there.
+ * **The box finishes booting** — everything added while it was closed goes in at once, and this is
+ * the pass that creates `/workspace/shared` so an agent finds it already there.
  *
- * **The folder changes while the box is up.** inotify, not a poll — a file copied in from the
- * Files app is in the box a second later, which is what makes the folder feel like a shared drive
- * rather than a transfer you have to remember to start.
+ * **The folder changes while the box is up** — inotify, not a poll, so a file copied in from the
+ * Files app is in the box a second later.
  *
- * **A session finishes.** This is the one that brings the agent's own files out, and it was picked
- * over the alternatives deliberately:
+ * **A session finishes** — the one that brings the agent's own files out, chosen over the
+ * alternatives: on opening Box's Files panel only helps someone already inside Box, which is the
+ * opposite of the point; on shutdown is too late and unreliable, since the process that would run
+ * it is the one being killed; a poll is a timer running for hours to catch a twice-a-day event.
+ * A session ending is when the output is finished, costs nothing while idle, and lines up with
+ * something the user already understands. An agent that leaves a file mid-task and keeps working
+ * waits for the next trigger, which is the price of not polling.
  *
- * - *On opening Box's Files panel* only helps someone already inside Box, and the point of the
- *   whole feature is that the file shows up in the phone's own Files app.
- * - *On the box shutting down* is both too late to be useful and unreliable: the process that
- *   would run it is the one being killed.
- * - *A poll* is a timer running for hours to catch an event that happens twice a day.
- *
- * A session ending is the moment the agent's output is finished and worth collecting, it costs
- * nothing when nothing is happening, and it lines up with something the user already understands
- * — Box tells them the agent finished, and by then the file is on their phone. An agent that
- * leaves a file mid-task and keeps working is caught by the next trigger of any kind rather than
- * immediately, which is the price of not polling.
- *
- * Nothing here is a promise about *when*. A pass is idempotent and self-healing, so a missed
- * trigger costs a delay and never a lost file.
+ * Nothing here promises *when*. A pass is idempotent and self-healing, so a missed trigger costs a
+ * delay and never a lost file.
  */
 internal class SharedFolderBridge(
     context: Context,

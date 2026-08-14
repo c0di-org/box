@@ -38,20 +38,17 @@ import dev.localagent.workstation.agent.CodeLanguage
 /**
  * Markdown, rendered rather than recited.
  *
- * Claude writes markdown whether or not anyone asked it to, so a transcript that draws agent prose
- * as plain text is showing the user the punctuation instead of the answer — `## Findings`, `**not
- * this**`, and a shell command wrapped in three backticks on its own line.
+ * Claude writes markdown whether or not anyone asked, so a transcript drawing agent prose as plain
+ * text shows the user the punctuation instead of the answer.
  *
- * Hand-rolled, and small on purpose. A markdown library is a large dependency with a parser, a
- * renderer, its own theming and usually its own image loading, bought to solve a problem that is
- * one screen of code at the subset an agent actually emits: headings, lists, emphasis, inline
- * code, fences, quotes and rules. Box keeps a deliberately tight dependency list, and this is not
- * where to spend it. What is deliberately *not* here: tables, images, footnotes, HTML. Anything
- * unrecognised falls through as its own literal text, which is exactly what the whole transcript
- * did before — degraded, never wrong.
+ * Hand-rolled and small on purpose. A markdown library is a parser, a renderer, its own theming and
+ * usually its own image loading, bought for a problem that is one screen of code at the subset an
+ * agent actually emits: headings, lists, emphasis, inline code, fences, quotes, rules. Deliberately
+ * absent: tables, images, footnotes, HTML — anything unrecognised falls through as its own literal
+ * text, which is what the whole transcript did before. Degraded, never wrong.
  *
- * The parse is a pure function over lines so it can be tested without a device, and the styling
- * lives in the composables below where the theme is.
+ * The parse is a pure function over lines so it can be tested without a device; styling lives in
+ * the composables below, where the theme is.
  */
 internal sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock

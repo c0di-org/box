@@ -17,32 +17,23 @@ import java.io.FileNotFoundException
 /**
  * The shared folder, as a place in Android.
  *
- * This is the whole reason the folder lives on the phone rather than on the guest's disk. Because
- * it is an ordinary directory, publishing it makes copy, edit, create, delete and rename work in
- * the system Files app and in every app's Open/Save dialog with **no code here to implement any of
- * them** — there is no size limit, no transfer to wait on, and it is all readable while the box is
- * closed. The version of this feature that put the provider in front of agentd needed a booted VM,
- * capped files at 64 MiB, pushed every byte through a 64 KiB-framed socket on an emulated CPU, and
- * still could not delete or rename, because agentd has no method for either.
+ * This is the whole reason the folder lives on the phone rather than the guest's disk. Because it
+ * is an ordinary directory, publishing it makes copy, edit, create, delete and rename work in the
+ * system Files app and every Open/Save dialog with **no code here implementing any of them** — no
+ * size limit, nothing to wait on, and all readable while the box is closed. The version that put
+ * the provider in front of agentd needed a booted VM, capped files at 64 MiB, pushed every byte
+ * through a 64 KiB-framed socket on an emulated CPU, and still could not delete or rename.
  *
- * ### What is not published
+ * Exactly one directory is published: [SharedFolder.on]. Not `/workspace`, and emphatically not
+ * `/workspace/.config`. Those are on the guest's disk and this provider never speaks to the guest,
+ * so the credential is not something a rule here keeps out — it is unreachable from this code by
+ * any path. [resolve] still checks, because the tree is handed to other apps and a symlink or a
+ * `..` in a document id would otherwise be a way out of it.
  *
- * Exactly one directory: [SharedFolder.on]. Not `/workspace`, and emphatically not
- * `/workspace/.config`, where Claude Code's OAuth credential lives. Those are on the guest's disk
- * and this provider never speaks to the guest at all, so the credential is not something a rule
- * here has to keep out — it is not reachable from this code by any path. A user deliberately
- * dropping a token into the shared folder is their decision; every app they hand folder access to
- * being able to read credentials that were already there is not.
- *
- * [resolve] still checks, because the tree is handed to other apps and a symlink or a `..` inside
- * a document id would otherwise be a way out of it.
- *
- * ### The manifest permission
- *
- * The declaration carries `android:permission="android.permission.MANAGE_DOCUMENTS"`, which is not
- * a permission Box holds or needs. It *restricts* who may call this provider directly to the
- * system's own document machinery; every other app reaches a file through a per-URI grant the user
- * makes by picking it. This is what `ExternalStorageProvider` does, for the same reason.
+ * The manifest's `android:permission="android.permission.MANAGE_DOCUMENTS"` is not a permission
+ * Box holds. It *restricts* direct callers to the system's document machinery; every other app
+ * reaches a file through a per-URI grant the user makes by picking it. `ExternalStorageProvider`
+ * does the same.
  */
 class SharedFolderProvider : DocumentsProvider() {
 

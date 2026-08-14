@@ -6,20 +6,17 @@ import android.view.KeyEvent
  * Android key codes to X11 keysyms.
  *
  * The guest is a Linux desktop, so keysyms are what it wants to hear; there is no more neutral
- * currency to convert into, and inventing one would mean translating twice.
+ * currency, and inventing one would mean translating twice.
  *
  * The rule that matters: **a character, when there is one; a key, when there is not.** Android
- * hands over the character a key produced under the modifiers actually held, which already accounts
- * for the layout, for Shift, and for anything a physical keyboard in DeX does that a US-ASCII
- * assumption would get wrong. Deriving a character from the key code instead would type `2` when
- * someone presses shift-2 on a UK keyboard expecting `"`.
+ * hands over the character a key produced under the modifiers actually held, which already
+ * accounts for layout, Shift, and anything a physical keyboard in DeX does. Deriving a character
+ * from the key code instead would type `2` when someone presses shift-2 on a UK keyboard
+ * expecting `"`. Only when there is no character — arrows, function keys, modifiers — does the key
+ * code decide, and then it maps to a fixed keysym.
  *
- * Only when there is no character — arrows, function keys, modifiers themselves — does the key code
- * decide, and then it maps to a fixed keysym.
- *
- * Deliberately plain integers rather than a `KeyEvent`: the interesting logic is a lookup table and
- * a range check, and both are worth testing without a device. `KEYCODE_*` are compile-time
- * constants, so they inline and cost nothing here.
+ * Plain integers rather than a `KeyEvent`, so a lookup table and a range check can be tested
+ * without a device. `KEYCODE_*` are compile-time constants and inline.
  */
 internal object Keysyms {
 

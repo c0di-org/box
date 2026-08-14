@@ -253,17 +253,15 @@ class GuestAgentBackend(
             }
             // Only the sessions actually waiting on the box — which is almost never all of them.
             //
-            // This used to attach every record, and every record with [runtimeReady] set takes
-            // [AttachPlan.Open]: opening the box started a harness process per conversation, all
-            // at once, whether or not anyone had been near them. On a two-core TCG guest eight
-            // idle tasks is eight `claude` processes that never exit, and the one the user is
-            // actually typing into queues behind all of them. Measured on device: load average
-            // 14.9, ~70% of the guest spent on conversations nobody had opened.
+            // Attaching every record meant opening the box started a harness process per
+            // conversation, at once, whether or not anyone had been near them: on a two-core TCG
+            // guest, eight idle tasks is eight `claude` processes that never exit, with the one
+            // being typed into queued behind all of them. Measured on device: load average 14.9,
+            // ~70% of the guest spent on conversations nobody had opened.
             //
-            // Nothing is lost by waiting. A session opens the moment it is looked at or spoken to
-            // — [events] and [send] both attach — so the only thing that genuinely cannot wait is
-            // a session holding something typed while the box was shut, which is what the outbox
-            // is. Everything else reads its history from the log, which needs no process at all.
+            // Nothing is lost by waiting — [events] and [send] both attach, so a session opens the
+            // moment it is looked at or spoken to. The only thing that cannot wait is one holding
+            // something typed while the box was shut, which is what the outbox is for.
             scope.launch {
                 records.values
                     .filter { synchronized(it.outbox) { it.outbox.isNotEmpty() } }
@@ -793,11 +791,10 @@ class GuestAgentBackend(
  * What attaching to a session can do, given what is running.
  *
  * The row worth reading is [AttachPlan.ReadHistory]. A transcript is a log file in `:computer`'s
- * private storage, appended to as the agent worked and left there when it stopped — so a task from
- * last week can be read back with the box shut, and "shut, with a week of work behind it" is the
- * ordinary state of someone coming back to Box. Reading it needs the `:computer` *process*, which
- * binding creates; it does not need a booted VM, and must not cause one. This used to be refused
- * outright, and a task with a hundred messages in it opened onto "Nothing yet".
+ * private storage, left there when the agent stopped — and "shut, with a week of work behind it"
+ * is the ordinary state of someone coming back to Box. Reading it needs the `:computer` *process*,
+ * which binding creates; it does not need a booted VM and must not cause one. This used to be
+ * refused outright, and a task with a hundred messages in it opened onto "Nothing yet".
  *
  * [opened] is asked before [hasHistory] because a running computer beats a readable log: the
  * session the user is looking at should be one they can talk to.
@@ -828,19 +825,17 @@ internal enum class AttachPlan {
 /**
  * The session list's reading of one harness line, or null when the line says nothing about it.
  *
- * This is the one fact a summary cannot get from the session's own lifecycle. Everything else in
- * the list comes from what Box did — a session opened, a prompt went in, the process exited.
- * "Needs you" comes from the agent, mid-run, and it is the state the list exists to show: when
- * several agents are working, the one that stopped to ask is the only one that wants anything.
+ * "Needs you" is the one fact a summary cannot get from the session's own lifecycle — everything
+ * else comes from what Box did, while this comes from the agent mid-run. It is what the list
+ * exists to show: with several agents working, the one that stopped to ask is the only one that
+ * wants anything.
  *
- * Kept separate from the transcript's fold because the two answer different questions and run at
- * different times: `events()` only runs while someone is watching a conversation, and this has to
- * be true for the sessions nobody opened.
+ * Separate from the transcript's fold because `events()` only runs while someone is watching a
+ * conversation, and this has to be true for the sessions nobody opened.
  *
- * The substring test is a gate, not a parse. This runs on a binder thread and most lines are prose
- * the list has no opinion about, so only a line that might be a permission event is handed to
- * [HarnessWire] — which stays the one place that knows the vocabulary. A false positive costs one
- * parse and is discarded; nothing here decides anything a wrong guess could damage.
+ * The substring test is a gate, not a parse: this runs on a binder thread, so only a line that
+ * might be a permission event reaches [HarnessWire], which stays the one place that knows the
+ * vocabulary. A false positive costs one parse and decides nothing.
  */
 internal fun sessionStatusFor(line: String, context: HarnessWire.Context): SessionStatus? {
     if (!line.contains(PERMISSION_HINT)) return null

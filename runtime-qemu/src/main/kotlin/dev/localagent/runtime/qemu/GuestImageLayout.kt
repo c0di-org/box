@@ -74,18 +74,17 @@ class GuestImageLayout(private val images: File, private val disks: File) {
     /**
      * Moves a pre-manifest install into the keyed layout.
      *
-     * The workspace is the whole reason this exists. It is the user's Linux machine, and on a
-     * device provisioned before images had names it sits at `disks/workspace.qcow2`, where nothing
-     * keyed would ever look for it. Leaving it there would mean the next start created a second,
-     * empty one and the user's work simply stopped existing.
+     * The workspace is the whole reason this exists. It is the user's Linux machine, and on a device
+     * provisioned before images had names it sits at `disks/workspace.qcow2`, where nothing keyed
+     * would look — so the next start would create a second, empty one and the user's work would
+     * simply stop existing.
      *
-     * The other three move too, rather than being deleted and reinstalled. They are replaced
-     * moments later — a migrated device has no record, so its image reads as unknown — but moving
-     * first means a device that loses power mid-provision still has a bootable system disk, and it
-     * costs a rename instead of half a gigabyte of copying.
+     * The other three move rather than being deleted and reinstalled. They are replaced moments
+     * later, but moving first means a device that loses power mid-provision still has a bootable
+     * system disk, and it costs a rename instead of half a gigabyte of copying.
      *
-     * Anything already in the keyed layout wins: a half-finished migration that runs again must
-     * not overwrite the copy it already made.
+     * Anything already in the keyed layout wins: a half-finished migration running again must not
+     * overwrite the copy it already made.
      */
     fun migrateLegacy(manifest: GuestImageManifest) {
         migrateProofSystemDisk()

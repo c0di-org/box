@@ -195,17 +195,15 @@ private fun SectionHeading(text: String) {
  *
  * Closing used to mean opening the task and finding it in the header's overflow — a route through
  * the thing you are trying to be finished with. This is the shape Android already taught everyone,
- * and it is why the close has an undo behind it: a swipe is easy to do by accident, and closing a
- * task is not undoable once it has happened. The menu in the header stays, and is still the route
- * for anyone who does not swipe.
+ * and it is why the close has an undo behind it: a swipe is easy to do by accident and closing a
+ * task is not undoable once it happens. The header menu stays, for anyone who does not swipe.
  *
- * From the end only. A drag from the left edge is the system's back gesture, and a row that
- * competes with it loses in a way the user reads as the app ignoring them.
+ * From the end only. A drag from the left edge is the system's back gesture, and a row competing
+ * with it loses in a way the user reads as the app ignoring them.
  *
  * The dismissal is deliberately refused: `false` leaves this box settled and lets the *list* take
- * the row away, which it does on the same frame. Left to settle itself, the box would remember
- * being dismissed — lazy lists keep item state by key — and an undone task would come back as a
- * blank space where the row used to be.
+ * the row away on the same frame. Left to settle itself the box would remember being dismissed —
+ * lazy lists keep item state by key — and an undone task would come back as a blank space.
  */
 @Composable
 private fun ClosableTask(onClose: () -> Unit, row: @Composable () -> Unit) {

@@ -6,16 +6,16 @@ import java.io.File
 /**
  * Reads a session's log exactly once, whether it arrives from disk or over the wire.
  *
- * A session outlives the UI process. When a new one attaches, everything the agent said while
- * nobody was watching is already in a log file, and new output is arriving live at the same time.
- * Both have to reach the transcript, in order, with nothing seen twice and nothing missed.
+ * A session outlives the UI process, so when a new one attaches, everything said while nobody was
+ * watching is already in a log file *and* new output is arriving live. Both must reach the
+ * transcript, in order, nothing twice and nothing missed.
  *
- * The runtime service makes that possible by writing each chunk to the log *before* announcing it,
- * and stamping it with the offset it was written at. So this cursor keeps one number — how far it
- * has read — and any chunk lying behind it is already accounted for.
+ * The runtime service writes each chunk to the log *before* announcing it, stamped with the offset
+ * it was written at — so this keeps one number, how far it has read, and any chunk behind that is
+ * already accounted for.
  *
- * Byte-oriented on purpose. A chunk boundary can fall inside a multi-byte character or mid-line,
- * so decoding per chunk would corrupt text and split JSON. Only whole lines are decoded.
+ * Byte-oriented on purpose: a chunk boundary can fall inside a multi-byte character or mid-line, so
+ * decoding per chunk would corrupt text and split JSON. Only whole lines are decoded.
  */
 internal class SessionLogCursor {
     private val pending = ByteArrayOutputStream()

@@ -3,36 +3,27 @@ package dev.localagent.runtime.qemu.shared
 /**
  * Deciding what to copy where, and nothing else.
  *
- * No Android types, no I/O, no coroutines — the same reason `Rfb.kt` has none. This is the part
- * of file sharing that can be *wrong* in ways nobody notices for a week, so it has to be provable
- * on a laptop rather than by copying a file into a phone and squinting at it three minutes later.
- * Everything that touches a disk or a guest lives in [SharedFolderSync], which does exactly what
- * the plan says and no thinking of its own.
+ * No Android types, no I/O, no coroutines — the same reason `Rfb.kt` has none. This is the part of
+ * file sharing that can be wrong in ways nobody notices for a week, so it has to be provable on a
+ * laptop rather than by copying a file into a phone and squinting three minutes later.
+ * [SharedFolderSync] does what the plan says and no thinking of its own.
  *
- * ### The rule
+ * **The rule: the phone's copy is the source of truth and the box gets a copy.** The folder is
+ * ordinary Android storage reachable by any app at any time, including while the box is off, and
+ * `/workspace/shared` is a projection of it.
  *
- * The phone's copy is the source of truth. The box gets a copy. That asymmetry is the whole
- * design: the folder is ordinary Android storage the user can reach with any app at any time,
- * including while the box is off, and the guest's `/workspace/shared` is a projection of it.
+ * No continuous two-way sync, on purpose. Two writers and a merge policy is how a file quietly
+ * becomes the wrong version; instead there are a handful of cases, each with one answer, and
+ * **nothing is ever deleted to resolve a disagreement**. The worst this produces is a redundant
+ * file beside the real one, which a person can see and fix. The worst the clever version produces
+ * is work that is gone.
  *
- * There is no continuous two-way sync, on purpose. Two writers and a merge policy is how a file
- * quietly becomes the wrong version; what is here instead is a handful of cases, each with one
- * answer, and **nothing is ever deleted to resolve a disagreement**. The worst outcome this can
- * produce is a redundant file sitting next to the real one, which is a thing a person can see and
- * fix. The worst outcome the clever version produces is work that is gone.
- *
- * ### Why stamps and not hashes
- *
- * A change is detected by comparing a file's size and modification time against what they were at
- * the end of the last sync — rsync's quick check. Each side is compared only against *its own*
- * recorded stamp, never against the other side's, so the phone's clock and the guest's clock never
- * have to agree about anything.
- *
- * The alternative is hashing both trees on every pass. On the phone that is cheap; in the guest it
- * is a fully emulated ARM64 CPU reading a qcow2 through a 64 KiB-framed socket, and it would turn
- * a boot-time sync of a few megabytes into a visible stall. The quick check misses exactly one
- * thing — an edit that preserves both size and mtime — and the cost of missing it is that the file
- * syncs later rather than never, because nothing here deletes.
+ * **Stamps, not hashes.** A change is size plus mtime against what they were at the end of the
+ * last sync — rsync's quick check — and each side is compared only against *its own* recorded
+ * stamp, so the two clocks never have to agree. Hashing both trees every pass is cheap on the
+ * phone and, in an emulated guest reading a qcow2 through a 64 KiB-framed socket, would turn a
+ * boot-time sync into a visible stall. The quick check misses exactly one thing, an edit
+ * preserving both size and mtime, and the cost is that the file syncs later rather than never.
  */
 object SharedSync {
 

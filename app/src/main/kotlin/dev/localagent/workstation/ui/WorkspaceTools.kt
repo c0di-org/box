@@ -271,15 +271,14 @@ private fun CommandOutput(record: CommandRecord) {
 /**
  * Two places, and the one that always works comes first.
  *
- * **Shared** is a directory on the phone that Box publishes to Android, so it is also a place in
- * the system Files app and in every Open/Save dialog. **In the box** is the guest's `/workspace`,
- * which needs a booted VM. Putting them side by side is what makes the shared folder discoverable
- * from inside Box rather than only from a Files app the user has to think to open.
+ * **Shared** is a phone directory Box publishes to Android, so it is also a place in the system
+ * Files app and every Open/Save dialog. **In the box** is the guest's `/workspace`, which needs a
+ * booted VM. Side by side is what makes the shared folder discoverable from inside Box rather than
+ * only from a Files app the user has to think to open.
  *
- * Browsing is read-only in both places. That is not a gap in Shared: creating, renaming, deleting
- * and editing already work on those files through Android itself, and building a second, weaker
- * copy of that inside Box would be three more surfaces to keep right for no new ability. The
- * "Open in Files" button is the route to them.
+ * Browsing is read-only in both. Not a gap in Shared: creating, renaming, deleting and editing
+ * already work on those files through Android itself, and a second weaker copy inside Box would be
+ * three more surfaces to keep right for no new ability. "Open in Files" is the route to them.
  */
 @Composable
 fun FilesTool(

@@ -13,33 +13,25 @@ import dev.localagent.workstation.computer.GuestPointer
 /**
  * The trackpad the keyboard turns into.
  *
- * It costs nothing when it isn't there. It has no layout of its own — it is an overlay, drawn on
- * top of the keys — and it only exists from the moment a finger lands in the middle of the keyboard
- * and *sweeps* (see the staging in [GuestKeyboardView]) until [LINGER_MS] after the last finger
- * leaves. So a keystroke is still a keystroke and a gesture is a gesture, without a mode switch
- * anywhere, and no key is ever made smaller to pay for a pointer that is only sometimes wanted.
+ * It costs nothing when it is not there: no layout of its own, drawn as an overlay on the keys, and
+ * it exists only from the moment a finger lands in the middle and *sweeps* (see the staging in
+ * [GuestKeyboardView]) until [LINGER_MS] after the last finger leaves. A keystroke stays a
+ * keystroke, with no mode switch and no key made smaller to pay for a sometimes-wanted pointer.
  *
- * ## Why it stays after you let go
+ * **It stays after you let go** because a phone-sized pad at 1:1 does not cross the guest's screen:
+ * you run out of glass, lift, recentre, go again — and want to click when you arrive. Vanishing on
+ * lift would make each of those a fresh arming gesture, which is the same as having no pad.
+ * [LINGER_MS] is long enough for lift-recentre-click and short enough to be gone once you have
+ * decided to type. Anything you do restarts the clock; the last half second fades, so the state is
+ * clear before you commit to a key.
  *
- * A phone-sized pad crossed at 1:1 doesn't cross the guest's screen, so you will run out of glass
- * and have to lift, recentre and go again — and you'll want to click when you get there. Vanishing
- * the instant the finger leaves would make every one of those a fresh arming gesture, which is the
- * same as having no pad at all. Three seconds is long enough for a lift, a re-centre and a click,
- * and short enough that it's gone by the time you've decided to type instead. Anything you do to it
- * starts the clock again; the last half second is spent fading, so it's clear which state you're in
- * before you commit to a key.
+ * A tap clicks and two fingers right-click, as on the desktop above. The two buttons along the
+ * bottom are **held** for as long as the finger is, so a thumb on the left and a finger dragging is
+ * a click-and-drag — what a tap gesture cannot do — and the right one is what makes Openbox's root
+ * menu reachable, the only way to launch anything from the guest's desktop.
  *
- * ## The buttons
- *
- * A tap on the pad clicks and two fingers right-click, exactly as on the desktop above. The two big
- * buttons along the bottom are for the other half of the job: they're **held** for as long as the
- * finger is, so a thumb on the left button and a finger dragging on the pad is a click-and-drag —
- * the thing a tap gesture can't do, on the edge of the surface where a thumb already rests. The
- * right one is what makes Openbox's root menu reachable, which is the only way to launch anything
- * from the guest's desktop.
- *
- * The top row of the keyboard is deliberately left uncovered. It is the way out: touch anything up
- * there and the pad goes, because you have evidently stopped pointing.
+ * The keyboard's top row is deliberately left uncovered: touch anything up there and the pad goes,
+ * because you have evidently stopped pointing.
  */
 internal class KeyboardTrackpad(private val keys: GuestKeyboardView) {
 

@@ -56,16 +56,16 @@ import dev.localagent.workstation.computer.DesktopTransport
 /**
  * Box's shell.
  *
- * Two destinations, and they are peers rather than a surface and its footnote:
+ * Two destinations, peers rather than a surface and its footnote:
  *
  * - **Tasks** — the box, everything being done inside it, and the conversation. One pane on a
  *   phone, list beside transcript on anything wider.
- * - **Computer** — the machine, taking the whole window at every size, with the agent floating
- *   over it. Not a pane, not a tab with a photograph of Linux on it, and not three taps deep.
+ * - **Computer** — the machine, taking the whole window at every size, with the agent floating over
+ *   it. Not a pane, not a tab with a photograph of Linux on it, not three taps deep.
  *
- * One thing overrides all of that: until the box is open there is nothing worth showing beside it,
- * so the home surface takes the whole window and gives the rest of the shell back as it settles.
- * That is not a separate screen or a gate to dismiss — see [YourBox].
+ * One override: until the box is open there is nothing worth showing beside it, so the home surface
+ * takes the whole window and gives the shell back as it settles. Not a separate screen or a gate to
+ * dismiss — see [YourBox].
  */
 @Composable
 fun BoxApp(

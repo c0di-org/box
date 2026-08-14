@@ -374,27 +374,21 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     /**
      * Resize the guest's screen to [width] x [height], from inside the guest.
      *
-     * See [GuestDisplayMode] for why this is an `xrandr` and not the `SetDesktopSize` the RFB
-     * protocol is holding out — the short version is that QEMU 5.1's VNC server can announce a
-     * resize but cannot be asked for one.
+     * See [GuestDisplayMode] for why this is an `xrandr` rather than RFB's `SetDesktopSize`: QEMU
+     * 5.1's VNC server can announce a resize but cannot be asked for one.
      *
-     * ### It is retried, because the usual reason it fails is that it was early
+     * It is retried, because the usual reason it fails is that it was early. The first size is
+     * asked for as the computer opens, often before the desktop exists —
+     * `local-agent-desktop.service` restarts every five seconds and under TCG can lose a race with
+     * udev settling the GPU — and a half-started X does not refuse quickly: it accepts the
+     * connection and then does not answer, so the first attempt spends its whole budget. Giving up
+     * there would leave the guest at 1280x800 until the window next changed shape, which on a
+     * phone is never. A wrong size fails the same way each time and costs a bounded amount; a slow
+     * one succeeds on the second or third go.
      *
-     * The first size is asked for as soon as the computer is opened, and on a cold box that is
-     * often before the desktop session exists: `local-agent-desktop.service` is ordered after the
-     * workspace, restarts on failure every five seconds, and under TCG can lose a race with udev
-     * settling the GPU. An X server that is half-started does not refuse quickly — it accepts the
-     * connection and then does not answer, so the first attempt spends its whole budget and
-     * returns nothing useful.
-     *
-     * Giving up there would leave the guest at its built-in 1280x800 until the window next
-     * changed shape, which on a phone is never. So this tries a few times, spaced far enough
-     * apart to be worth doing. A wrong size fails the same way each time and costs a bounded
-     * amount; a slow one succeeds on the second or third go.
-     *
-     * A non-zero exit is still reported at the end, because the failures worth knowing about — no
-     * X server at all, or a mode the driver refused — are otherwise completely silent, and a
-     * screen that simply stayed the wrong shape is what both look like from above.
+     * A non-zero exit is still reported, because the failures worth knowing about — no X server at
+     * all, or a mode the driver refused — are otherwise silent and look exactly like a screen that
+     * simply stayed the wrong shape.
      */
     suspend fun setDisplaySize(width: Int, height: Int) {
         require(width in MIN_DISPLAY_SIDE..MAX_DISPLAY_SIDE && height in MIN_DISPLAY_SIDE..MAX_DISPLAY_SIDE) {
@@ -427,19 +421,17 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     /**
      * Opens a loopback port on the phone that reaches [request]'s port inside the guest.
      *
-     * QEMU's user-mode network stack does this itself — no proxy process, no root, no change to
-     * the guest — but only through the human monitor: `hostfwd_add` and `hostfwd_remove` have no
-     * QMP equivalent, so success is an empty line and failure is *printed text*. Anything the
-     * monitor says is therefore treated as the error.
+     * QEMU's user-mode network stack does this itself — no proxy process, no root, no change to the
+     * guest — but only through the human monitor: `hostfwd_add` has no QMP equivalent, so success
+     * is an empty line and failure is *printed text*. Anything the monitor says is the error.
      *
-     * The host port is chosen by asking the OS for a free one and immediately giving it back. That
-     * is a race in principle — something else could take it in the gap — and it is the right trade
-     * anyway: the alternative is Box picking numbers out of a fixed range and colliding with
-     * whatever else on the phone had the same idea. A lost race surfaces as a failed forward, which
-     * is recoverable; a fixed range fails the same way and less legibly.
+     * The host port is chosen by asking the OS for a free one and giving it straight back. That is
+     * a race in principle and still the right trade: the alternative is picking from a fixed range
+     * and colliding with whatever else on the phone had the same idea, which fails the same way
+     * and less legibly.
      *
      * Bound to 127.0.0.1 on purpose. A dev server the agent started is for the person holding the
-     * phone, and binding it to the phone's wifi address would publish it to the network they are on.
+     * phone; binding it to the phone's wifi address would publish it to the network they are on.
      */
     override suspend fun forwardPort(request: PortForwardRequest): PortForward =
         withContext(Dispatchers.IO) {
@@ -491,15 +483,14 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     /**
      * Puts the box away without throwing it away.
      *
-     * The whole product cost of a fully emulated ARM64 guest is here. A cold boot measured 86 s and
-     * 116 s on a Fold 7 from launch to a ready agent, nearly all of it the guest waiting on
-     * emulated udev, and that was the price of the box not already running — which put "close it
-     * when idle" in direct opposition to "have it there when you want it".
+     * The whole product cost of a fully emulated guest is here: a cold boot measured 86 s and 116 s
+     * on a Fold 7 to a ready agent, nearly all of it waiting on emulated udev, and that was the
+     * price of the box not already running — which put "close it when idle" in direct opposition to
+     * "have it there when you want it".
      *
-     * `savevm` writes the guest's memory into its own qcow2 and QEMU exits, so nothing is left
-     * running and nothing is left resident; the next start hands the snapshot back to a fresh
-     * QEMU with `-loadvm` and the guest carries on from the instruction it was on. Measured on the
-     * same device that gives the numbers above: 0.6–3.6 s to save, and 0.94–1.12 s to reopen.
+     * `savevm` writes the guest's memory into its own qcow2 and QEMU exits; the next start hands
+     * the snapshot to a fresh QEMU with `-loadvm` and the guest carries on from the instruction it
+     * was on. Same device: 0.6–3.6 s to save, 0.94–1.12 s to reopen.
      *
      * What does *not* survive is any agent that was mid-task. See [quiesceGuest].
      */
@@ -661,15 +652,14 @@ class QemuTcgRuntime(context: Context) : ComputerRuntime {
     /**
      * Leaves the guest in the state a snapshot should catch it in: nothing in flight.
      *
-     * The disconnect is deliberate and it is not free. agentd kills every child when its host goes
-     * away, so an agent that was working when the box was put away does not come back with it —
-     * and that would happen either way, because QEMU tells a restored guest that the host it
-     * remembers is gone. Doing it here means the teardown runs on a healthy guest with a real
-     * clock, instead of on a restored one waking up minutes or days later.
+     * The disconnect is deliberate and not free. agentd kills every child when its host goes away,
+     * so an agent working when the box was put away does not come back with it — and that happens
+     * either way, because QEMU tells a restored guest the host it remembers is gone. Doing it here
+     * runs the teardown on a healthy guest with a real clock, rather than on a restored one waking
+     * up days later.
      *
-     * The `sync` is insurance for the path where the snapshot is never loaded — a failed resume,
-     * or an app update that replaces the disks. The snapshot itself captures the page cache along
-     * with the rest of memory and does not need it.
+     * The `sync` is insurance for the path where the snapshot is never loaded — a failed resume, or
+     * an update that replaces the disks. The snapshot captures the page cache itself.
      */
     private suspend fun quiesceGuest() {
         runCatching {

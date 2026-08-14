@@ -5,22 +5,20 @@ import androidx.compose.runtime.Immutable
 /**
  * Everything the conversation view can render, as an append-only event log.
  *
- * This is the contract a harness driver has to conform to. Two rules keep it honest:
+ * The contract a harness driver conforms to. Two rules keep it honest:
  *
- *  1. **Append-only.** Nothing is ever mutated in place. A tool call that finishes emits a
- *     second event referencing the first by [ToolCallStarted.callId]; a checklist that advances
- *     re-emits the whole list under the same [TaskProgress.planId]. A backend can therefore be a
- *     dumb pipe, and the UI can replay a session from cold storage by folding the same events.
- *  2. **Structured, never stringly.** Tool calls arrive as [ToolCall] variants and file edits as
- *     [FileDiff], not as JSON blobs the UI has to guess at. If a harness emits something Box does
- *     not model yet it lands in [ToolCall.Generic], which renders as a labelled key/value card —
- *     degraded, but never a raw dump.
+ *  1. **Append-only.** Nothing is mutated in place: a finished tool call emits a second event
+ *     referencing the first by [ToolCallStarted.callId], and an advancing checklist re-emits the
+ *     whole list under the same [TaskProgress.planId]. So a backend can be a dumb pipe and the UI
+ *     can replay a session from cold storage by folding the same events.
+ *  2. **Structured, never stringly.** Tool calls arrive as [ToolCall] variants and edits as
+ *     [FileDiff], not JSON the UI must guess at. Anything unmodelled lands in [ToolCall.Generic],
+ *     a labelled key/value card — degraded, never a raw dump.
  *
- * Sub-agents ride the same log rather than a second one. A [ToolCall.Task] names one, and
- * everything that sub-agent then says or does is an ordinary event carrying its [subAgentId] — so
- * a replay reconstructs the nesting without the log ever having been a tree.
+ * Sub-agents ride this same log: a [ToolCall.Task] names one and everything it then does carries
+ * its [subAgentId], so a replay reconstructs the nesting without the log ever being a tree.
  *
- * [TranscriptReducer] folds this log into the [TranscriptItem] list the UI actually draws.
+ * [TranscriptReducer] folds this into the [TranscriptItem] list the UI draws.
  */
 @Immutable
 sealed interface AgentEvent {
@@ -494,16 +492,15 @@ sealed interface AgentActivity {
 /**
  * Something the user showed the agent, alongside what they typed.
  *
- * A field on the turn rather than a sentence in it, because the UI has to draw a thumbnail and the
- * contract's rule is that it must never do that by parsing prose. On the wire it is one optional
- * field, following [subAgentId]'s precedent: a harness that has never heard of attachments ignores
- * it and the agent simply gets the text. Degraded, and never wrong — which is what separates this
- * from `interrupt`, where an ignored field would have stopped the whole session.
+ * A field on the turn rather than a sentence in it, because the UI draws a thumbnail and the
+ * contract forbids doing that by parsing prose. On the wire it is one optional field, on
+ * [subAgentId]'s precedent: a harness that has never heard of attachments ignores it and the agent
+ * gets the text. Degraded, never wrong — unlike `interrupt`, where an ignored field would have
+ * stopped the whole session.
  *
- * [guestPath] is where the file actually is, inside the box, and it is the only address that means
- * anything to the agent. The phone-side copy is derived from it where the UI needs pixels; nothing
- * outside the box ever sees an Android `content://` uri, which would be meaningless in there and
- * revoked by the time anything tried.
+ * [guestPath] is where the file is inside the box, and the only address meaningful to the agent.
+ * Nothing outside the box ever sees an Android `content://` uri, which would mean nothing in there
+ * and be revoked by the time anything tried it.
  */
 @Immutable
 data class Attachment(

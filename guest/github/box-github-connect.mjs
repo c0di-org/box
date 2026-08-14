@@ -2,29 +2,24 @@
 /**
  * Connecting this box to GitHub, from a phone, on a machine with no browser.
  *
- * The same shape as the Claude sign-in: the exchange runs *here*, in the guest, and Box only ever
- * carries what a person is meant to read. Events go out as one JSON object per line on stdout;
- * commands come back as JSON lines on stdin. The token is written by this process, to the disk
- * that survives updates, and never crosses the process boundary into the app.
+ * Same shape as the Claude sign-in: the exchange runs *here*, in the guest, and Box carries only
+ * what a person is meant to read. Events out as one JSON object per line on stdout, commands back
+ * as JSON lines on stdin. The token is written by this process, to the disk that survives updates,
+ * and never crosses into the app.
  *
- * **It is a device flow, and that is not a preference.** The obvious mobile design is a redirect
- * to `box://` and a token exchanged on the way back, which would need a `client_secret` — still
- * required by GitHub on that exchange even now that PKCE is supported, because GitHub does not
- * distinguish public clients from confidential ones. A secret shipped inside an APK is not a
- * secret. The device flow is the one flow that needs none, which is also why `gh` uses it.
+ * **It is a device flow, and that is not a preference.** The obvious mobile design — a redirect to
+ * `box://` and a token exchanged on the way back — needs a `client_secret`, still required by
+ * GitHub on that exchange even with PKCE, because GitHub does not distinguish public clients from
+ * confidential ones. A secret shipped inside an APK is not a secret. The device flow needs none,
+ * which is also why `gh` uses it. It reads better besides: the code travels *outward*, so nothing
+ * has to be carried back through Box's UI and there is no half-copied string to diagnose.
  *
- * It reads better than the Claude handshake too, and for a structural reason worth keeping: the
- * code travels *outward*. Box shows eight characters, the person approves at GitHub, and nothing
- * has to be carried back through Box's UI — so there is no half-copied string to diagnose.
- *
- * Two steps, because this is a GitHub App rather than an OAuth app:
- *
- *  1. **Authorise** — the device flow above, which says who the user is.
- *  2. **Install** — which repositories this box may touch. A user token for a GitHub App reaches
- *     only repositories where the app is installed, so this step is not overhead bolted onto the
- *     first: it is the repository picker, and it is the reason Box can ask for three repositories
- *     instead of "full control of all your private repositories", which is the smallest thing an
- *     OAuth app could have asked for.
+ * Two steps, because this is a GitHub App rather than an OAuth app: **authorise**, which says who
+ * the user is, and **install**, which says which repositories this box may touch. A GitHub App
+ * user token reaches only repositories where the app is installed, so the second is not overhead
+ * bolted onto the first — it is the repository picker, and the reason Box can ask for three
+ * repositories instead of "full control of all your private repositories", the smallest thing an
+ * OAuth app could have asked for.
  */
 
 import { createInterface } from 'node:readline';
@@ -382,16 +377,14 @@ async function waitForInstallation(token, baseline = null) {
  * Connecting a box that is already connected, which is the commonest reason to be here.
  *
  * A GitHub App user token reaches only the repositories the app is *installed* on, so the 403 an
- * agent hits on a private clone almost never means "no credential" -- it means "not that one".
+ * agent hits on a private clone almost never means "no credential" — it means "not that one".
  * Running the device flow again answers a question nobody asked: the person re-authorises, the
- * installation check finds installations already, and the flow finishes without ever offering the
- * screen that would have fixed it. Then the agent retries and gets the same 403. That loop was
- * the whole failure.
+ * installation check finds installations already there, and the flow finishes without offering the
+ * screen that would have fixed it. Then the agent retries and gets the same 403.
  *
  * So a box with a working token goes straight to the picker. The credential is rewritten on the
- * way past, which costs nothing and repairs a box whose token predates half of what connecting
- * now writes -- an older Box wrote the token and no git identity, and `git commit` fails without
- * one.
+ * way past, which costs nothing and repairs a box whose token predates half of what connecting now
+ * writes — an older Box wrote the token and no git identity, and `git commit` fails without one.
  */
 async function addRepositories(token, account, appSlug) {
   storeCredential(token, account);

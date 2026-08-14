@@ -21,17 +21,16 @@ internal enum class KeyAction { TYPE, LEFT_CLICK, RIGHT_CLICK }
 /**
  * One key on the on-screen keyboard, described in X11 keysyms.
  *
- * Keysyms rather than Android key codes, which is the opposite of every other input path in Box:
- * [DesktopView][dev.localagent.workstation.ui.DesktopView] translates a `KeyEvent` late, because
- * only the `KeyEvent` knows which character a physical key produced under the layout actually
- * installed. A drawn key has no layout to consult and no character to be told about — the glyph
- * printed on it *is* the promise — so it carries the keysym it means and nothing has to be
- * recovered later.
+ * Keysyms rather than Android key codes, the opposite of every other input path in Box:
+ * [DesktopView][dev.localagent.workstation.ui.DesktopView] translates a `KeyEvent` late because
+ * only it knows which character a physical key produced under the installed layout. A drawn key
+ * has no layout to consult — the glyph printed on it *is* the promise — so it carries the keysym
+ * it means and nothing has to be recovered later.
  *
  * @param width in units of one alphabetic key.
  * @param modifier non-zero for a latching modifier key: the [Mod] bit it contributes.
  * @param shifted the glyph and keysym this key means while Shift is on. Null for keys that mean
- * the same thing either way, and derived for letters — see [KeyboardLayout].
+ * the same either way, and derived for letters — see [KeyboardLayout].
  */
 internal data class Key(
     val label: String,
@@ -105,42 +104,32 @@ internal class Layout(
 /**
  * A US QWERTY layout built for driving a Debian desktop rather than for typing prose.
  *
- * What that changes, against the keyboard a phone already has: Escape, Tab, Control, Alt, Super,
- * the arrows, the function row and both mouse buttons are discrete keys that are always on screen.
- * Every one of them is load-bearing here — Control for the terminal that is most of what the guest
- * is for, Escape and Tab for the editors in it, Super and the pointer buttons for Openbox, whose
- * root menu is the only way to launch anything and which opens on button 3. A stock IME has none
- * of them, and `Ctrl+C` matters in this window far more than autocorrect does.
+ * Escape, Tab, Control, Alt, Super, the arrows, the function row and both mouse buttons are
+ * discrete keys always on screen. Each is load-bearing: Control for the terminal the guest is
+ * mostly for, Escape and Tab for the editors in it, Super and the pointer buttons for Openbox,
+ * whose root menu is the only way to launch anything and opens on button 3.
  *
- * It comes in two shapes, because the two are wanted for different reasons and neither compromise
- * serves the other:
+ * Two shapes, neither a compromise of the other:
  *
- * - **Whole** — every row [WHOLE_UNITS] wide, running edge to edge. The biggest keys the screen can
- *   give, and the default.
- * - **Split** — each half [HALF_UNITS] wide, pinned to its own edge with a gutter of nothing
- *   between them, so the inner columns come out from under the middle of the screen and land under
- *   the thumbs. The halves have to be the same width or the columns won't line up down the rows,
- *   which is what the duplicated 6, Y, H, N and space pay for — and those duplicates double as the
- *   keys neither thumb should have to cross the gutter for. The gutter costs key width, so split
- *   keys are shorter across and [SPLIT_ASPECT] makes the height back: a narrower key that's taller
- *   is still a target.
+ * - **Whole** — every row [WHOLE_UNITS] wide, edge to edge. The biggest keys the screen allows.
+ * - **Split** — each half [HALF_UNITS] wide, pinned to its edge, so the inner columns come out
+ *   from under the middle of the screen and land under the thumbs. The halves must be equal width
+ *   or the columns will not line up down the rows, which is what the duplicated 6, Y, H, N and
+ *   space pay for — and those duplicates double as the keys neither thumb should cross for.
  *
  * **The gutter is a variable, not a constant, and that is what lets the keyboard be resized.** A
- * keyboard given less height than it wants has to give up something, and the usual answer — keep
- * the full width and squash the rows — is the worst one: keys twice as wide as they are tall are
- * harder to hit, not easier, and they look like a mistake. So the keys keep their shape and lose
- * width instead, and the width they lose goes into the gutter. Drag the bar above the keyboard down
- * and the halves walk apart. [GUTTER_UNITS] is only where a keyboard split by choice rather than by
- * squeeze starts.
+ * keyboard given less height than it wants must give something up, and the usual answer — keep the
+ * width, squash the rows — is the worst: keys twice as wide as tall are harder to hit, not easier.
+ * So keys keep their shape and lose width, and the lost width becomes gutter. [GUTTER_UNITS] is
+ * only where a keyboard split by choice rather than by squeeze starts.
  *
- * The shape the keys keep is [KEY_ASPECT] — roughly square, the same shape they have when the
- * keyboard is whole — and not the taller [SPLIT_ASPECT]. Down at the small end of the drag it is
- * *height* that is scarce and width that is going spare, so a key is never made narrower than it is
- * tall to feed a gutter that is already wider than either half needs. [SPLIT_ASPECT] is the cap at
- * the other end, where the width is what's short.
+ * The shape kept under the drag is [KEY_ASPECT], roughly square — not the taller [SPLIT_ASPECT].
+ * At the small end *height* is what is scarce and width is going spare, so a key is never made
+ * narrower than it is tall to feed a gutter already wider than either half needs. [SPLIT_ASPECT]
+ * caps the other end, where width is short.
  *
- * The arrow cluster lives inline at the end of the bottom row, the way a 60% keyboard does it — an
- * inverted T would cost a whole row of height that the guest's screen is paying for.
+ * The arrows sit inline at the end of the bottom row, as a 60% keyboard does it — an inverted T
+ * would cost a whole row of height the guest's screen is paying for.
  */
 internal object KeyboardLayout {
 

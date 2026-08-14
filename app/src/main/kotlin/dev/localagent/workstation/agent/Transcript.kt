@@ -224,16 +224,14 @@ class TranscriptBuilder(
                 put(TranscriptItem.User("user:${event.eventId}", event.at, event.text, event.attachments))
                 /*
                  * Someone said something, so the agent is working — whether or not the harness
-                 * gets around to saying so.
-                 *
-                 * Not a guess dressed up as a fact: between a turn being handed over and the
-                 * first thing that comes back there can be a long silence, and drawing an idle
-                 * conversation across it is the version that is actually wrong. A harness that
-                 * does narrate its turns overwrites this with something better a moment later.
+                 * gets around to saying so. Between a turn being handed over and the first thing
+                 * back there can be a long silence, and drawing an idle conversation across it is
+                 * the version that is actually wrong; a harness that does narrate overwrites this
+                 * a moment later.
                  *
                  * Only from a standstill. `Working`, `Thinking` and `AwaitingPermission` all say
-                 * more than this does, and a message typed while an agent is mid-task -- which
-                 * Box allows, and queues -- must not flatten one of those.
+                 * more than this does, and a message typed while an agent is mid-task — which Box
+                 * allows, and queues — must not flatten one of those.
                  */
                 if (activity == AgentActivity.Idle || activity == AgentActivity.Ended) {
                     activity = AgentActivity.Thinking()

@@ -8,14 +8,13 @@ import java.util.UUID
  * The note a closed box leaves for the process that opens it next.
  *
  * A suspended guest cannot be held in memory: QEMU can only be initialised once per process, so
- * saving the VM means ending the process that hosted it, and `:computer` retires. Everything the
- * next process needs to know therefore has to survive on disk — which snapshot to load, and
- * whether it still belongs to the image that is installed.
+ * saving the VM means ending the process that hosted it. Everything the next process needs has to
+ * survive on disk — which snapshot to load, and whether it still belongs to the installed image.
  *
  * The identity check is the one that matters. The snapshot lives *inside* the guest's qcow2 disks,
- * so replacing those disks — an app update carrying a newer image, or a reinstall — leaves a note
- * pointing at a snapshot that no longer exists, or worse, at one taken from a different Debian.
- * A note that does not name the installed image is ignored and the box boots cold.
+ * so replacing those disks leaves a note pointing at a snapshot that no longer exists, or worse at
+ * one taken from a different Debian. A note that does not name the installed image is ignored and
+ * the box boots cold.
  */
 internal data class SuspendedVm(
     val tag: String,

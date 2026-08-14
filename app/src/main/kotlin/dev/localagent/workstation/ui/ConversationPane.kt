@@ -163,17 +163,14 @@ fun ConversationPane(
         /*
          * One strip, ranked — not a stack.
          *
-         * These were drawn one under another, and two of them together pushed the conversation a
-         * fifth of the way down a 1384px pane with neither dismissable. They are also not equally
-         * urgent, and stacking them said they were. The order below is "what most stands between
-         * the user and the thing they came here to do": no credential beats no computer beats an
-         * agent stopped waiting to be answered beats a dropped connection beats a standing
-         * setting. The first two are Box being unusable, the third is work that has actually
-         * halted, and the last two are noise the user can do nothing about.
+         * Drawn one under another, two of these pushed the conversation a fifth of the way down a
+         * 1384px pane with neither dismissable, and stacking them said they were equally urgent.
+         * The order is what most stands between the user and what they came to do: no credential,
+         * no computer, an agent stopped waiting to be answered, a dropped connection, a standing
+         * setting. The first two are Box being unusable; the third is work that has halted.
          *
-         * Each condition is spelled out rather than left to the banner's own early return,
-         * because a `when` that picks a branch which then draws nothing would silently hide the
-         * banner underneath it.
+         * Each condition is spelled out rather than left to the banner's own early return: a
+         * `when` that picks a branch which then draws nothing silently hides the one underneath.
          */
         val connectionTrouble = state.computerReady &&
             state.connection !is SessionConnection.Live &&
@@ -543,16 +540,12 @@ private fun TranscriptList(
     /*
      * A stack, with the pill floating over the transcript.
      *
-     * It had its own lane for a while, to be sure it never covered a word of the conversation, and
-     * that cost more than it saved: a strip of the pane appearing and disappearing shoved every
-     * line of the transcript up and back down as the user scrolled, and it read as a piece of
-     * furniture rather than a control.
-     *
-     * Nothing is reserved at the end of the list for it either, which would be paying the same
-     * price in a quieter way — a permanent band of empty pane under the newest message, bought to
+     * It had its own lane for a while, and that cost more than it saved: a strip of the pane
+     * appearing and disappearing shoved every line up and back down as the user scrolled, and it
+     * read as furniture rather than a control. Reserving space at the end of the list is the same
+     * price paid more quietly — a permanent band of empty pane under the newest message, bought to
      * protect a spot the pill is never in. It is only up while the transcript is scrolled *away*
-     * from its end, so the line it floats over is always somewhere in the middle: the newest
-     * message is the one thing it cannot land on.
+     * from its end, so the newest message is the one thing it cannot land on.
      */
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -624,12 +617,9 @@ private fun TranscriptList(
  *
  * It exists while the user has scrolled away from the end, which is exactly when the transcript
  * stops following on its own; the pair is one behaviour. Quiet by design: the same surface and
- * outline as a tool card, because it is a way to move, not a thing that happened.
- *
- * It floats over the transcript rather than taking a lane of its own. A lane never covers a word,
- * but it also pushes the whole conversation up and down as it comes and goes, which is a much
- * larger movement than the thing it was protecting; the list reserves room at its end instead, so
- * what the pill sits over is the padding under the newest message.
+ * outline as a tool card, because it is a way to move, not a thing that happened. It floats rather
+ * than taking a lane or reserving room at the end of the list — see the stack in [TranscriptList]
+ * for why both of those cost more than they save.
  *
  * The dot is the working indicator for a scrolled-back reader. The activity line trails the
  * transcript and is therefore off screen precisely when this is up, so an agent halfway through a
@@ -1161,16 +1151,15 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
 /**
  * What the agent has to ask about, on the composer where the asking happens.
  *
- * Deliberately here rather than in the header's overflow menu, where it started: it is the answer to
- * "stop asking me about this", which is a thing people want *while* being asked, and a setting
- * nobody finds is a setting that turns into fatigue at the sheet instead. The label lives in the
- * menu; the trigger is an icon, because the composer's row is not where a sentence fits.
+ * Not in the header's overflow menu, where it started: "stop asking me about this" is a thought
+ * people have *while* being asked, and a setting nobody finds turns into fatigue at the sheet
+ * instead. The label lives in the menu; the trigger is an icon, because the composer's row is not
+ * where a sentence fits.
  *
  * It is also the *only* place unsupervised mode is shown, and the caution sign beside the icon is
- * what carries that. A banner said the same thing in a whole strip above the composer, on every
- * screen, forever — but nothing turns this on by accident: the user opened this menu and picked
- * the row that says "Nothing stops". Once told, they do not need telling again in the space the
- * conversation was using; they need to be able to see, at a glance, which mode is in force.
+ * what carries that. A banner said it in a whole strip above the composer, forever — but nothing
+ * turns this on by accident, so once told, the user needs to see which mode is in force at a
+ * glance, not to be told again in the space the conversation was using.
  */
 @Composable
 private fun ModeControl(

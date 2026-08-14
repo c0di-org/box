@@ -6,19 +6,17 @@ import org.json.JSONObject
 /**
  * The harness wire format, translated into Box's event model.
  *
- * A harness in the guest writes one JSON object per line describing what it is doing, in Box's
- * vocabulary rather than its own. This is the whole harness-agnostic boundary: a Cursor harness is
- * a different program in the guest emitting these same lines, and nothing here — or above here —
- * learns a second dialect.
+ * A harness in the guest writes one JSON object per line in Box's vocabulary rather than its own.
+ * This is the harness-agnostic boundary: a Cursor harness is a different program emitting these
+ * same lines, and nothing at or above this point learns a second dialect.
  *
  * Two properties the rest of the app leans on:
  *
- *  - **Unknown is ignorable.** A line this build does not recognise returns null rather than
- *    throwing. A guest image is upgraded independently of the APK, so a newer harness emitting a
- *    newer event must degrade to silence, never to a crash.
- *  - **Ids are positional.** [eventId] is derived from the line's ordinal in the log, so replaying
- *    the same log produces the same ids. `AgentBackend.events` promises that collecting twice
- *    yields the same prefix, and that promise is what restores a transcript after process death.
+ *  - **Unknown is ignorable.** An unrecognised line returns null rather than throwing. A guest
+ *    image upgrades independently of the APK, so a newer harness must degrade to silence.
+ *  - **Ids are positional.** [eventId] comes from the line's ordinal in the log, so replaying a log
+ *    produces the same ids — which is what makes `AgentBackend.events`' same-prefix promise, and
+ *    therefore transcript restoration after process death, hold.
  */
 internal object HarnessWire {
 

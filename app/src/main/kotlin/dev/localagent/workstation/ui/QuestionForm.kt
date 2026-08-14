@@ -37,16 +37,15 @@ import dev.localagent.workstation.agent.Question
 /**
  * The form an agent's question is answered on, wherever it is drawn.
  *
- * It began life inside the permission sheet, because a question is answered *through* the
- * permission result and the sheet was the surface that got to say yes. It is here instead because
- * the sheet stopped being the surface: a question stops the work either way, so a card in the
- * transcript is already the interruption — putting a modal on top of it interrupts the same person
- * twice for the same reason. The transcript is where the question was asked and where the answer
- * belongs, next to whatever the agent said just before it.
+ * It began inside the permission sheet, because a question is answered *through* the permission
+ * result and the sheet was the surface that got to say yes. It is here because the sheet stopped
+ * being that surface: a question stops the work either way, so a card in the transcript is already
+ * the interruption and a modal on top interrupts the same person twice for the same reason. The
+ * transcript is where the question was asked and where the answer belongs.
  *
- * Nothing here decides anything. The buttons and the round trip stay with the card; this is the
- * options, the ticks and the free-text box, and it is deliberately layout-agnostic so a wider
- * window can give it more room without a second copy of the rules.
+ * Nothing here decides anything — the buttons and the round trip stay with the card. This is the
+ * options, the ticks and the free-text box, deliberately layout-agnostic so a wider window can give
+ * it more room without a second copy of the rules.
  */
 
 /**

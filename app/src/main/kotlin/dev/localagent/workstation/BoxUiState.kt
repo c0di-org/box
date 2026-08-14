@@ -80,20 +80,19 @@ data class UiNotice(val id: Long, val message: String)
 /**
  * A message that has been sent but not yet taken by a harness.
  *
- * [sessionId] is null for the very first message of a conversation, which is typed before the
- * session it starts has an id. It is filled in as soon as the session exists — without that, the
- * act of selecting the new conversation would drop the message the user just typed.
+ * [sessionId] is null for the first message of a conversation, typed before the session it starts
+ * has an id, and is filled in as soon as the session exists — without that, selecting the new
+ * conversation would drop the message just typed.
  *
- * [heldForSignIn] separates the two reasons a message can be sitting here, and they are not the
- * same promise. An ordinary queued message is already with the backend and will run itself when the
- * guest can take it; a held one has deliberately not been handed over, because handing it to a box
- * with no credential spends it — the agent answers "Box is not signed in yet" and the user has to
- * type it again. Held messages are the ones a successful sign-in has to go back and send.
+ * [heldForSignIn] separates the two reasons a message sits here, which are not the same promise. An
+ * ordinary queued message is already with the backend and runs itself when the guest can take it; a
+ * held one has deliberately not been handed over, because handing it to a box with no credential
+ * *spends* it — the agent answers "Box is not signed in yet" and the user retypes. Held messages
+ * are what a successful sign-in goes back and sends.
  *
- * [attachments] are here rather than left on the composer because a held message outlives the
- * composer it was typed into. They are cleared from the composer the moment the message is queued —
- * a second tap must not send them twice — so this is the only copy, and without it a photo attached
- * before signing in would arrive as a turn about a file that was never mentioned.
+ * [attachments] live here rather than on the composer because a held message outlives the composer
+ * it was typed into, and they are cleared from the composer as soon as the message is queued so a
+ * second tap cannot send them twice. This is the only copy.
  */
 data class QueuedPrompt(
     val sessionId: String?,

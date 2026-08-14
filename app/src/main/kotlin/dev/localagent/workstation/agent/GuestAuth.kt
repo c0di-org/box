@@ -14,24 +14,20 @@ import org.json.JSONObject
  *
  * The guest cannot open a browser and the phone cannot run the CLI, so the sign-in is brokered: the
  * harness runs Claude Code's own OAuth handshake in the VM and reports the URL, Box opens it in the
- * phone's browser, and the code the user gets back is handed to the still-running handshake.
+ * phone's browser, and the code that comes back is handed to the still-running handshake.
  *
  * **This does not drive `claude auth login`, and must not be changed back to.** That command prints
  * the URL but then waits only on a loopback HTTP listener meant for a browser on the same machine;
- * the pasted code goes to a different entry point it never wires to stdin. A code written to its
- * stdin is read by nobody and the process hangs until it is killed — the flow cannot complete. The
- * harness uses the SDK's control protocol instead, which is the same handshake Claude Code's own
- * login screen uses. See `runAuth` in `box-claude-harness.mjs`.
+ * the pasted code goes to a different entry point it never wires to stdin, so a code written to its
+ * stdin is read by nobody and the process hangs until killed. The harness uses the SDK's control
+ * protocol, the same handshake Claude Code's own login screen uses — see `runAuth` in
+ * `box-claude-harness.mjs`.
  *
- * Three things this deliberately does *not* do:
- *
- *  - **Nothing is persisted.** It runs as an ephemeral session, so the exchange is never written
- *    to a log. The resulting credential is written by Claude Code itself, inside the guest
- *    filesystem, on this device. It never touches the app's storage or the event stream.
- *  - **Nothing is parsed too precisely.** The URL arrives as a field in a structured event rather
- *    than being scraped out of prose, so a change in CLI wording cannot break it.
- *  - **Box never handles the credential.** The user authorises in their own browser and pastes a
- *    code. Box carries that code to a process and forgets it.
+ * Three things this deliberately does not do: **nothing is persisted** (an ephemeral session, so
+ * the exchange is never logged; the credential is written by Claude Code itself inside the guest);
+ * **nothing is parsed too precisely** (the URL is a field in a structured event, not scraped from
+ * prose, so CLI wording cannot break it); and **Box never handles the credential** — it carries a
+ * code to a process and forgets it.
  */
 class GuestAuth {
 

@@ -109,16 +109,14 @@ data class ConnectOutcome(
 /**
  * Ask, or don't.
  *
- * The three values are the Claude Agent SDK's own permission modes under Box's names, and [wire]
- * is what the harness passes through to it — so this is a translation, not a policy Box invents on
- * top of one. That matters for what it does *not* promise: [Everything] is the agent's own bypass,
- * so Box stops seeing permission requests rather than answering them, and the tool cards in the
- * transcript become the only record of what was done.
+ * The three values are the Claude Agent SDK's own permission modes under Box's names, and [wire] is
+ * what the harness passes through — a translation, not a policy invented on top of one. That is
+ * what [Everything] does *not* promise: it is the agent's own bypass, so Box stops seeing
+ * permission requests rather than answering them, and the tool cards become the only record.
  *
- * Whichever is chosen, the choice is visible while it is in force — the composer's mode control
- * carries a caution sign for as long as anything but [Ask] is set. A box that is silently
- * approving everything looks exactly like a box that has nothing to approve, and that is the one
- * confusion this setting must never cause.
+ * The choice is visible while in force — the composer's mode control carries a caution sign for
+ * anything but [Ask]. A box silently approving everything looks exactly like one with nothing to
+ * approve, and that is the confusion this must never cause.
  */
 enum class AgentPermissionMode(val wire: String) {
     /** The default, and the reason the permission sheet exists. */
