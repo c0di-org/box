@@ -197,12 +197,26 @@ Two failure modes that look like nothing at all:
 
 ## Why it's slow
 
-QEMU runs under TCG, not KVM — Android doesn't grant HYP mode, so an arm64 guest on an
-arm64 host is still fully emulated. `systemd-udev-trigger` needs ~92 s to coldplug the
-virtual hardware, just past systemd's 90 s `DefaultDeviceTimeoutSec`; losing that race
-fails `dev-vdb.device`, then `workspace.mount`, then `local-agentd.service`, while the
-console still looks like a clean boot. `guest/build-image.sh` raises the device timeout to
-300 s and masks boot-time maintenance units for exactly this reason.
+QEMU runs under TCG, not KVM, and on this hardware there is no alternative to go looking
+for. The reason is not that Android withholds a permission: **`/dev/kvm` does not exist on
+the Fold 7 at all**, because the SoC's hypervisor is Qualcomm's Gunyah rather than pKVM.
+The probe logged at every start says so directly — `open=failed errno=2` — and `/dev/gunyah`
+is what is there instead, which no QEMU release has a backend for. AVF is no way round it
+either: this device reports `ro.boot.hypervisor.vm.supported` empty, so it runs protected
+VMs only and cannot boot our kernel, and it ships Google's Terminal app disabled. The
+bootloader is locked with no OEM unlock, so root cannot change any of this. An arm64 guest
+on an arm64 host is fully emulated here, permanently.
+
+`systemd-udev-trigger` needs ~92 s to coldplug the virtual hardware at two processors, just
+past systemd's 90 s `DefaultDeviceTimeoutSec`; losing that race fails `dev-vdb.device`, then
+`workspace.mount`, then `local-agentd.service`, while the console still looks like a clean
+boot. `guest/build-image.sh` raises the device timeout to 300 s and masks boot-time
+maintenance units for exactly this reason.
+
+Boot cost is dominated by processor *count*, not by translation throughput — see
+[GuestSizing.MAX_PROCESSORS] for the measured ladder. Much of the tail is systemd waiting on
+device jobs rather than computing (`Job dev-ttyAMA0.device/start running (1min 4s / 5min)`),
+which is why more vCPUs cannot help it and each extra one makes it worse.
 
 Measured tap-to-Ready on a Galaxy Z Fold 7 (SM-F966U1, Android 16): **~170 s** on the
 agentd-v2 image — 171 s cooled, 168 s on a first cold provision, 252 s with the SoC hot
