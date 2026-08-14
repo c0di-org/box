@@ -121,6 +121,70 @@ every app update and any edit you make here is lost — copy it into `/workspace
 before changing anything. And the QEMU shared objects under `runtime-qemu/.../jniLibs`
 are not included; they ship in the APK instead.
 
+## Showing someone what is inside the box
+
+Some people arrive here by tapping a suggestion — *"Show me what’s inside the box"* — rather
+than by typing a task. That is usually the first minute anyone has ever spent with Box, and it
+is a real request, not a demo: they want to know what they just installed and what it is for.
+
+Answer it by **looking**, never by reciting this file. Everything worth telling them is
+readable from in here, and a claim you actually checked is the whole difference between this
+and a brochure. Run the commands, and let what comes back be the answer:
+
+```bash
+uname -a; nproc; free -h            # an ARM64 Linux machine, emulated, on their phone
+cat /etc/os-release                 # a real Debian, not a sandbox pretending to be one
+cat /usr/src/box/BUILD-INFO         # the commit of Box you are running inside
+```
+
+The last one is the part people do not expect. You are holding the source of the app drawing
+the screen they are reading — so say which commit it is, and that you can read it.
+
+Keep this short. Three or four commands and a few sentences, not a tour of the filesystem.
+The point lands or it does not; length does not help it.
+
+### Then ask them what to build
+
+Do not pick for them, and **do not ask in prose.** Call the `AskUserQuestion` tool — once, with
+one question — to ask what the small thing you build together should be *about*.
+
+The tool rather than a sentence, because on a phone that difference is most of the interaction.
+Asked in prose, the question is one they answer by typing into a composer with a keyboard over
+half the screen; asked with the tool, it is options they can tap plus a free-text box for the
+answer you did not think of, and it holds your turn open until they reply. Observed on hardware
+on 14 Aug 2026: this step was written as "use `AskUserQuestion`", the agent asked in prose
+instead, and the person typed their answer out by hand. It reads as fine from in here and is
+worse for them, which is why this paragraph is longer than the instruction it is protecting.
+
+Offer a few concrete starting points. The free-text answer is the good one; the options are only
+there for someone who does not yet know what to ask a computer for.
+
+Ask it as a question about *them* — something they like, something they are working on,
+something they would want a page about — rather than a menu of web-page genres. The answer is
+supposed to make the result theirs.
+
+### Then build it, and keep it small
+
+One page, written by hand, served from the machine they are looking at:
+
+```bash
+mkdir -p /workspace/tour && cd /workspace/tour   # write index.html here
+python3 -m http.server 8000                      # in the background, so it keeps serving
+```
+
+Start that server in the background and let it bind before you `show` the port — `show` checks
+that something is really listening and refuses otherwise, and a server that died with the shell
+that started it is the one way this last step fails in front of them.
+
+**Do not run `npm install`, and do not reach for a framework.** This machine is fully emulated
+and single-core; a dependency tree is minutes of watching nothing happen, on the one occasion
+where nothing happening reads as the product being broken. `python3` is already here and needs
+no network. One hand-written HTML file with its CSS inline is finished before a package manager
+would have finished resolving, and it is the thing they can actually see.
+
+Then stop. Tell them the page is theirs to change, that they can ask you to change it, and
+leave it there. A first turn that keeps going is a first turn nobody finishes reading.
+
 ## GitHub
 
 Whether this box can reach GitHub is not something to work out from a file. `git` and `gh` are
