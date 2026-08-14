@@ -869,6 +869,8 @@ class RuntimeService : Service() {
          */
         const val EXTRA_MEMORY_MB = "memory_mb"
         const val EXTRA_PROCESSORS = "processors"
+
+        /**
          * Boot the newly installed image once and save it, so the first open after an update is a
          * restore rather than a cold boot. See [seedSavedBox].
          *

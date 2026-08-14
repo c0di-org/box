@@ -27,6 +27,20 @@ interface AgentBackend {
     suspend fun setPermissionMode(mode: AgentPermissionMode)
 
     /**
+     * Which model the harnesses answer with.
+     *
+     * Shaped like [permissionMode] because it is the same kind of fact: one setting for the box
+     * rather than one per conversation. A per-conversation model would be defensible — different
+     * tasks deserve different models — but it is not what "only one agent" currently means, and a
+     * setting that is box-wide until the first person asks otherwise is the cheaper thing to be
+     * wrong about.
+     */
+    val agentModel: StateFlow<AgentModel>
+
+    /** Applies to every session, running and future, and survives the app being killed. */
+    suspend fun setAgentModel(model: AgentModel)
+
+    /**
      * What Box is being read on right now, told to every session and re-told whenever it changes.
      *
      * Like [setPermissionMode] in shape and for the same reason: it is one fact about the box as a
@@ -144,6 +158,52 @@ enum class AgentPermissionMode(val wire: String) {
         this == Ask -> false
         this == AcceptEdits -> ask is PermissionAsk.EditFile
         else -> true
+    }
+}
+
+/**
+ * Which model answers, named exactly rather than by tier.
+ *
+ * [wire] is a full model id and not an alias like `opus`, which is the correction that matters:
+ * an alias resolves to one model per family, so a person who wants *this* Opus rather than the
+ * newest one has no way to say so, and — worse — cannot see which one they are getting. The whole
+ * question this control exists to answer is "am I on 4.5 or 5", and an alias is precisely the
+ * thing that hides it.
+ *
+ * The usual objection to pinned ids is that they go stale. They cannot drift *silently* here: the
+ * Claude Code that resolves them is baked into the guest image, and the image is built from this
+ * same tree, so a rebuild that teaches the guest a new model is a build that also ships this list.
+ * They rot together or not at all.
+ *
+ * Ordered as offered, most capable first. Cost falls with the family and not within it —
+ * [Opus45] bills at the same rate as [Opus5], which is worth saying on the control rather than
+ * leaving someone to pick the older model as a saving it is not.
+ */
+enum class AgentModel(val wire: String, val label: String, val summary: String) {
+    /** The default: the current Opus, and what Box is designed around. */
+    Opus5("claude-opus-5", "Opus 5", "Best at long, complicated work"),
+
+    /** Kept because "the one I had yesterday" is a real thing to want after a model changes. */
+    Opus45("claude-opus-4-5", "Opus 4.5", "The older Opus. Costs the same as Opus 5"),
+
+    /** The first step that actually costs less: near-Opus on code, at Sonnet's rate. */
+    Sonnet5("claude-sonnet-5", "Sonnet 5", "Nearly as capable, and cheaper"),
+
+    /** For short, well-specified things where waiting is the cost that matters. */
+    Haiku45("claude-haiku-4-5", "Haiku 4.5", "Cheapest and fastest, for simple work");
+
+    companion object {
+        val DEFAULT = Opus5
+
+        /**
+         * Tolerant of a name written by an older or newer Box than this one.
+         *
+         * Falls back to [DEFAULT] rather than to whatever was stored, because a model this build
+         * cannot name is one it cannot draw either, and a picker showing nothing selected is a
+         * worse answer than a picker showing the default.
+         */
+        fun ofName(name: String?): AgentModel =
+            entries.firstOrNull { it.name == name } ?: DEFAULT
     }
 }
 

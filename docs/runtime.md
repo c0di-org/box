@@ -358,8 +358,8 @@ soon as the window has measured itself, on every launch, over every record. So e
 restored conversation began life with a viewport command in its outbox, and "was anyone
 waiting" became true of all of them.
 
-Nothing needed queueing: `onAttached` already states the mode and viewport to every
-harness ahead of anything else it reads. Re-measured on the same phone, with the same
+Nothing needed queueing: `onAttached` already states the mode, model and viewport to
+every harness ahead of anything else it reads. Re-measured on the same phone, with the same
 three tasks in the list:
 
 | | Before | After |

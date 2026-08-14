@@ -47,6 +47,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.runtime.qemu.GuestSizing
 import dev.localagent.runtime.qemu.GuestSizingChoices
 import dev.localagent.workstation.BuildConfig
+import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
 
@@ -199,6 +200,7 @@ fun DiagnosticsSheet(
         processors = listOf(guestSizing.processors),
     ),
     onSetGuestSizing: (GuestSizing) -> Unit = {},
+    agentModel: AgentModel = AgentModel.DEFAULT,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presentation = statePresentation(state)
@@ -236,6 +238,7 @@ fun DiagnosticsSheet(
                 }
                 Spacer(Modifier.height(22.dp))
                 DiagnosticRow("System", "Debian / ARM64")
+                DiagnosticRow("Agent", "Claude Code • ${agentModel.label}")
                 // What each line costs the reader, not what it costs the runtime: "QEMU TCG" and
                 // "vCPU" name the implementation, and the sheet is answering "what have I got".
                 DiagnosticRow("Machine", "Emulated • " + machineSummary(guestSizing))

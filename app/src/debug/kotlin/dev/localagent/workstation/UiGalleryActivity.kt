@@ -15,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.localagent.runtime.api.FileEntry
 import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.agent.AgentActivity
+import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.ConnectService
@@ -117,6 +118,7 @@ class UiGalleryActivity : ComponentActivity() {
                     // The gallery has no runtime to keep a saved copy of.
                     onSetOpenFaster = {},
                     onSetGuestSizing = {},
+                    onSetAgentModel = model::setAgentModel,
                 )
             }
         }
@@ -421,6 +423,8 @@ private class GalleryModel(private val scope: CoroutineScope) {
     // Nothing here obeys the setting — there is no agent to skip asking. It is held so the
     // composer's mode control shows the choice, which is the only place that state is now drawn.
     fun setPermissionMode(mode: AgentPermissionMode) = mutable.update { it.copy(permissionMode = mode) }
+
+    fun setAgentModel(model: AgentModel) = mutable.update { it.copy(agentModel = model) }
 }
 
 /** What the shell tools would be showing if a box were open. */
