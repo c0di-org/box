@@ -16,7 +16,7 @@ You say:
 
 > Clone my project and get it running.
 
-Box goes quiet for a moment and then starts reporting, in plain language:
+Box goes quiet for a moment, then reports back in plain language:
 
 ```
 ✓  Cloned the project
@@ -25,9 +25,9 @@ Box goes quiet for a moment and then starts reporting, in plain language:
 ⟳  Starting the app
 ```
 
-Every one of those lines is something that actually happened on a machine. The agent
-didn't tell you how to clone the repo — it cloned it. It ran the tests and read the
-failure. The files are still there tomorrow.
+Every line is something that actually happened on a machine. The agent didn't tell you how
+to clone the repo — it cloned it, ran the tests, read the failure. The files are still
+there tomorrow.
 
 You never see a terminal, and you never need to know it's Linux.
 
@@ -43,14 +43,14 @@ You never see a terminal, and you never need to know it's Linux.
   </picture>
 </p>
 
-The commands are there if you want them — every card opens. And nothing is edited
-without the diff being put in front of you first.
+Every card opens if you want the commands. And nothing is edited without the diff being
+put in front of you first.
 
 ## Until you want to
 
-Tap **Open computer** and there it is: the desktop the agent is working on, live. Watch
-it type. Read its files. Tap **Take over** and the keyboard and mouse are yours — the
-agent's input is suspended until you hand it back. Then straight back to the conversation.
+Tap **Open computer** and there it is: the desktop the agent is working on, live. Tap
+**Take over** and the keyboard and mouse are yours — the agent's input is suspended until
+you hand it back.
 
 ## One box, many agents
 
@@ -70,8 +70,7 @@ reviews it, a third fixes the one thing that's broken — same machine, same fil
   </picture>
 </p>
 
-One box at the top, whoever is using it underneath. Opening it takes a couple of minutes
-the first time, and Box says so rather than spinning.
+Opening the box takes a couple of minutes the first time.
 
 ## The screen you happen to have
 
@@ -92,13 +91,8 @@ And this one is not an emulator at all — it is the desktop, on a desk:
   <img alt="Box in Samsung DeX on a 34-inch monitor: the agent's own Debian desktop fills the window, a terminal open on it at agent@355cb8862545:/workspace." src="docs/assets/screenshots/device/dex-computer.png" width="820">
 </p>
 
-A Galaxy Z Fold 7 in DeX, driving a 3440×1440 monitor, showing the Debian desktop that is
-running inside the phone. Taken with [`tools/device-shots.sh`](tools/device-shots.sh),
-which drives and photographs the app on real hardware in each of its three shapes.
-
-It is the same machine folded shut, and unfolded — the guest's screen is resized to whatever
-window it is being shown in, so the desktop fits the shape you are holding rather than being
-letterboxed into it:
+A Galaxy Z Fold 7 in DeX driving a 3440×1440 monitor. The same machine, folded shut and
+unfolded:
 
 <p align="center">
   <img alt="Box on the cover screen of a folded Galaxy Z Fold 7: the Debian desktop fills the phone's portrait screen, a terminal on it showing PRETTY_NAME=Debian GNU/Linux 12 (bookworm), Linux 6.1.0-50-arm64 aarch64, and nproc reporting 2." src="docs/assets/screenshots/device/phone-computer-debian.png" width="270">
@@ -106,14 +100,13 @@ letterboxed into it:
   <img alt="The same Debian session on the unfolded inner screen, the desktop filling the taller panel, with the header reading Computer, Debian, ARM64 and a You're driving pill." src="docs/assets/screenshots/device/tablet-computer-debian.png" width="470">
 </p>
 
-Debian 12 on an ARM64 kernel with two cores, in a phone, with nothing else running it. Both
-shots are the same box a few seconds apart, shut and open.
+Debian 12 on an ARM64 kernel with two cores, in a phone, its screen resized to fit each
+shape rather than letterboxed into it.
 
 ## Nothing to set up
 
-Real Linux on Android today means several apps, a tour of the developer settings, a
-command-line walkthrough, and looking all of it up again next week. Box absorbs that
-whole thing.
+Real Linux on Android today means several apps, a tour of the developer settings, and a
+command-line walkthrough you'll look up again next week. Box absorbs that whole thing.
 
 Install Box. Open it. Start chatting. No Termux, no separate X11 app, no terminal.
 
@@ -121,37 +114,28 @@ Install Box. Open it. Start chatting. No Termux, no separate X11 app, no termina
 
 ## Where this actually is
 
-Box is being built in the open, so this part is here for the same reason the rest of it
-is: nobody should have to guess which of the above already works. Checked against the
-code, not the roadmap.
+Nobody should have to guess which of the above already works.
 
 | Promise | Where it stands |
 | --- | --- |
-| **The computer** | Real. An ARM64 Debian Bookworm VM boots under QEMU in its own process, with a private control channel to `agentd` inside it. Commands run, files persist. |
-| **A real agent in it** | Real. Claude Code runs in the guest and speaks Box's event vocabulary; you sign in through the phone's browser, no API key to paste. The full OAuth round trip is not yet proven on hardware. |
-| **Open computer / Take over** | Real, confirmed on hardware 12 Aug 2026. The guest runs X and openbox, the screen reaches the app over RFB on a private socket, taking over moves the guest's own cursor and types into its shell, and the desktop is resized to fit whatever window is showing it. |
-| **Other agents** | ChatGPT and Cursor exist as a scripted demo only. One harness is wired for real. |
-| **Preview a running server** | Real. The agent offers a port, QEMU's own network stack forwards it to loopback on the phone, and it opens in a panel. Not yet confirmed on hardware. |
+| **The computer** | Real. A Debian VM boots under QEMU. Commands run, files persist. |
+| **A real agent in it** | Real. Claude Code runs inside the VM, and you sign in through the phone's browser — no API key to paste. The full sign-in round trip isn't proven on hardware yet. |
+| **Open computer / Take over** | Real, on hardware. You see the guest's desktop, and taking over moves its cursor and types into its shell. |
+| **Other agents** | ChatGPT and Cursor are a scripted demo. Only Claude Code is wired up for real. |
+| **Preview a running server** | Real, but not yet confirmed on hardware. |
 
-The honest cost: it's a fully emulated ARM64 VM, so first light takes a couple of minutes
-on a Galaxy Z Fold 7 and most of that is the guest waiting on emulated udev. See
-[docs/development.md](docs/development.md) for the measurements.
+The honest cost: it's a fully emulated VM, so the first boot takes a couple of minutes on
+a Galaxy Z Fold 7.
 
-And the pictures above, on the same terms. The phone and tablet ones are screenshots taken
-by [`tools/screenshots.sh`](tools/screenshots.sh) on emulators, of the app in this
-repository; what is in them is Box's built-in demo conversation, because an emulator has no
-VM and there is no agent in there to have really run `npm install`. Every pixel around it is
-the shipping UI.
-
-The three desktop pictures are the other kind: [`tools/device-shots.sh`](tools/device-shots.sh)
-on a real Fold 7 with a real VM behind it, so the Debian in them is actually running, the
-prompt is a shell you could type into, and the `uname` output is that machine answering.
+And the pictures. The phone and tablet ones are emulator screenshots, so the conversation
+in them is Box's built-in demo — but every pixel around it is the shipping UI. The three
+desktop ones are a real Fold 7 with a real VM behind it, so that Debian is running and the
+`uname` output is that machine answering.
 
 ## Build it
 
 Onto a plugged-in arm64 phone, in one command. The first run needs `--image`, which builds
-the guest image in a container before building the app — a few minutes, and Docker has to
-be running:
+the guest image in a container first — a few minutes, and Docker has to be running:
 
 ```bash
 ./tools/deploy.sh --image
@@ -163,9 +147,9 @@ After that, build, install and launch:
 ./tools/deploy.sh
 ```
 
-Reach for `--image` again whenever anything under `guest/` changed. It also reprovisions,
-which is the only way a new image reaches a device — an installed Box keeps its existing
-guest disk on purpose, so that an app update never wipes the user's Linux box.
+Reach for `--image` again whenever anything under `guest/` changed. It reprovisions, which
+is the only way a new image reaches a device — an installed Box keeps its guest disk on
+purpose, so an app update never wipes the user's Linux box.
 
 The tests, which need no device:
 
@@ -173,8 +157,8 @@ The tests, which need no device:
 ./gradlew :app:testStockDebugUnitTest :runtime-qemu:testDebugUnitTest && node --test guest/tests/*.mjs && python3 -m unittest discover -s guest/tests
 ```
 
-Everything else — building by hand, watching a boot from `adb logcat`, and why a rebuilt
-guest image can appear to do nothing — is in [docs/development.md](docs/development.md).
+Building by hand, watching a boot from `adb logcat`, and why a rebuilt guest image can
+appear to do nothing: [docs/development.md](docs/development.md).
 
 ## Layout
 
@@ -188,12 +172,7 @@ guest image can appear to do nothing — is in [docs/development.md](docs/develo
 | `docs/` | [Runtime design](docs/runtime.md), [UI contract](docs/ui-contract.md), [development](docs/development.md) |
 
 Two build flavors. `stock` is the product: QEMU, carrying the guest image. `avf` is the
-same app without that image, which is what makes it buildable on a machine that has never
-run the guest builder — it is what UI work and the screenshot gallery are built against.
-
-The name is a leftover. It was meant to become an Android Virtualization Framework
-backend, and that road is closed: AVF's APIs are `@SystemApi` behind
-`MANAGE_VIRTUAL_MACHINE`, which AOSP documents as not available to third-party apps, so a
-Play-distributed Box cannot get hardware virtualization. Full emulation is not a stage
-Box is passing through — see [the spike](docs/spike-android-toolchain.md) for the
-evidence.
+same app without it, so UI work builds on a machine that has never run the guest builder.
+The name is a leftover — Android doesn't offer hardware virtualization to third-party
+apps, so full emulation is not a stage Box is passing through
+([the spike](docs/spike-android-toolchain.md) has the evidence).
