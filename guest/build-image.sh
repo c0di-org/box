@@ -163,6 +163,7 @@ chroot "$ROOTFS" chown -R agent:agent /home/agent/.claude
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agentd.service" "$ROOTFS/etc/systemd/system/local-agentd.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-workspace-prepare.service" "$ROOTFS/etc/systemd/system/local-agent-workspace-prepare.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-desktop.service" "$ROOTFS/etc/systemd/system/local-agent-desktop.service"
+install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-online-cpus.service" "$ROOTFS/etc/systemd/system/local-agent-online-cpus.service"
 install -d -m 0755 "$ROOTFS/etc/modules-load.d"
 printf 'virtio_console\nvirtio_gpu\n' > "$ROOTFS/etc/modules-load.d/local-agent.conf"
 
@@ -212,6 +213,8 @@ options timeout:2 attempts:1
 EOF
 chmod 0644 "$ROOTFS/etc/resolv.conf"
 ln -sf /etc/systemd/system/local-agentd.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agentd.service"
+# See the unit: the kernel boots with maxcpus=1 and this is what undoes it once boot is over.
+ln -sf /etc/systemd/system/local-agent-online-cpus.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agent-online-cpus.service"
 ln -sf /etc/systemd/system/local-agent-desktop.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/local-agent-desktop.service"
 
 # The desktop runs as `agent`, not as root, so that anything started from it writes files the agent
