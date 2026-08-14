@@ -252,6 +252,40 @@ The order is therefore: fix the fan-out, re-measure this table, and only then de
 whether the boot that remains is worth 430 MB of somebody's phone. The open questions
 above keep their force — they are simply not the next thing to answer.
 
+### The fan-out, fixed
+
+It was not a missing guard. The guard was there and was being defeated. The outbox does
+two jobs — it queues what could not be delivered, and it is how `runtimeStateReceiver`
+decides which sessions were *waiting on the box* and must be given a harness. A turn
+earns that. A standing setting does not, and the UI broadcasts one: `setViewport` runs as
+soon as the window has measured itself, on every launch, over every record. So every
+restored conversation began life with a viewport command in its outbox, and "was anyone
+waiting" became true of all of them.
+
+Nothing needed queueing: `onAttached` already states the mode and viewport to every
+harness ahead of anything else it reads. Re-measured on the same phone, with the same
+three tasks in the list:
+
+| | Before | After |
+| --- | --- | --- |
+| Guest processes after opening the box | 3 `node`, 3 `claude` | 1 `node`, 1 `claude` |
+| SDK import, cold page cache | 67.6 s | 44.0 s |
+| Send → first reply | 283.7 s | 4.05 s |
+
+The one process that starts is the conversation being looked at, which is the intended
+behaviour. The two figures are not one experiment: the import is like-for-like — cold
+cache, one session rather than three — while the reply also had a warm CLI behind it, and
+is here only to show that a single session reaches the 4.7 s warm figure the contention
+was hiding.
+
+So the boot is now most of what is left, rather than a fifth of it, and the question this
+section opened with is live again on much better terms. What has changed alongside it is
+that keeping a box is now a choice the user can see: "Open faster" saves an idle box
+after three minutes instead of fifteen, or closes it instead of saving, and says that a
+saved copy costs about 430 MB. A seeded snapshot would extend that same setting to the
+one open it cannot help with — the first after an update — and it should be measured
+against this table rather than the old one.
+
 ## Current implementation state
 
 The storage/verification, agent protocol, guest-image source and isolated service
