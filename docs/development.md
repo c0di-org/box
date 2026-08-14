@@ -67,6 +67,12 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ANDROID
 adb install -r app/build/outputs/apk/stock/debug/app-stock-debug.apk
 ```
 
+Assembling a `stock` APK stages the guest image into it and then reads the packaged APK
+back to check the image arrived. Both halves are part of `assembleStockDebug`, so a build
+that has no image at `guest/image/out/` now fails and says to run `build-container.sh`,
+rather than handing back an APK that installs and then reports that no guest image is
+installed. The `avf` flavor carries no guest and is unaffected.
+
 ## Tests
 
 Three suites, no device needed for any of them. JVM — the app's event model and the QEMU
