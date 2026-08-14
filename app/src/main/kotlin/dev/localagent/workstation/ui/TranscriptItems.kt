@@ -967,8 +967,7 @@ private fun askOneLiner(ask: PermissionAsk): String? = when (ask) {
     // saying it here as well is the file named twice, an inch apart.
     is PermissionAsk.EditFile -> null
     is PermissionAsk.NetworkAccess -> ask.purpose ?: ask.host
-    // Nothing: the options are drawn underneath in full, with what each one means. This used to
-    // list their labels, back when the card was a trailer for a sheet.
+    // Nothing: the options are drawn underneath in full, with what each one means.
     is PermissionAsk.Questions -> null
     is PermissionAsk.Generic -> ask.description
 }

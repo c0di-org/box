@@ -836,12 +836,7 @@ private fun NoSessionState(hasTasks: Boolean) =
 private fun EmptyTranscriptState(harness: HarnessDescriptor?) =
     EmptyState(harness?.let { "Nothing yet with ${it.name}" } ?: "Nothing yet")
 
-/**
- * A symbol and a statement.
- *
- * The paragraphs that used to sit under these titles explained the product to someone already
- * inside it, next to a composer that explains itself.
- */
+/** A symbol and a statement. The composer underneath explains itself. */
 @Composable
 private fun EmptyState(title: String) {
     Column(

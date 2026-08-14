@@ -555,9 +555,8 @@ private fun SettledBox(
 /**
  * The mark, the name, how the box is, and the one way into its details.
  *
- * The LED is doing the job three lines of prose used to: a colour is read without being read, and
- * "Debian · in use" was a subtitle that said the same thing every time somebody looked at it. The
- * words survive for anyone listening rather than looking — see [boxLedState].
+ * The LED carries the machine's state as a colour, read without being read. The words survive for
+ * anyone listening rather than looking — see [boxLedState].
  *
  * The opening gets a hairline under the strip rather than a ring around the mark. At this size a
  * ring is a decoration; a bar that crosses the whole column is legible from across the desk, and

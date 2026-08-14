@@ -124,8 +124,7 @@ fun TerminalTool(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 item {
-                    // A shell banner, which is what a shell opens with. The sentence that used to
-                    // follow it explained a terminal to someone who had just opened a terminal.
+                    // A shell banner, which is what a shell opens with.
                     Text(
                         "box:${state.currentPath}",
                         color = BoxGreenLight,
