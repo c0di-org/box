@@ -44,7 +44,7 @@ shows up as a `ResourceWarning` rather than a failure.
 
 ## 3. Verification status — read this before trusting anything
 
-**Proven:** 26 guest tests, 34 host tests. The guest suite drives the shipping
+**Proven by the test suites.** The guest suite drives the shipping
 `Connection` over a real `socketpair` with real subprocesses and real PTYs:
 streaming-while-running, stdout/stderr separation, exit codes, timeouts, cancel
 killing the whole process group (asserted via a grandchild that must not survive),
@@ -54,19 +54,10 @@ acquisition. The host suite drives the shipping multiplexer and client against a
 hand-written guest: codec validation, credit accounting, cancellation, limit
 negotiation, framing-violation teardown, and every stream kind.
 
-**Not proven:** none of this has run against a booted VM. `guest/image/out/` is
-gitignored (425 MB), so `:app:assembleStockDebug` fails at `prepareStockGuestAssets`
-before touching any code — verification here used `:app:assembleAvfDebug` plus both
-test suites. Specifically unexercised:
-
-- virtio-serial port behaviour: short reads/writes, EOF timing when the host
-  detaches and reattaches, and whether the port's own buffering interacts badly with
-  a stalled writer thread.
-- the reconnect loop in `main()` across a real QEMU chardev disconnect.
-- the v1-guest detection path, which is reasoned from what a v1 `agentd` would emit,
-  not observed.
-
-The first device run should watch for exactly those three.
+The channel has since carried real work on hardware — a booted guest, agent sessions,
+file transfer and PTYs. What the test suites do not reach, and a device run should still
+be watched for, is the v1-guest detection path: it is reasoned from what a v1 `agentd`
+would emit, not observed.
 
 ## 4. Traps that cost time
 
@@ -168,12 +159,10 @@ difference is a terminal device, not what may be run.
 
 ## 7. What is not done
 
-- **The Binder surface.** `IRuntimeControl` still exposes only the buffered `exec`,
-  `listFiles` and `readFile`, so the UI cannot yet see streaming output or a PTY.
-  `ComputerRuntime.execStream` and `createPty` are complete and are what that work
-  builds on; it needs a session handle that survives across `oneway` callbacks, plus
-  a cancellation token, and PTY output will need chunking well under the ~1 MB Binder
-  transaction cap.
+- **No PTY across Binder.** `IRuntimeControl` carries buffered `exec` and file methods,
+  and streams agent sessions, but nothing exposes `ComputerRuntime.createPty` to the UI.
+  That work needs a session handle surviving `oneway` callbacks, a cancellation token,
+  and chunking well under the ~1 MB Binder transaction cap.
 - **No v1 fallback, by decision.** The app and guest image ship together. A stale v1
   guest is detected (its JSON error line puts `{` in the version byte) and fails fast
   with "older than this app" instead of retrying for three minutes. If images ever

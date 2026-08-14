@@ -50,9 +50,8 @@ import dev.localagent.workstation.agent.GuestAuth
 /**
  * What a runtime state is called, and in what colour.
  *
- * This used to carry an eyebrow, a headline and a paragraph for each of ten states — forty pieces
- * of copy explaining a virtual machine to someone who wanted to know whether they could use it.
- * The answer is a word and a colour.
+ * Someone asking about the machine wants to know whether they can use it, and the answer to that
+ * is a word and a colour rather than a paragraph explaining a virtual machine.
  */
 data class StatePresentation(val shortLabel: String, val color: Color)
 

@@ -3,20 +3,18 @@ package dev.localagent.runtime.qemu
 import org.json.JSONObject
 
 /**
- * The two moments in a session that are worth interrupting someone for.
+ * The two moments in a session worth interrupting someone for.
  *
- * This is deliberately *not* a second parser of the harness wire format. `HarnessWire` on the app
- * side owns that job and stays the only place that learns the vocabulary. This reads two type tags
- * and one line of prose each, because `:computer` needs exactly two facts — the agent finished, or
- * the agent is stuck waiting on you — and nothing else.
+ * Deliberately *not* a second parser of the harness wire format — `HarnessWire` owns that and stays
+ * the only place that learns the vocabulary. This reads two type tags and one line of prose each,
+ * because `:computer` needs exactly two facts: the agent finished, or it is stuck waiting on you.
  *
  * It lives here rather than in the UI process for the reason the whole session design exists:
  * Android kills the Compose process whenever it likes, and "start work, pocket the phone, get told
  * when it's done" has to survive that. A notification posted from the process that owns the VM is
  * posted whether or not anyone is watching.
  *
- * Unrecognised lines are silence, never an error — a guest image is upgraded independently of the
- * APK, so a newer harness must degrade rather than crash.
+ * Unrecognised lines are silence, never an error — a guest image upgrades independently of the APK.
  */
 internal object SessionSignals {
 

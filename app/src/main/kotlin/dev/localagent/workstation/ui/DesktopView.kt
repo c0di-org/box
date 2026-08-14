@@ -20,30 +20,26 @@ import dev.localagent.workstation.computer.Keysyms
 /**
  * The surface the guest's screen is drawn on, and everything a keyboard and mouse do to it.
  *
- * A plain `SurfaceView` rather than Compose drawing: the frames come from a background thread that
- * owns a `Surface` directly, and handing that thread a Compose canvas would mean marshalling every
- * frame onto the main thread for no benefit.
+ * A plain `SurfaceView` rather than Compose drawing: frames come from a background thread that owns
+ * a `Surface` directly, and handing that thread a Compose canvas would marshal every frame onto the
+ * main thread for no benefit.
  *
  * ### Two hands, one pointer
  *
- * A mouse and a finger want opposite things from this surface, and giving them the same treatment
- * gets one of them wrong.
+ * A mouse is **absolute** — it reports where it is, RFB pointer events say where the pointer is,
+ * and hover (most of what a mouse does, and what every menu in the guest reacts to) arrives with a
+ * coordinate attached.
  *
- * A mouse is **absolute**: it reports where it is, RFB pointer events say where the pointer is, and
- * the two agree for free. Hover is most of what a mouse does — it is what every menu and every
- * tooltip in the guest reacts to — and it arrives here with a coordinate already attached.
+ * A finger is **relative**, because a finger is not a pointer. Landing the cursor where the
+ * fingertip touched down puts the target under the thing aiming at it, offers no hover, and caps
+ * precision at a fingertip's width on a desktop drawn for a mouse. So touch drives a [Trackpad]:
+ * drag to move, tap to click, two fingers to right-click or scroll, tap-then-drag to drag. The
+ * cursor it steers lives in [GuestPointer], which converts accumulated deltas back into the
+ * absolute coordinate the protocol wants, so the guest is still told where the pointer is every
+ * time and can never disagree.
  *
- * A finger is **relative**, because a finger is not a pointer. Landing the cursor wherever the
- * fingertip touched down means the thing you are aiming at is underneath the thing you are aiming
- * with, there is no hover at all, and precision stops at the width of a fingertip — on a desktop
- * whose window controls and menu items were drawn for a mouse. So touch drives a [Trackpad]
- * instead: drag to move, tap to click, two fingers to right-click, two fingers to scroll,
- * tap-then-drag to drag. The cursor it steers lives in [GuestPointer], which converts the
- * accumulated deltas back into the absolute coordinate the protocol wants — so the guest is still
- * *told* where the pointer is on every event and can never disagree about it.
- *
- * Both hands move the same [GuestPointer], so switching between them mid-session is not a mode
- * change: the cursor is simply somewhere, and either one can pick it up from there.
+ * Both hands move the same [GuestPointer], so switching mid-session is not a mode change: the
+ * cursor is simply somewhere, and either can pick it up from there.
  */
 internal class DesktopView(context: Context) : SurfaceView(context), Trackpad.Host {
 
@@ -311,12 +307,11 @@ internal class DesktopView(context: Context) : SurfaceView(context), Trackpad.Ho
      *
      * A `SurfaceView` is not an editor, so Android has no reason to raise the IME over it. Claiming
      * to be a text editor and handing back a plain [BaseInputConnection] is what makes soft
-     * keyboards deliver key events here; they arrive at [onKeyDown] like any hardware key and take
-     * the same path to the guest.
+     * keyboards deliver key events here; they arrive at [onKeyDown] like any hardware key.
      *
-     * Box's own [GuestKeyboardView] is what a phone gets by default, and it does not come through
-     * here at all — it sends keysyms straight out, because it knows what it drew. This route is kept
-     * for the person who would rather use their own IME, and for anything that commits whole strings.
+     * Box's own [GuestKeyboardView] is what a phone gets by default and does not come through here
+     * at all — it sends keysyms straight out, knowing what it drew. This route is for anyone who
+     * would rather use their own IME, and for anything that commits whole strings.
      *
      * `fullscreen = false` matters: a keyboard in extract mode would cover the screen it is typing
      * into with its own text box.

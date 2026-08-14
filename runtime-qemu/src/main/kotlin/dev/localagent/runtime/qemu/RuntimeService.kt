@@ -529,16 +529,15 @@ class RuntimeService : Service() {
      * Ends `:computer` once its single QEMU run is over.
      *
      * QEMU cannot be initialised twice in a process, so a process that has hosted a VM is of no
-     * further use — keeping it alive only guarantees that the user's next "start" lands on a
-     * process that must refuse it. `START_NOT_STICKY` is what makes this safe: Android will not
-     * resurrect the service on its own, and the next start arrives as a fresh `startService`.
+     * further use — keeping it alive only guarantees the user's next "start" lands on a process
+     * that must refuse it. `START_NOT_STICKY` makes this safe: Android will not resurrect the
+     * service, and the next start arrives as a fresh `startService`.
      *
-     * The pause before the kill is the whole trick. The UI holds a binding while the computer is
-     * meant to be alive, so it is told about this process dying — and it has to be able to tell an
-     * ordinary retirement from a VM abort. The only thing separating them is that a retirement
-     * announces a settled state first, so the broadcast is given time to be delivered before the
-     * process that sent it disappears. Losing that race costs a false "the computer stopped
-     * unexpectedly"; it never costs correctness, because the computer really has stopped.
+     * The pause before the kill is the trick. The UI holds a binding while the computer is meant to
+     * be alive, so it is told about this process dying, and it has to tell an ordinary retirement
+     * from a VM abort. The only thing separating them is that a retirement announces a settled
+     * state first — so the broadcast is given time to be delivered before the sender disappears.
+     * Losing that race costs a false "the computer stopped unexpectedly", never correctness.
      */
     private fun retire() {
         Log.i(TAG, "The VM has exited; retiring this computer process")

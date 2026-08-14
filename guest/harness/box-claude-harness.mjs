@@ -3,19 +3,14 @@
  * Box's Claude Code harness.
  *
  * Runs the Claude Agent SDK inside the guest and narrates it in Box's own event vocabulary: one
- * JSON object per line on stdout, decisions and follow-up prompts as JSON lines on stdin.
+ * JSON object per line on stdout, decisions and prompts as JSON lines on stdin. That wire format
+ * is the harness-agnostic boundary — a Cursor or opencode harness is a different program emitting
+ * the same lines, never a second vocabulary for the UI to learn.
  *
- * That wire format is the harness-agnostic boundary. The Android side knows only these events, so
- * a Cursor or opencode harness is a *different program emitting the same lines* — never a second
- * vocabulary for the UI to learn. Everything Claude-specific stops here.
- *
- * Two rules the app depends on:
- *   1. The event log is append-only. Nothing is mutated; a tool call that finishes emits a second
- *      event referencing the first by callId, and streamed text re-emits under one messageId.
- *   2. A credential never appears in an event, ever. It is read from disk and handed to the SDK.
- *
- * Sub-agents live in that same flat log: a Task tool call names one, and everything the delegate
- * then says or does carries its `subAgentId`. See `attribution` and `stopSubAgent`.
+ * Two rules the app depends on: the log is append-only (a finished tool call emits a second event
+ * referencing the first by callId; streamed text re-emits under one messageId), and a credential
+ * never appears in an event. Sub-agents live in that same flat log — a Task call names one and
+ * everything it then does carries its `subAgentId`. See `attribution` and `stopSubAgent`.
  */
 
 import { createInterface } from 'node:readline';
@@ -480,15 +475,14 @@ function describeTool(name, input = {}) {
 /**
  * The tool input an answered question produces, or null when there is nothing to answer.
  *
- * `AskUserQuestion` is answered by handing its own input back with the `answers` field filled in.
- * The SDK's tool schema describes that field, in as many words, as "collected by the permission
- * component", and `PermissionResult.updatedInput` is how a permission component hands anything
- * back. So an answer is not a second round trip running alongside the permission one — it *is* the
- * permission result, and the sheet Box already has is the component in question.
+ * `AskUserQuestion` is answered by handing its own input back with `answers` filled in. The SDK
+ * describes that field as "collected by the permission component", and `updatedInput` is how a
+ * permission component hands anything back — so the answer *is* the permission result, not a
+ * second round trip beside it.
  *
- * Only keys naming a question this call actually asked survive. The app is the half of the pair
- * that can be older or newer than the guest image, and an answer keyed to a question nobody asked
- * would otherwise reach the model looking exactly like one somebody did.
+ * Only keys naming a question this call actually asked survive. The app can be older or newer
+ * than the guest image, and an answer keyed to a question nobody asked would otherwise reach the
+ * model looking exactly like one somebody gave.
  */
 function answeredInput(toolName, input, answers) {
   if (toolName !== 'AskUserQuestion') return null;
@@ -964,24 +958,19 @@ function mediaType(name) {
 /**
  * One file the agent may put in front of the user, or the reason it may not.
  *
- * An artifact is a *button*, and this is the function that decides what a button the agent labels
- * itself is allowed to open. That is why the bound is tighter than `readAttachments`' rather than
- * looser: the app draws the agent's `name`, so a row reading "report.md" that opens the GitHub
- * token is a button whose target the person cannot see before they tap it. Four rules, each
- * earning its place:
+ * An artifact is a *button* whose label the agent chooses, and the app draws that label — so a row
+ * reading "report.md" that opens the GitHub token is the thing these rules exist to refuse. Hence
+ * a tighter bound than `readAttachments`, not a looser one:
  *
- *   - **Under `/workspace`.** The workspace disk is where the agent's own work lives, which is
- *     what "look at this" is about. The system disk holds the image — identical on every device,
- *     nothing the agent made, and replaced whole on the next update.
- *   - **Resolved, not string-matched.** `realpathSync` first, because a symlink at
- *     `/workspace/report.md` pointing into `/etc` passes every prefix test ever written until the
- *     link is followed. It also settles existence: a file that is not there cannot be shown.
- *   - **Never the credential directory,** checked after resolution so a link into it is caught too.
- *   - **A regular file.** A directory or a device node is not something the file viewer can draw.
+ *   - **Under `/workspace`**, the disk the agent's own work lives on. The system disk is identical
+ *     on every device and replaced whole on the next update.
+ *   - **Resolved with `realpathSync`, not string-matched** — a symlink at `/workspace/report.md`
+ *     pointing into `/etc` passes every prefix test ever written. Resolution settles existence too.
+ *   - **Never `/workspace/.config`,** checked after resolution so a link into it is caught.
+ *   - **A regular file**, since the viewer cannot draw a directory or a device node.
  *
- * No size check. The contract puts that in one place on purpose — the panel reads the path through
- * the same reader the Files panel uses, so "too big" already has exactly one answer and a second
- * one here would be a second thing to keep right.
+ * No size check: the panel reads the path through the same reader the Files panel uses, so "too
+ * big" already has exactly one answer and a second one here is a second thing to keep right.
  */
 function showable(rawPath) {
   const given = String(rawPath ?? '').trim();
@@ -1081,19 +1070,13 @@ function listening(port) {
 /**
  * `mcp__box__show` — the agent-facing half of the artifact contract.
  *
- * Everything else about an artifact was already built: the wire, the parser, the row, the three
- * things a tap can open. What was missing was any way for an agent to start one, so on a real
- * device the whole surface was reachable only from the in-process fake.
- *
  * An in-process MCP tool rather than a line the agent is told to `echo`, because the emitting has
- * to be the harness's own: a path is refused before it becomes a button, and the agent is told
- * *why* in a tool result it can act on. Told to print its own protocol lines, an agent would be
- * writing unvalidated events into the log the app trusts, and would have no way to learn it got
- * one wrong.
+ * to be the harness's own: a path is refused before it becomes a button and the agent is told why
+ * in a result it can act on. An agent printing its own protocol lines would be writing unvalidated
+ * events into the log the app trusts, with no way to learn it got one wrong.
  *
- * One tool for all three kinds, because to the person they are one thing — a button that appears
- * in the conversation — and splitting them into three would make the model choose a mechanism
- * before it has decided what it wants to say.
+ * One tool for all three kinds, because to the person they are one thing — a button in the
+ * conversation — and three would make the model pick a mechanism before deciding what to say.
  */
 function showTool(tool, z) {
   return tool(
@@ -1186,21 +1169,16 @@ let nextConnectId = 0;
 /**
  * `mcp__box__connect` — the agent asking for an account it does not have.
  *
- * This box can clone a public repository and nothing else until somebody connects GitHub, and the
- * agent is the first to find that out: it is holding a 403 from a `git clone` the person asked
- * for. The question is what it does next, and every answer other than this one is bad. Stopping to
- * say "you need to connect GitHub" ends the turn and loses the thread. Reading a token out of a
- * file — which this box's conventions used to describe — puts a credential in the agent's context
- * and one echo away from a session log kept on disk.
+ * The agent is the first to learn this box cannot reach a repository: it is holding a 403 from a
+ * clone the person asked for. Every other answer is worse. Ending the turn to say "connect GitHub"
+ * loses the thread; reading a token out of a file puts a credential in the agent's context and one
+ * echo away from a session log kept on disk.
  *
- * So it asks, and *waits*. The SDK pauses a tool call for as long as it takes and does not time
- * out — the same property that makes a permission sheet on a pocketed phone legitimate — so the
- * person can go to GitHub, pick their repositories, and come back to an agent that carries on with
- * the same clone in the same turn.
+ * So it asks and *waits* — the SDK pauses a tool call indefinitely, the same property that makes a
+ * permission sheet on a pocketed phone legitimate — so the person can go to GitHub, pick their
+ * repositories, and come back to an agent carrying on with the same clone in the same turn.
  *
- * A tool rather than a printed line, on the `show` precedent: the harness emits the event, so the
- * app is never parsing an agent's prose for an intent, and the agent is told what happened in a
- * result it can act on.
+ * A tool rather than a printed line, on the `show` precedent above.
  */
 function connectTool(tool, z) {
   return tool(
@@ -1382,19 +1360,17 @@ const AUTH_FAILURE = /unauthor|authentication|not logged in|invalid api key|api 
 /**
  * Signing in, brokered through the phone.
  *
- * The obvious approach — spawn `claude auth login` and type the code into its stdin — cannot work,
- * and it is worth writing down why so nobody re-derives it. That command prints the manual URL but
- * then waits *only* on a loopback HTTP listener it opened for the browser to hit. The pasted code
- * is delivered by a different entry point, which the standalone command never wires to stdin. A
- * code typed at it is read by nobody and the process hangs until it is killed.
+ * Not by spawning `claude auth login`, and it is worth writing down why so nobody re-derives it:
+ * that command prints the manual URL but then waits *only* on a loopback HTTP listener it opened
+ * for the browser. The pasted code arrives by a different entry point the standalone command never
+ * wires to stdin, so a code typed at it is read by nobody and the process hangs until killed.
  *
- * The SDK's control protocol is the supported way in, and it is the same handshake Claude Code's
- * own login screen uses: ask for the URLs, hand back the code, get told who signed in. Box uses the
- * *manual* URL because the automatic one redirects to loopback inside the guest, which is not a
- * place the phone's browser can reach.
+ * The SDK's control protocol is the supported way in and the same handshake Claude Code's own
+ * login screen uses. Box takes the *manual* URL because the automatic one redirects to loopback
+ * inside the guest, which the phone's browser cannot reach.
  *
- * These three methods exist on the query object at runtime but are not in the SDK's published
- * types, so their absence is treated as a real, reportable condition rather than a crash.
+ * These three methods exist at runtime but are not in the SDK's published types, so their absence
+ * is treated as a reportable condition rather than a crash.
  */
 async function runAuth(query, cwd) {
   const session = query({
@@ -1511,23 +1487,17 @@ async function main() {
     diagnostic('no credential found up front; letting the SDK resolve');
   }
 
-  // Starting Claude Code is minutes of work on this hardware, and every second of it happens
-  // before the first prompt can be read: the 295MB SDK import below, then the CLI's own start-up
-  // behind `query()`. Measured cold on a phone-class ARM guest under full emulation: ~4.5 minutes
-  // to get through the import, ~11 more before the CLI could accept a message. Warm, the import
-  // alone is 1m51 and `claude --version` is 1m5, so this is the machine, not a fault.
+  // Starting Claude Code is minutes of work here, all of it before the first prompt can be read:
+  // the 295MB SDK import below, then the CLI's own start-up behind `query()`. Measured cold on a
+  // phone-class ARM guest under full emulation: ~4.5 min through the import, ~11 more before the
+  // CLI would accept a message. Warm, the import alone is 1m51. This is the machine, not a fault.
   //
-  // Box has no state for "not up yet". A message typed into that window is queued correctly and
-  // answered in 30 seconds once the CLI is live, but until then the transcript shows a bare
-  // "Thinking…" — indistinguishable from a wedged session, and the person watches it for a
-  // quarter of an hour on the first message after every box start. Saying which of the two it is
-  // costs a line and changes nothing else.
+  // Box has no state for "not up yet", so that window showed a bare "Thinking…" — indistinguishable
+  // from a wedged session, watched for a quarter of an hour on the first message after every start.
   //
-  // Surviving their first message is the point, and it is not luck: `Transcript` replaces the
-  // activity on a user message only from `Idle` or `Ended`, so a labelled `Thinking` set here
-  // stays up until the SDK's own first activity event overwrites it.
-  //
-  // Not during sign-in, which has its own screen and no transcript to narrate into.
+  // The label survives by design, not luck: `Transcript` replaces the activity on a user message
+  // only from `Idle` or `Ended`, so a labelled `Thinking` set here stands until the SDK's own first
+  // activity event overwrites it. Not during sign-in, which has its own screen to narrate into.
   if (!authMode) {
     emit({ type: 'activity', activity: { kind: 'starting', label: 'Getting Claude Code ready' } });
   }
@@ -1576,21 +1546,18 @@ async function main() {
       // The one option without which "Approve everything" is a lie.
       //
       // `bypassPermissions` is not a mode a session may simply be put into: the CLI refuses it
-      // unless it was *launched* with the bypass allowance, both up front and later through
-      // `setPermissionMode`, whose rejection reads "the session was not launched with
-      // --dangerously-skip-permissions". Without this, picking Approve everything left the guest
-      // in `default` and every tool call still stopped to ask — the setting appeared to take,
-      // the banner said it had, and nothing about the behaviour changed.
+      // unless the session was *launched* with the allowance, both up front and later through
+      // `setPermissionMode` ("the session was not launched with --dangerously-skip-permissions").
+      // Without this, picking Approve everything left the guest in `default` and every tool call
+      // still stopped to ask, while the banner said otherwise.
       //
-      // It is an allowance rather than a mode. On its own it changes nothing: the session still
-      // starts and stays in whatever `permissionMode` says, and the only thing this adds is that
-      // the answer the user actually chose is now a legal one.
+      // It is an allowance, not a mode: the session still runs in whatever `permissionMode` says,
+      // and all this adds is that the answer the user chose is a legal one.
       //
       // One dependency worth naming, because breaking it kills every session rather than one
       // feature: the CLI refuses to run *at all* with bypass in play as uid 0 outside a sandbox.
-      // Box's harness is started by agentd, which systemd runs as `agent` — see
-      // guest/systemd/local-agentd.service. A unit that ever gained `User=root` would take this
-      // with it.
+      // agentd runs the harness as `agent` (guest/systemd/local-agentd.service); a unit that ever
+      // gained `User=root` would take this with it.
       allowDangerouslySkipPermissions: true,
       // A question reaches a person whatever the mode is set to.
       //
@@ -1618,12 +1585,11 @@ async function main() {
         ],
       },
       includePartialMessages: false,
-      // Showing something is the one tool that is never asked about. A sheet reading "allow the
-      // agent to show you a file?" has one honest answer, and asking is worse than not: the
-      // artifact is *itself* a button nobody has to press, so the consent is the tap, and a
-      // permission prompt in front of it makes the person answer the same question twice.
-      // Neither is ever asked about. A sheet reading "allow the agent to ask you to connect
-      // GitHub?" asks the same question the connect card is about to ask, one screen earlier.
+      // Box's own two tools are never asked about, because in both cases the permission sheet
+      // would ask the question the tool is already about to ask. An artifact is *itself* a button
+      // nobody has to press, so the consent is the tap, and "allow the agent to show you a file?"
+      // in front of it makes the person answer the same thing twice. "Allow the agent to ask you
+      // to connect GitHub?" is the connect card's own question, one screen earlier.
       ...(box ? { mcpServers: { box }, allowedTools: [SHOW_TOOL, CONNECT_TOOL] } : {}),
     },
   });
@@ -1674,15 +1640,11 @@ async function main() {
           /*
            * The end of a turn, said as a turn ending.
            *
-           * This used to emit `session_ended`, which was wrong twice over. It drew a "Task
-           * finished" rule under every single reply — with `message.result`, the verbatim text
-           * of the answer directly above it, printed again underneath in small grey type — and
-           * it left the transcript marked Ended, so the *next* turn ran with no working
-           * indicator and no Stop until something else happened to narrate itself.
-           *
-           * `result` carries no summary worth showing either way: its `result` field is a copy of
-           * the final assistant message, not a description of the work, so there is nothing here
-           * to say that the conversation has not already said better.
+           * Emitting `session_ended` here was wrong twice: it drew a "Task finished" rule under
+           * every reply carrying `message.result` — the verbatim text of the answer directly
+           * above it — and it left the transcript Ended, so the next turn ran with no working
+           * indicator and no Stop. `result` is a copy of the final assistant message, not a
+           * description of the work, so there is nothing here to say the conversation has not.
            */
           if (message.subtype === 'success') {
             lastOutcome = { status: 'completed' };

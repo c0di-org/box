@@ -26,58 +26,24 @@ import kotlin.math.ceil
 import kotlin.math.hypot
 
 /**
- * The on-screen keyboard: a single custom view that draws every key and turns taps into X11
- * keysyms.
+ * The on-screen keyboard: draws every key and turns taps into X11 keysyms.
  *
- * It exists because no stock IME can drive a Linux desktop. Gboard will happily type prose, but it
- * has no Control, no Alt, no Super, no Escape, no function row and no reliable down/up pairing —
- * and `Ctrl+C` in the guest's terminal matters here far more than autocorrect does. Worse, the
- * route it reaches Box by is a lie told on purpose: [DesktopView] claims to be a text editor so
- * that Android will raise a keyboard over a `SurfaceView` at all. That trick is kept for the case
- * where somebody prefers their own IME; this is what a phone with no keyboard attached gets.
+ * No stock IME can drive a Linux desktop — no Control, Alt, Super, Escape or function row, and
+ * `Ctrl+C` in the guest's terminal matters more than autocorrect. [DesktopView] claims to be a
+ * text editor only so Android will raise an IME over a `SurfaceView` for anyone who wants one.
  *
- * Modifiers **latch**: one tap arms a modifier for the next key, a second tap within
- * [DOUBLE_TAP_MS] locks it until tapped again. Without that, no two-key shortcut is reachable with
- * one finger. They also **hold**: a finger resting on Shift while another taps letters behaves
- * exactly like a physical Shift, and lifting it ends the hold. The two gestures need no mode switch
- * — a modifier that was chorded with during its hold was a hold, one that wasn't was a tap and
- * stays armed. Caps Lock is the exception: a lock that un-latches after one letter is just a Shift
- * with the wrong label, so it only ever toggles between locked and off.
+ * Modifiers latch (tap arms for one key, double-tap within [DOUBLE_TAP_MS] locks) and hold (a
+ * resting finger behaves like a physical Shift). Caps Lock only ever toggles. The pointer keys do
+ * neither — they are held exactly as long as the finger is, so drag-on-desktop is a click-drag.
  *
- * The two pointer keys do **not** latch — they're held for exactly as long as the finger is, so
- * holding one and dragging on the desktop above is a click-and-drag.
+ * Sweeping the middle of the keys raises a [KeyboardTrackpad]; a keystroke and the start of a
+ * sweep are the same touch-down event, so a press in that zone is *staged* — drawn immediately,
+ * keysym withheld until [STAGE_HOLD_MS], a lift, a roll, or enough travel decides which it was.
+ * Staging is off for [TYPING_QUIET_MS] after any keystroke, so typing bursts pay nothing.
  *
- * ## It is also a trackpad, when you treat it like one
- *
- * Land a finger in the middle of the keys and sweep, and the middle of the keyboard becomes a
- * [KeyboardTrackpad] under your finger and stays for a few seconds after you lift. No button, no
- * mode, no layout given up for it — see that class for why it's an overlay and what happens once
- * it's up.
- *
- * The cost is paid here, and it is worth being honest about it. Telling a keystroke apart from the
- * start of a sweep is not possible at the instant of the touch-down: they are the same event. So a
- * press that lands in the arming zone is **staged** — it flashes, pops its bubble and ticks
- * immediately, exactly as any other key, but the keysym itself waits for the verdict, which arrives
- * at whichever of these comes first: the finger travels far enough to be a sweep (no key was ever
- * typed), the finger lifts (it was a tap, send it now), another finger presses anything (a roll —
- * send it now, the hands have moved on), or [STAGE_HOLD_MS] passes with the finger sitting still
- * (it's being held, send it now and let it repeat). Sitting still, not merely late: a finger that is
- * creeping across the glass is being aimed, and how fast it happens to be going is not the question.
- *
- * For a tap — which is what typing is made of — the delay is the finger's own dwell time and
- * nothing more. Even that would be a real cost on the home row, which is why staging switches
- * itself off during [TYPING_QUIET_MS] after any keystroke: mid-word, a touch in the middle of a
- * keyboard is a letter, and a pointer gesture starts from rest. Typing bursts pay nothing at all,
- * and only the first key after a pause is ever staged.
- *
- * ## Feedback is local, and deliberately so
- *
- * The guest is fully emulated — TCG, two cores — and its answer to a keystroke comes back through
- * an X server, QEMU's VNC encoder and a socket, well behind the finger. A physical keyboard gets
- * away with that because the key mechanism answers the fingertip at zero. This one has to fake the
- * same thing: every press flashes, pops a preview bubble clear of the finger, and ticks, all before
- * the keysym leaves this thread. That is what the keyboard feeling responsive is actually made of,
- * and on this machine the wire was never the slow part.
+ * All press feedback (flash, bubble, tick) happens before the keysym leaves this thread. The guest
+ * is emulated and answers well behind the finger; that local fake is what responsiveness is made
+ * of here.
  */
 @SuppressLint("ViewConstructor")
 internal class GuestKeyboardView(
@@ -311,18 +277,15 @@ internal class GuestKeyboardView(
     /**
      * Choose the shape that fits the band, and split the keyboard when whole no longer does.
      *
-     * A keyboard shorter than [preferredHeight] can't keep both its width and its key shape. Key
-     * shape wins — see [KeyboardLayout] — so the unit comes from the height we've got and the width
-     * that leaves over becomes the gutter. Squeeze it and the halves walk apart; let it back out and
-     * they close up and the keyboard is whole again.
+     * A keyboard shorter than [preferredHeight] cannot keep both its width and its key shape. Key
+     * shape wins (see [KeyboardLayout]), so the unit comes from the height available and the width
+     * left over becomes the gutter: squeeze and the halves walk apart, let it out and they close up.
      *
-     * **The key a given height justifies is the one [KeyboardLayout.KEY_ASPECT] describes, not
-     * [KeyboardLayout.SPLIT_ASPECT], and the difference is the whole of the reason a shrunk keyboard
-     * is still usable.** Sizing the key off the taller split shape makes it *narrower* than the rows
-     * are high, and it narrows further with every pixel of drag — so the small end of the range is a
-     * keyboard of vertical slivers standing next to a gutter with room to spare. Width is the
-     * dimension there is spare of down here, and spending it on the keys costs nothing but gutter
-     * nobody asked for.
+     * The key a height justifies is [KeyboardLayout.KEY_ASPECT], **not** the taller
+     * [KeyboardLayout.SPLIT_ASPECT], and that is the whole reason a shrunk keyboard stays usable.
+     * Sizing off the split shape makes keys narrower than the rows are high, and narrower again
+     * with every pixel of drag — vertical slivers beside a gutter with room to spare. Width is what
+     * is going spare down there.
      *
      * @return the gutter to use, or null to stay whole.
      */
@@ -899,14 +862,12 @@ internal class GuestKeyboardView(
      * The local half of every keystroke: the tick and the click.
      *
      * The vibrator is driven directly, through primitives where the hardware has them, because that
-     * is the only route that owns its intensity — the [HapticFeedbackConstants] path is deliberately
-     * faint and is silenced entirely by a system toggle users don't know they've set. A press ticks
-     * hard, a release ticks light — one event per edge, like the break and return of a real switch —
-     * and key repeat ticks lighter still so a held arrow key feels like it's doing something.
+     * is the only route owning its intensity — [HapticFeedbackConstants] is deliberately faint and
+     * is silenced by a system toggle users do not know they have set. Press ticks hard, release
+     * light (one per edge, like a real switch), repeat lighter still.
      *
-     * Sound rides the system keypress effects, which follow the global touch-sounds setting for free
-     * and audibly distinguish space, delete and return the way every stock keyboard does. On glass,
-     * audio is the one channel a hand can't block.
+     * Sound rides the system keypress effects, which follow the global touch-sounds setting and
+     * distinguish space, delete and return. On glass, audio is the one channel a hand cannot block.
      */
     private class Feedback(private val view: View) {
         private val audio = view.context.getSystemService(AudioManager::class.java)

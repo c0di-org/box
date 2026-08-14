@@ -15,26 +15,19 @@ import java.util.Locale
  * Where a file the user hands to the agent lands.
  *
  * One directory inside the shared folder, so it needs no transport of its own: the folder is
- * already synchronised in both directions, already appears in the phone's Files app, and already
- * exists inside the box at `/workspace/shared`. Writing here and telling the agent the guest path
- * is the whole mechanism.
+ * already synchronised both ways, already in the phone's Files app, and already inside the box at
+ * `/workspace/shared`. Writing here and naming the guest path is the whole mechanism.
  *
- * ### Why `inbox/` and not the folder itself
+ * A subdirectory rather than the folder itself, because the shared folder is a place the user
+ * keeps things and attachments are a stream of one-off files pushed at a conversation. Mixing them
+ * would fill the documents folder with screenshots named after the second they were taken, and it
+ * gives the agent an address for "the thing you just sent me".
  *
- * The shared folder is a place the user keeps things. Attachments are a stream of one-off files
- * they pushed at a conversation, and mixing the two would make the folder they use for documents
- * fill up with screenshots named after the second they were taken. A subdirectory keeps the two
- * legible from either side, and gives the agent a path it can describe: "the thing you just sent
- * me" has an address.
- *
- * ### The name a file gets
- *
- * Stamped, always, even when nothing collides. Two rules of the sync make this the cheap choice:
- * a name that exists on both sides with different content is resolved by keeping the phone's and
- * parking the other as `name.from-box`, and *nothing is ever deleted to settle it*. Sharing two
- * screenshots half an hour apart would otherwise turn `screenshot.png` into an argument. The
- * stamp is the local time to the second, which is also what makes the folder readable in the Files
- * app later — the user's own copy of what they sent, in the order they sent it.
+ * Names are stamped always, even when nothing collides. Two sync rules make that the cheap choice:
+ * a name existing on both sides with different content keeps the phone's and parks the other as
+ * `name.from-box`, and *nothing is ever deleted to settle it* — so two screenshots half an hour
+ * apart would turn `screenshot.png` into an argument. The stamp is local time to the second, which
+ * also keeps the folder readable later: the user's own copy, in the order they sent it.
  */
 object Inbox {
 

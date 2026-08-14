@@ -45,21 +45,18 @@ import kotlinx.coroutines.launch
  * The machine's screen, live.
  *
  * Two ways in and they are the same surface: the minimap in the box's header, and the computer
- * itself. The difference is only how much room it gets and whether input reaches it, because a
- * desktop that behaves differently depending on where it is drawn is two things to get right
- * instead of one. They can be on screen together — the transport paints every attached surface
- * from one connection.
+ * itself. The difference is only how much room it gets and whether input reaches it — a desktop
+ * that behaved differently by where it was drawn would be two things to get right. They can be on
+ * screen together, since the transport paints every attached surface from one connection.
  *
  * Control is deliberately not handed back here. This composable leaves the tree constantly — the
  * row scrolls off, a panel covers it — and none of that means the user has finished driving. The
  * handover belongs to leaving the computer; see `BoxViewModel.showTasks`.
  *
  * @param pointer the cursor this surface steers, shared with the on-screen keyboard so the two
- * cannot disagree about where it is. A view that is only ever looked at — the minimap — gets one
- * of its own, which nothing will ever move.
+ * cannot disagree about where it is. A view only ever looked at gets one of its own, never moved.
  * @param preview this view is a picture of the screen rather than a screen, and its size must not
- * decide the guest's. Fixed per call site, and read once when the surface first attaches. See
- * [DesktopTransport.attach].
+ * decide the guest's. Read once when the surface first attaches. See [DesktopTransport.attach].
  */
 @Composable
 internal fun DesktopSurface(
@@ -81,15 +78,14 @@ internal fun DesktopSurface(
      * *window* and not the keyboard. `BoxApp` applies `safeDrawingPadding`, which includes the IME,
      * so opening the keyboard genuinely shrinks this pane — and without this the guest would do a
      * full X mode set every time somebody started typing, moving every window inside it, to match
-     * a rectangle that is about to go away again.
+     * a rectangle about to go away again.
      *
-     * Only the *reported* height is adjusted. What is painted is still the real surface, which is
-     * why this is safe: the transport uses these numbers to decide how big the machine's screen
-     * should be, and reads the actual pixel dimensions off the `Surface` when it draws.
+     * Only the *reported* height is adjusted; what is painted is the real surface. The transport
+     * uses these numbers to size the machine's screen and reads actual pixel dimensions off the
+     * `Surface` when it draws.
      *
-     * Box's own on-screen keyboard needs none of this. It is a sibling in the layout rather than an
-     * inset, so the pane it leaves behind is the pane the guest should fill, and the mode set that
-     * follows is one the user asked for by dragging the bar.
+     * Box's own keyboard needs none of this: it is a sibling in the layout rather than an inset,
+     * so the pane it leaves is the pane the guest should fill.
      */
     val keyboard = WindowInsets.ime.getBottom(LocalDensity.current)
     val keyboardInset = remember { mutableIntStateOf(0) }
@@ -166,15 +162,14 @@ internal fun DesktopSurface(
 /**
  * The pointer a finger is steering, drawn by Box.
  *
- * The guest draws a cursor of its own and this is deliberately a second one, for the reason
- * [DesktopView] gives at length: this one is where the hand has got to, the guest's is however far
- * behind the emulated machine currently is, and the gap between them is the only honest reading
- * available of how far behind that is. With a mouse, Android's own arrow plays this part and Box
- * draws nothing at all.
+ * The guest draws a cursor of its own and this is deliberately a second one: this is where the hand
+ * has got to, the guest's is however far behind the emulated machine currently is, and the gap
+ * between them is the only honest reading of that available. With a mouse, Android's own arrow
+ * plays this part and Box draws nothing.
  *
  * A white arrow with a dark outline rather than a filled shape in one colour: it has to stay
- * findable over a terminal, over a white text editor and over a photograph, and only an outlined
- * one survives all three.
+ * findable over a terminal, a white text editor and a photograph, and only an outline survives all
+ * three.
  */
 @Composable
 private fun TouchCursor(at: Offset) {

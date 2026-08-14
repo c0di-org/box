@@ -72,17 +72,16 @@ import dev.localagent.workstation.agent.GitHubAuth
 import kotlinx.coroutines.delay
 
 /**
- * Connecting the box to GitHub, in as few decisions as this can honestly be reduced to.
+ * Connecting the box to GitHub, in as few decisions as this honestly reduces to.
  *
- * The shape of the screen follows from where the code travels. Claude's sign-in has to ask for
- * something back, so it is a form; this one hands something *out*, so it is a card with a code on
- * it and one button. Nothing here is typed unless the person chooses the escape hatch — the code
- * is on the clipboard before they have finished reading it, and the link carries it as well, so
- * the likely path from opening this sheet to being connected involves no keyboard at all.
+ * The shape follows from where the code travels. Claude's sign-in asks for something back, so it is
+ * a form; this hands something *out*, so it is a card with a code and one button. Nothing is typed
+ * unless the person takes the escape hatch — the code is on the clipboard before they finish
+ * reading it and the link carries it too, so the likely path involves no keyboard at all.
  *
- * Two steps are shown as two steps, deliberately. Authorising and choosing repositories are
- * genuinely different questions — who you are, and what this box may touch — and collapsing them
- * into one progress bar would hide the second, which is the one that is actually about trust.
+ * Two steps shown as two steps, deliberately: authorising and choosing repositories are different
+ * questions — who you are, and what this box may touch — and one progress bar would hide the
+ * second, which is the one actually about trust.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

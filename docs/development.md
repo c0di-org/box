@@ -150,9 +150,8 @@ Three things about the setup are worth knowing before changing it. It builds the
 flavor, whose only relevance here is that it carries no guest image — `stock` will not
 build without a 500 MB qcow2 that an emulator could not run anyway. The tablet is a real
 second AVD rather than a resized phone, because the layout being proven is chosen from the
-window. And the guest's desktop is deliberately left blank: the RFB path is the one part
-of Box never confirmed on hardware, and a gallery that painted a convincing Linux desktop
-would put a picture of an unfinished feature in the README.
+window. And the guest's desktop is left blank, because an emulator has no VM to draw — the
+real desktop is photographed on hardware by `tools/device-shots.sh` instead.
 
 Adding a scene means three edits: `SCENES` and `GalleryModel.enter` in
 `UiGalleryActivity.kt`, and a line in `SHOTS` in the script.

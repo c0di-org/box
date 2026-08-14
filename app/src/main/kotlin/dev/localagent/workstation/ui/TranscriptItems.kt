@@ -180,15 +180,14 @@ private fun UserBubble(item: TranscriptItem.User, modifier: Modifier = Modifier)
 /**
  * Something the user showed the agent, drawn on their own turn.
  *
- * A picture is shown as a picture. Everything else is a labelled row, in the spirit of
- * `ToolCall.Generic`: Box has no renderer for a PDF and will not pretend otherwise, but it can
- * always say what was sent and how big it was.
+ * A picture is shown as a picture; everything else is a labelled row, in the spirit of
+ * `ToolCall.Generic` — Box has no renderer for a PDF and will not pretend, but it can always say
+ * what was sent and how big.
  *
- * The thumbnail is read from the phone's copy, found from the guest path rather than stored beside
- * it — the guest path is the one the agent was told and therefore the one that has to be right.
- * When there is no file there the row still draws, which is not an error case worth hiding: a file
- * the user has since deleted from their own Files app is *gone from the phone and still in the
- * box*, and a turn that quietly lost its picture would be Box hiding that from them.
+ * The thumbnail is read from the phone's copy, found *from* the guest path rather than stored
+ * beside it, because the guest path is the one the agent was told. When there is no file there the
+ * row still draws: a file the user deleted from their own Files app is gone from the phone and
+ * still in the box, and a turn that quietly lost its picture would hide that from them.
  */
 @Composable
 internal fun AttachmentTile(attachment: Attachment) {
@@ -874,15 +873,14 @@ private fun PendingPermissionCard(
             /*
              * The whole question, answerable where it was asked.
              *
-             * A question stops the work either way -- that is what it is for -- so the card is
-             * already the interruption, and the modal that used to open over it interrupted the
-             * same person a second time about the same thing. Options with their descriptions, the
-             * multi-select rule and the free-text answer all live here now; there is nothing left
-             * behind a tap.
+             * A question stops the work either way — that is what it is for — so the card is
+             * already the interruption, and a modal over it interrupts the same person twice about
+             * the same thing. Options, descriptions, the multi-select rule and the free-text answer
+             * all live here; there is nothing behind a tap.
              *
-             * The ticks themselves are held above the list, because this row is inside a
-             * `LazyColumn` and would otherwise lose them the moment someone scrolled up to re-read
-             * the paragraph the question is about. See [AnswerStore].
+             * The ticks are held above the list, because this row is inside a `LazyColumn` and
+             * would lose them the moment someone scrolled up to re-read the paragraph the question
+             * is about. See [AnswerStore].
              */
             question?.let { asked ->
                 val form = answers.of(item.requestId)
@@ -970,8 +968,7 @@ private fun askOneLiner(ask: PermissionAsk): String? = when (ask) {
     // saying it here as well is the file named twice, an inch apart.
     is PermissionAsk.EditFile -> null
     is PermissionAsk.NetworkAccess -> ask.purpose ?: ask.host
-    // Nothing: the options are drawn underneath in full, with what each one means. This used to
-    // list their labels, back when the card was a trailer for a sheet.
+    // Nothing: the options are drawn underneath in full, with what each one means.
     is PermissionAsk.Questions -> null
     is PermissionAsk.Generic -> ask.description
 }

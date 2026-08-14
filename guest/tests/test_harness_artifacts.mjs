@@ -2,16 +2,15 @@
  * `mcp__box__show`: the agent saying "look at this", and every case where it may not.
  *
  * The offer half of the artifact contract runs entirely inside the harness — a tool the agent
- * calls, a path the harness decides about, an `artifact` line the app parses — so unlike the
- * viewport or attachment tests, the event log answers almost everything. What is pinned here:
- * each of the three kinds reaches the wire in the shape `HarnessWire` parses, every refusal is a
- * refusal *and* leaves no button behind, and the tool draws no card of its own.
+ * calls, a path the harness decides about, an `artifact` line the app parses — so the event log
+ * answers almost everything. Pinned here: each of the three kinds reaches the wire in the shape
+ * `HarnessWire` parses, every refusal is a refusal *and* leaves no button behind, and the tool
+ * draws no card of its own.
  *
  * The SDK is stubbed, including `createSdkMcpServer` and `tool`, and so is zod — the harness only
- * ever uses those to build a shape the real SDK converts, and installing 300MB to find that out
- * would make this suite untestable on a laptop. That the real 0.3.226 exports both, and that zod
- * 4.4.3 produces a schema it accepts, was checked against the published package instead; the
- * commit that added this says so.
+ * uses those to build a shape the real SDK converts, and installing 300MB to find that out would
+ * make this suite untestable on a laptop. That the real 0.3.226 exports both, and that zod 4.4.3
+ * produces a schema it accepts, was checked against the published package instead.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

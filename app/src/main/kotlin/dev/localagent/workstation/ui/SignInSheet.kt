@@ -54,15 +54,14 @@ import dev.localagent.workstation.agent.GuestAuth
 /**
  * Signing in to Claude on a phone, for a Linux computer that has no browser.
  *
- * The whole exchange is a hand-off: Claude Code's own `auth login` runs in the guest, Box lifts the
- * URL out of its output and opens it in the phone's browser, and the code the user comes back with
- * is typed into that still-running process. Box never sees the credential — Claude Code writes it
- * inside the guest — which is why this screen asks for a short code and never for a password.
+ * The whole exchange is a hand-off: the handshake runs in the guest, Box lifts the URL out and
+ * opens it in the phone's browser, and the code the user returns with goes to that still-running
+ * process. Box never sees the credential — Claude Code writes it inside the guest — which is why
+ * this screen asks for a short code and never a password.
  *
- * The raw output is shown throughout, and that is a deliberate design choice rather than a debug
- * affordance. Box matches a URL, not a sentence, because the CLI's wording moves between versions;
- * when it says something this screen has no template for, the user can still read what it said and
- * act on it instead of facing a dead end.
+ * The raw output is shown throughout by design rather than as a debug affordance. Box matches a
+ * URL, not a sentence, because the CLI's wording moves between versions; when it says something
+ * this screen has no template for, the user can still read it and act instead of facing a dead end.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

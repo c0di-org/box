@@ -6,17 +6,16 @@ import kotlin.math.exp
 /**
  * How far along opening the box is.
  *
- * The honest problem: the guest spends nearly all of its ~170 seconds inside one runtime state,
- * waiting on emulated udev, and reports nothing while it does. So there are only three real
- * checkpoints — the image was unpacked, QEMU is up, the guest agent answered — and a bar that moved
- * only on those would sit dead still for two and a half minutes.
+ * The honest problem: the guest spends nearly all of its ~170 seconds inside one runtime state
+ * waiting on emulated udev, reporting nothing. There are only three real checkpoints — image
+ * unpacked, QEMU up, guest agent answered — and a bar moving only on those sits dead still for two
+ * and a half minutes.
  *
- * What this does instead: run a clock from the moment the user pressed, against how long *this
- * phone* took last time, and let the checkpoints correct it. The checkpoints are ground truth and
- * only ever push the bar forward ([floorFor]); the clock fills in between them. Time is a guess, so
- * the curve is built to never lie in the direction that matters — it reaches 92% at the expected
- * moment and then approaches the end without arriving, because the only thing that may claim the
- * box is open is the box saying so.
+ * So a clock runs from the moment the user pressed, against how long *this phone* took last time,
+ * and the checkpoints correct it: they are ground truth and only ever push forward ([floorFor]),
+ * while the clock fills in between. Time is a guess, so the curve never lies in the direction that
+ * matters — it reaches 92% at the expected moment and then approaches the end without arriving,
+ * because only the box may claim the box is open.
  */
 data class BoxProgress(
     /** 0..1. Monotonic within one opening. Reaches exactly 1 only when the box is actually up. */

@@ -6,17 +6,16 @@ import dev.localagent.runtime.api.RuntimeState
 /**
  * What to believe when the computer process disappears.
  *
- * `:computer` is a separate process precisely so a native VM failure cannot take the UI down with
- * it — but that only helps if the UI notices. A QEMU abort kills the process between state
- * broadcasts, so the last thing Box heard is "Connecting", and without this it goes on saying
- * "Debian is up, waiting for its private control channel" forever against a process that no longer
- * exists. That was observed on hardware: five minutes of a confident progress bar and no way
- * forward except a Stop button for something already dead.
+ * `:computer` is a separate process precisely so a native VM failure cannot take the UI with it —
+ * but that only helps if the UI notices. A QEMU abort kills the process between state broadcasts,
+ * so the last thing Box heard is "Connecting", and without this it goes on saying "Debian is up,
+ * waiting for its private control channel" forever against a process that no longer exists.
+ * Observed on hardware: five minutes of a confident progress bar with no way forward.
  *
  * Not every disappearance is a failure. The computer process retires itself once its single QEMU
- * run is over, and that is announced as a state before the process ends — so a disconnect that
- * follows a settled state is the system working, and saying "the computer stopped unexpectedly"
- * there would be a lie that teaches users to ignore the message.
+ * run is over, and announces that as a state before the process ends — so a disconnect following a
+ * settled state is the system working, and crying failure there teaches users to ignore the
+ * message.
  */
 internal object ComputerLoss {
 

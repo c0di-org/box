@@ -9,22 +9,20 @@ import java.io.OutputStream
  * The guest's screen, over RFB 3.8.
  *
  * QEMU already speaks this — the prebuilt `libqemu-system-aarch64.so` has a VNC server compiled in
- * — so Box does not have to reach into QEMU's display internals to see the framebuffer. It opens a
- * Unix socket QEMU is listening on and reads pixels off it like any other client.
+ * — so Box opens a Unix socket QEMU is listening on and reads pixels off it like any other client,
+ * rather than reaching into QEMU's display internals.
  *
- * Why a protocol rather than the C display API, which this build also exports: QEMU is 5.1.0 and
- * Box has no headers matching it, so registering a `DisplayChangeListener` would mean hand-copying
- * a struct layout and hoping. RFB is versioned, documented, and cannot be silently wrong — a
- * mismatch is a decode error, not a native crash inside the process running the VM.
+ * A protocol rather than the C display API this build also exports, because QEMU is 5.1.0 and Box
+ * has no matching headers: registering a `DisplayChangeListener` would mean hand-copying a struct
+ * layout and hoping. RFB is versioned and cannot be silently wrong — a mismatch is a decode error,
+ * not a native crash inside the process running the VM.
  *
- * No Android types on purpose. Everything here is streams and integers, which is what lets the
- * whole protocol be tested against a scripted server with no device and no VM.
+ * No Android types, which is what lets the whole protocol be tested against a scripted server with
+ * no device and no VM.
  *
- * ### The framebuffer is owned, not returned
- *
- * A 1280x800 screen is a million pixels; handing back a fresh array per update would allocate 4 MB
- * per frame and spend more time in GC than in decoding. [framebuffer] is written in place and
- * [pump] reports only which part changed, so the caller repaints a rectangle rather than a screen.
+ * The framebuffer is **owned, not returned**: a 1280x800 screen is a million pixels, and handing
+ * back a fresh array per update would allocate 4 MB a frame and spend more time in GC than
+ * decoding. [framebuffer] is written in place and [pump] reports only what changed.
  */
 internal class RfbConnection private constructor(
     private val input: DataInputStream,

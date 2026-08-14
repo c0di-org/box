@@ -4,11 +4,10 @@ import android.view.Surface
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * What the UI needs from the runtime layer to show the agent's live desktop.
+ * What the UI needs from the runtime layer to show the agent's live desktop. Implemented by
+ * [VncDesktop].
  *
- * Nothing implements this yet — the display transport does not exist. It is written down here,
- * in app code, so the pane has a real shape to slot into and so the runtime side has a target:
- * frames are handed off through an Android [Surface] rather than streamed as bitmaps, because
+ * Frames are handed off through an Android [Surface] rather than streamed as bitmaps, because
  * copying 60 fps of ARGB across a process boundary would cost more than the VM does.
  *
  * The control split is the part that matters for the product. The agent drives the desktop by
@@ -33,16 +32,15 @@ interface DesktopTransport {
     /**
      * Renders guest output into [surface] until [detach].
      *
-     * More than one surface may be attached at once, and they all show the same screen. That is not
-     * a luxury: the box's header on the home column, the inline pane and the full window are three
-     * views of one machine, and on a Fold two of them are on screen together. A transport that held
-     * a single surface would have them stealing the picture from each other.
+     * More than one surface may be attached at once and they all show the same screen: the box's
+     * header, the inline pane and the full window are three views of one machine, two of them on
+     * screen together on a Fold. A transport holding a single surface would have them stealing the
+     * picture from each other.
      *
-     * @param preview a view that is only ever looked at, and must not be allowed to decide how big
-     * the guest's screen is. The minimap in the box's header is one: it is a real surface at a real
-     * size, and on a phone it is comfortably larger than a desktop pane on a small window — so
-     * counting it would resize the guest's display every time the user walked back to their tasks.
-     * [GuestScreenFit] never sees these. See [wantedGuestScreen].
+     * @param preview a view that is only looked at, and must not decide how big the guest's screen
+     * is. The header's minimap is one — a real surface at a real size, on a phone comfortably
+     * larger than a desktop pane on a small window — so counting it would resize the guest every
+     * time the user walked back to their tasks. [GuestScreenFit] never sees these.
      */
     suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int, preview: Boolean = false)
 
@@ -67,15 +65,11 @@ enum class ControlHolder { Agent, User }
 /**
  * One input the guest can be told about, in guest pixels.
  *
- * This started as `Tap`, `Drag`, `Scroll`, `Text`, `Key` — gestures, written when the desktop was
- * assumed to be something you poke at through a phone screen. A real mouse cannot be described that
- * way. Most of what a mouse does is *move with no button held*: hover states, menus opening on
- * pointer-enter, drags that begin only once a threshold is crossed. A `Tap` is already two pointer
- * events by the time it exists, and a gesture vocabulary has no way to say "the cursor is here and
- * nothing is pressed", which is the majority of what X11 wants to hear about.
- *
- * So position and button state are reported as they are, and anything higher-level is the guest's
- * to infer — which is what it does anyway.
+ * Position and button state as they are, rather than a gesture vocabulary (`Tap`, `Drag`, …). Most
+ * of what a mouse does is *move with no button held* — hover states, menus opening on
+ * pointer-enter, drags that begin only once a threshold is crossed — and a gesture vocabulary has
+ * no way to say "the cursor is here and nothing is pressed", which is the majority of what X11
+ * wants to hear about. Anything higher-level is the guest's to infer, which it does anyway.
  */
 sealed interface DesktopInput {
     /** Where the pointer is, and what is held: bit 0 left, bit 1 middle, bit 2 right. */

@@ -5,18 +5,16 @@ import dev.localagent.runtime.api.RuntimeState
 /**
  * One QEMU run per process, and the rules that follow from it.
  *
- * QEMU's `qemu_init` writes process-wide globals that `qemu_cleanup` never undoes; the first of
- * them aborts the process outright if it is called twice. So `:computer` cannot host a second VM
- * run, and "stop the computer, start it again" — an ordinary thing to do — is a native crash
- * rather than a restart.
+ * QEMU's `qemu_init` writes process-wide globals that `qemu_cleanup` never undoes, and the first of
+ * them aborts the process outright if called twice. So `:computer` cannot host a second VM run, and
+ * "stop the computer, start it again" — an ordinary thing to do — is a native crash, not a restart.
  *
- * The way out is to treat the process as the unit that gets consumed: once QEMU has exited,
- * `:computer` retires, and the next start arrives in a process that has never touched QEMU.
- * `RuntimeService` is not sticky and is started on demand, so there is nothing to resume — the
- * next `startService` simply gets a clean one.
+ * The way out is to treat the process as the unit consumed: once QEMU has exited, `:computer`
+ * retires and the next start arrives in a process that has never touched QEMU. `RuntimeService` is
+ * not sticky and is started on demand, so there is nothing to resume.
  *
- * This is deliberately a plain object over two predicates rather than a call into [NativeQemu], so
- * the policy can be tested without a JNI library.
+ * Deliberately a plain object over two predicates rather than a call into [NativeQemu], so the
+ * policy can be tested without a JNI library.
  */
 internal class QemuProcessLifetime(
     private val hasRun: () -> Boolean,

@@ -25,10 +25,9 @@ import java.io.File
  * UI process and draws straight into its own [Surface] — no frames cross a process boundary, and
  * `:computer` is not involved in drawing at all. It only had to put `-vnc` on QEMU's command line.
  *
- * That is a change from what [DesktopTransport] originally assumed, which was that `:computer`
- * would render into a Surface passed to it over Binder. It would work, but there is nothing to buy
- * with it: the pixels are already reachable from here, and a Surface handed across processes is one
- * more thing to get wrong when the UI process dies.
+ * Rendering inside `:computer` and passing the Surface over Binder would also work, and buys
+ * nothing: the pixels are already reachable from here, and a Surface handed across processes is
+ * one more thing to get wrong when the UI process dies.
  */
 class VncDesktop(
     private val socketPath: String,

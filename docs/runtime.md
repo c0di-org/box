@@ -40,6 +40,87 @@ throttles itself against the app instead of filling its heap. `AgentdClient` own
 the protocol vocabulary; `AgentdConnection` owns framing and flow control and has no
 Android dependency, so both are covered by JVM unit tests.
 
+## The machine has to be given hands and a screen
+
+Two things about `-M virt` cost a day each on the device, and neither logs a warning.
+
+**It registers no input devices at all.** QEMU's VNC server delivers RFB pointer and key events
+into QEMU's input subsystem, which routes them to registered devices; on `virt` there is no PS/2
+controller and no USB controller unless one is asked for, so the events simply stop. "Take over"
+switched on correctly and then silently discarded every click. `QemuCommand` therefore adds:
+
+```
+-device virtio-tablet-pci,romfile=
+-device virtio-keyboard-pci,romfile=
+```
+
+Tablet rather than mouse because the coordinate on the wire is absolute — RFB carries absolute
+positions, and `GuestPointer` integrates a finger's trackpad deltas into one on the host side,
+where the size of a fingertip and of the pane are both known. A `virtio-mouse` reports relative
+deltas and would need an acceleration model inside a device driver that knows neither.
+
+**Adding a device invalidates every existing snapshot.** `-loadvm` restores memory into a machine
+that has to match the one it left, device for device, and it fails *after* rolling the disks back.
+Comparing image identity alone would have turned every paused box into a failed reopen, so
+`QemuCommand.machine()` fingerprints the launch command itself and the suspend note records it —
+derived rather than a constant somebody has to remember to bump, because the failure it prevents
+is silent.
+
+## The guest resizes its own screen
+
+The desktop was a fixed 1280×800 letterboxed into every window: about 31% of a cover screen, with
+the rest black bar. The obvious fix is closed. RFB's `DesktopSize` (-223) is server-to-client
+only; a client asks with `SetDesktopSize` (251) and is answered with `ExtendedDesktopSize` (-308),
+and **this build's QEMU implements neither**. The prebuilt `libqemu-system-aarch64.so` is 5.1.0
+and unstripped, so it can be asked directly:
+
+```
+$ nm libqemu-system-aarch64.so | grep -iE 'desktop_resize|ui_info'
+0000000000a08c74 t vnc_desktop_resize      # server tells client the size changed
+0000000000836164 t virtio_gpu_ui_info      # virtio-gpu can be told a size
+00000000009e8ad4 T dpy_set_ui_info         # and this is how
+```
+
+`vnc_desktop_resize` with no `_ext`, and no handler for message 251 anywhere. Sending one would
+have been read as an unknown message type and desynchronised the stream.
+
+So the guest is asked to resize itself instead, over the channel Box already has. `GuestScreenFit`
+decides the size from the attached surfaces, `IRuntimeControl.setDisplaySize` carries it to
+`:computer`, `GuestDisplayMode` builds an `xrandr` invocation and agentd runs it — and QEMU then
+announces the new console shape over the `DesktopSize` rectangle the RFB client always decoded.
+Entirely host-side; the guest needed nothing it did not already have.
+
+Six things about it are not obvious:
+
+- **`virtio-gpu` accepts a mode it has never heard of.** It reports `maximum 8192 x 8192` and the
+  modesetting driver takes an invented modeline, so there is no list to pick from. The timings are
+  made up and consistent — no cable, nothing clocking these pixels.
+- **The output is `Virtual-1` but must not be assumed.** That name comes from the kernel's
+  virtio-gpu driver; the script discovers it.
+- **agentd refuses a working directory outside `/workspace` and `/home/agent`.** A resize touches
+  no file, so `/` looked harmless, and was rejected with the message a real escape attempt gets —
+  leaving the screen silently the wrong shape.
+- **A mode set on an emulated GPU is slow**: 30–60 s cold. It is retried, because the usual reason
+  it fails is that `local-agent-desktop.service` lost a race with udev, and a half-started X
+  accepts the connection and then does not answer.
+- **The soft keyboard is not a window resize.** `BoxApp` applies `safeDrawingPadding`, which
+  includes the IME, so opening the keyboard shrank the pane and the guest followed it. The
+  keyboard's inset is added back before the size is reported: the machine follows the window, not
+  the keyboard.
+- **Thumbnails must not count.** The task list's live computer row is a real surface at a real
+  size, so following the largest attached one naively resized the guest down to 230px whenever the
+  user walked back to their tasks. A surface under 400×300 is a preview of a screen, not a screen.
+
+The same script turns the screensaver and DPMS off. X blanks an idle screen and drops DRM scanout
+with it, so opening the computer after a while showed QEMU's own `Guest disabled display.` in 8px
+type on black. Blanking exists to save a backlight and this machine has none. It lives in the
+script rather than in the image so that it also reaches a box that is already running.
+
+**Still open:** the *screen* follows the window, and the windows on it do not. X clients keep the
+size they were mapped at, so a terminal that filled a 1280×800 desktop is a small window in the
+corner of a 1968×1960 one. Mapping the first terminal maximised would put the space to use; it is
+a guest-image change, which the screen-size work deliberately needed none of.
+
 ## One VM run per process
 
 QEMU is linked into `:computer` and entered through `qemu_init`, which is

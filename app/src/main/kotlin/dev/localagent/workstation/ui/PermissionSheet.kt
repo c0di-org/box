@@ -77,56 +77,23 @@ import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 
 /**
- * The moment Box justifies existing.
+ * The whole diff, before anything touches the disk.
  *
- * A terminal shows `Edit file? (y/n)` and expects the user to trust the agent's summary. Box shows
- * the actual diff, syntax-highlighted, with the file path and the change counts, before anything
- * touches the disk. Three deliberate choices:
+ * Allow and Deny carry equal weight, nothing is pre-selected, and dismissing produces `Abandoned`
+ * — never an approval and never a refusal the user did not make. "Always allow" is quieter and
+ * spells out its scope, being the only button here that changes future behaviour. The evidence
+ * scrolls; the buttons are pinned, so a long diff cannot push the choice off screen.
  *
- *  - Allow and Deny carry equal visual weight. Nothing is pre-selected and there is no default
- *    action on dismiss; backing out leaves the agent waiting rather than silently approving.
- *  - "Always allow" is a separate, quieter control with its scope spelled out in words, because
- *    it is the only button here that changes future behaviour.
- *  - The evidence is scrollable but the decision buttons are pinned, so a long diff can never
- *    push the choice off screen or invite a blind tap.
+ * It is opened by tapping a card, never raised on its own: every unanswered request already draws
+ * Allow and Deny in the transcript, so this is for the case a one-line card cannot serve. It shows
+ * one request at a time and says how many are behind it; closing it answers nothing.
  *
- * It is opened, never raised. Box used to put it up by itself the moment anything was asked, which
- * on a phone meant arriving over whatever the user was doing — the keyboard went down with it and
- * came back after the answer. Every unanswered request draws its own Allow and Deny in the
- * transcript, next to the work it is about, so the modal was never the only way to answer; what it
- * is *for* is the case a one-line card cannot serve, which is reading a whole diff before
- * deciding, and that is something a person asks for by tapping the card.
+ * Enter is deliberately not bound to Allow — a sheet appearing under a cursor mid-typing would
+ * take a stray Return as consent. Focus opens on the sheet itself, Tab reaches Deny then Allow,
+ * and Enter is then just what a focused button does. Esc dismisses.
  *
- * It is about one request at a time, which is not the same as there being only one: a turn can
- * block on two tools at once. So it says how many are still behind this one, and closing it
- * answers nothing — the request is still standing in the transcript with both buttons on it.
- *
- * ## The keyboard, and why Enter does not simply mean Allow
- *
- * On a Fold or in DeX there is a hardware keyboard, and reaching for the screen to answer every
- * request is the kind of friction that turns into "allow always" out of fatigue. But the obvious
- * binding — Enter approves — quietly undoes the first choice above: a sheet that appears under the
- * cursor while someone is typing would take a stray Return as consent, and consent is the one
- * thing this sheet exists to make deliberate.
- *
- * So the keyboard gets the same shape as the touch surface rather than a shortcut past it. The
- * sheet itself takes focus when it opens — focus lives somewhere, but on nothing that decides
- * anything. Tab and the arrow keys move onto Deny first and Allow second, and the focused button
- * says so with a ring, so Enter is always visibly attached to a choice the user made. Enter is
- * then not a binding this file adds at all: it is what a focused button already does.
- *
- * Esc dismisses. Not "deny" — dismissing is the gesture that already exists here (swipe the sheet
- * away), it produces `Abandoned`, and it must keep meaning exactly that: the agent is left
- * waiting, nothing is approved, and no refusal the user never made is put in their mouth.
- *
- * ## What this is not for
- *
- * A question. An agent's question is answered on its own card in the transcript, options and all —
- * see `QuestionForm.kt`. It briefly lived here, because a question travels back *through* the
- * permission result and this was the surface that got to say yes; it left because a question
- * already stops the work, so the card is the interruption, and a modal on top of it interrupts the
- * same person twice over the same thing. [PermissionSheet] is never handed one; `BoxApp` filters
- * them out before this can be opened.
+ * Never handed a question: `BoxApp` filters those out, because a question already stops the work
+ * and its card is the interruption. See `QuestionForm.kt`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

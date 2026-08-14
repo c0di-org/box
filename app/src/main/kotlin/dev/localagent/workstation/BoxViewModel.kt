@@ -487,20 +487,17 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Sending is never refused because the computer is off, and never spent because it is not
-     * signed in.
+     * Sending is never refused because the computer is off, nor spent because it is not signed in.
      *
-     * A message to a cold runtime starts it and is held until the guest can take it — the backend
-     * queues the write, and the boot is ~3 minutes of visible, normal waiting rather than an error.
-     * The text is shown as queued in the meantime so the user's own words never vanish for the
-     * length of a boot; the harness echoes each prompt into the session log when it finally runs,
-     * and that echo is what clears the queued copy.
+     * A message to a cold runtime starts it and is held until the guest can take it: the backend
+     * queues the write, and the boot is ~3 minutes of visible waiting rather than an error. The
+     * text shows as queued meanwhile, and the harness's echo of the prompt into the session log is
+     * what clears that copy.
      *
-     * A box with no credential is the other kind of not-yet, and it used to be treated as a yes.
-     * The first message anyone ever types is typed into the opening — three minutes before Box can
-     * discover there is nobody signed in — and handing it over then bought a failed task and a
-     * request to type it again. So it is *held* rather than sent: the same queue, the same visible
-     * card, and [flushHeldPrompts] sends it the moment the sign-in lands.
+     * A box with no credential is the other kind of not-yet, and used to be treated as a yes. The
+     * first message anyone types is typed into the opening — three minutes before Box can discover
+     * nobody is signed in — so handing it over then bought a failed task and a retype. It is
+     * *held* instead: same queue, same card, and [flushHeldPrompts] sends it when sign-in lands.
      */
     fun sendMessage(text: String) {
         val trimmed = text.trim()
@@ -763,15 +760,13 @@ class BoxViewModel @JvmOverloads constructor(
     /**
      * The agent needs an account, so Box asks for it — with the code already on screen.
      *
-     * The flow is started here rather than waiting for a tap, and that is the whole difference
-     * between this and a banner. The person asked for a private repository to be cloned; the agent
-     * is holding its turn open; opening a sheet that says "press to begin" would spend the one
-     * moment where everything is already in context on a button. So the sheet arrives with eight
-     * characters in it, and the only thing left to do is the part only they can do.
+     * Started here rather than on a tap, which is the whole difference between this and a banner.
+     * The person asked for a private repository; the agent is holding its turn open; a sheet
+     * saying "press to begin" would spend the one moment where everything is already in context on
+     * a button. So it arrives with eight characters in it and only the part they alone can do left.
      *
-     * If they close it, nothing is answered. The agent goes on waiting and the card stays in the
-     * conversation, because "not now" is a thing to be said out loud rather than inferred from a
-     * dismissed sheet.
+     * Closing it answers nothing — the agent goes on waiting and the card stays in the
+     * conversation, because "not now" is said out loud rather than inferred from a dismissal.
      */
     private fun offerConnection(sessionId: String, event: AgentEvent.ConnectRequested) {
         mutableUiState.update {
@@ -937,18 +932,16 @@ class BoxViewModel @JvmOverloads constructor(
     /**
      * Keep the guest's screen the same shape as the window showing it.
      *
-     * The size is decided by the transport, which is the only thing that can see every view of the
-     * desktop at once ([DesktopTransport.wantedGuestScreen]); this carries it to `:computer`,
-     * which is the only process that can reach the guest. Neither half is a good home for both
-     * jobs, which is why the trip exists at all.
+     * The size is decided by the transport, the only thing that sees every view of the desktop at
+     * once ([DesktopTransport.wantedGuestScreen]); this carries it to `:computer`, the only process
+     * that reaches the guest. Neither half is a good home for both jobs, which is why the trip
+     * exists.
      *
-     * Two things are being defended against here. A fold, a rotation or a DeX window drag emits a
-     * run of sizes ending at the one that matters, so [collectLatest] plus a settle delay lets
-     * every intermediate size be cancelled by its successor — an X mode set costs a full
-     * framebuffer over an emulated link, and paying that per frame of a window drag would be
-     * worse than the letterboxing. And a guest that has restarted is back at its built-in
-     * 1280x800 with no idea Box ever asked for anything else, so leaving `Ready` forgets what was
-     * applied and the size is asked for again on the way back.
+     * Two defences. A fold, rotation or DeX drag emits a run of sizes ending at the one that
+     * matters, so [collectLatest] plus a settle delay lets each be cancelled by its successor — an
+     * X mode set costs a full framebuffer over an emulated link, and paying that per frame of a
+     * drag is worse than letterboxing. And a restarted guest is back at its built-in 1280x800 with
+     * no idea Box asked for anything, so leaving `Ready` forgets what was applied and re-asks.
      */
     private fun followWindowWithGuestScreen() {
         val desktop = BoxContainer.desktop(getApplication())

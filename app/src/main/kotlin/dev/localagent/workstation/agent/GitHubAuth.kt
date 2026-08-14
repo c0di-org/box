@@ -14,21 +14,19 @@ import org.json.JSONObject
 /**
  * Connecting this box to GitHub.
  *
- * The same brokering as [GuestAuth], and for the same reason: the exchange runs inside the guest,
- * so the credential is written on this device by the program that obtained it and never reaches
- * the app. Box carries a code outward and an approval back, and that is all it ever holds.
+ * The same brokering as [GuestAuth] and for the same reason: the exchange runs inside the guest, so
+ * the credential is written on this device by the program that obtained it and never reaches the
+ * app. Box carries a code out and an approval back, and that is all it holds.
  *
- * It reads better than the Claude sign-in, though, and the difference is structural rather than
- * cosmetic. Claude's handshake ends with the user carrying a string back into Box, which is a step
- * that can be got wrong — half a code pasted, and the flow fails at an API. GitHub's device flow
- * sends the code the *other* way: Box shows eight characters, the person approves at GitHub, and
- * nothing has to come back through this app at all. There is no paste to diagnose.
+ * It reads better than the Claude sign-in, structurally. Claude's handshake ends with the user
+ * carrying a string back into Box, a step that can be got wrong — half a code pasted, and the flow
+ * fails at an API. GitHub's device flow sends the code the *other* way: Box shows eight
+ * characters, the person approves at GitHub, and nothing comes back through this app at all.
  *
  * Two steps, because Box is a GitHub App rather than an OAuth app. Authorising says who the user
- * is; installing says which repositories this box may touch. The second step is not overhead — it
- * is the repository picker, and it is the reason the consent screen can say "three repositories"
- * where an OAuth app would have had to ask for full control of every private repository the person
- * can see. That trade is the whole argument for the extra trip.
+ * is; installing says which repositories this box may touch. The second is not overhead — it *is*
+ * the repository picker, and the reason consent can say "three repositories" where an OAuth app
+ * would have to ask for full control of every private repository the person can see.
  */
 class GitHubAuth {
 

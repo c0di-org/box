@@ -20,21 +20,19 @@ object QemuCommand {
     }
 
     /**
-     * A fingerprint of the machine this build constructs, so a saved guest is only ever handed
-     * back to one shaped like the machine it left.
+     * A fingerprint of the machine this build constructs, so a saved guest is only handed back to
+     * one shaped like the machine it left.
      *
-     * `-loadvm` restores a guest's memory into a machine that has to match the one it was saved
-     * from, device for device, and QEMU does not decline politely when it does not: the load fails
-     * *after* the disks have been rolled back toward the snapshot. The image check in
-     * [QemuTcgRuntime.pendingResume] catches a new Debian, but not a new device on the same
-     * Debian — and giving the VNC server a tablet and a keyboard to deliver into is exactly that.
-     * Without this, every box paused by the previous build would have failed to reopen.
+     * `-loadvm` restores memory into a machine that must match device for device, and QEMU does not
+     * decline politely: the load fails *after* the disks have been rolled back toward the snapshot.
+     * [QemuTcgRuntime.pendingResume]'s image check catches a new Debian but not a new device on the
+     * same Debian — and giving the VNC server a tablet and keyboard to deliver into is exactly
+     * that. Without this, every box paused by the previous build would have failed to reopen.
      *
-     * Taken from the launch command itself rather than a constant somebody has to remember to
-     * bump, because the failure it prevents is silent and the reminder would not be. It is
-     * deliberately over-sensitive — an argument that could not really invalidate a snapshot still
-     * changes the fingerprint — since being wrong in that direction costs one cold boot, and
-     * booting cold is always safe.
+     * Taken from the launch command rather than a constant somebody must remember to bump, because
+     * the failure it prevents is silent. Deliberately over-sensitive — an argument that could not
+     * really invalidate a snapshot still changes the fingerprint — since being wrong that way costs
+     * one cold boot, and booting cold is always safe.
      */
     fun machine(storage: RuntimeStorage): String {
         val command = boot(storage, resumeFrom = null).joinToString(" ")
@@ -77,41 +75,32 @@ object QemuCommand {
         // of 11 GB — the rest is Android's. Guest RAM is one anonymous mapping in `:computer`, and
         // the fatter that process is, the sooner the low-memory killer picks it.
         "-m", "2048",
-        // A screen. `-vnc` is itself the display backend, which is why `-nographic` is gone: with
-        // neither, QEMU picks a default, and this build is linked against SDL2 — it would try to
-        // open a window from inside a foreground service. The serial console is routed explicitly
-        // below, which is the other thing `-nographic` used to do.
-        //
-        // The socket lives in app-private storage, so the filesystem is the whole access control:
-        // only this UID can open it, there is no port, and nothing is reachable from the network.
-        // That is the same rule the agentd channel follows.
-        // `-display none` is not redundant next to `-vnc`. This build is linked against SDL2, and
-        // with `-nographic` gone QEMU is free to resolve the default display to SDL and try to open
-        // a window from a foreground service with no Activity — which dies without reaching stderr,
-        // so it presents as the VM silently never starting. VNC is a separate option group and is
-        // set up regardless of the display type.
         // Where QEMU looks for its own data files. Without this the VNC server cannot load a
         // keymap and exits — see RuntimeStorage.qemuData.
         "-L", storage.qemuData.absolutePath,
+        // Not redundant beside `-vnc`, and not optional. `-nographic` is gone because `-vnc` is
+        // itself the display backend; with neither, this SDL2-linked build resolves the default
+        // display to SDL and tries to open a window from a foreground service with no Activity,
+        // which dies without reaching stderr and presents as the VM silently never starting.
+        // (The serial console below is the other thing `-nographic` used to do.)
         "-display", "none",
         "-device", "virtio-gpu-pci,xres=1280,yres=800,romfile=",
-        // Something for the VNC server to deliver input *to*. Without these the machine has a
-        // screen and no way to be touched: QEMU routes pointer and key events from RFB into its
-        // input subsystem, which hands them to registered input devices, and `-M virt` registers
-        // none of its own -- there is no PS/2 controller outside x86 and no USB controller unless
-        // one is asked for. Nothing errors. Every click and keystroke is simply dropped, which
-        // presents as "Take over" switching to "You're driving" over a desktop that then ignores
-        // the user completely.
+        // Something for the VNC server to deliver input *to*. `-M virt` registers no input device
+        // of its own — no PS/2 outside x86, no USB unless asked for — so without these QEMU routes
+        // RFB pointer and key events into an input subsystem holding nothing. Nothing errors and
+        // nothing logs: every click is dropped, which presents as "Take over" switching to
+        // "You're driving" over a desktop that then ignores the user completely.
         //
-        // Tablet rather than mouse because the pointer is absolute everywhere above this line:
-        // RFB carries absolute coordinates and DesktopView maps a touch straight to a guest pixel
-        // (see DesktopView.toGuest). A virtio-mouse reports relative deltas, which would need an
-        // acceleration model here and would still drift away from where the finger actually is.
+        // Tablet rather than mouse because RFB is absolute. A virtio-mouse takes relative deltas,
+        // which would put an acceleration model down here instead of in GuestPointer — the one
+        // place that knows how big a fingertip is and how much of the guest a pane is showing.
         //
-        // romfile= for the same reason as every other PCI device here: there is no QEMU data
-        // directory in an APK, so a device that tries to load an option ROM cannot find one.
+        // romfile= as on every PCI device here: there is no QEMU data directory in an APK, so a
+        // device that tries to load an option ROM cannot find one.
         "-device", "virtio-tablet-pci,romfile=",
         "-device", "virtio-keyboard-pci,romfile=",
+        // App-private socket, so the filesystem is the whole access control: only this UID can
+        // open it, no port, nothing on the network. Same rule the agentd channel follows.
         "-vnc", "unix:${storage.vncSocket.absolutePath}",
         "-kernel", image.kernel.absolutePath,
         "-initrd", image.initrd.absolutePath,

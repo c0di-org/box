@@ -5,15 +5,13 @@ import java.util.concurrent.TimeUnit
 /**
  * When something last happened, in the shortest true form.
  *
- * The task list's second line used to fall back to the working directory, which is `/workspace`
- * for every task there has ever been — a column of identical text under a column of identical
- * titles. Time is the opposite: it is different for every row, it is what a reader actually sorts
- * by, and it is the one thing about a task that is true whether or not the agent has said
- * anything yet.
+ * The task list's second line used to fall back to the working directory, which is `/workspace` for
+ * every task there has ever been — a column of identical text under a column of identical titles.
+ * Time is the opposite: different for every row, what a reader sorts by, and true whether or not
+ * the agent has said anything yet.
  *
- * Coarse on purpose, and coarser the further back it goes. "4 minutes ago" and "5 minutes ago"
- * are the same fact to the person reading them, and a list that reflows every sixty seconds draws
- * the eye to the wrong thing.
+ * Coarse on purpose, and coarser further back. "4 minutes ago" and "5 minutes ago" are the same
+ * fact to the reader, and a list that reflows every sixty seconds draws the eye to the wrong thing.
  */
 object Ago {
 

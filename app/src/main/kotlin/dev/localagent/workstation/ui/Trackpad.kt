@@ -9,27 +9,21 @@ import kotlin.math.hypot
  * Fingers on glass, turned into a mouse.
  *
  * Two surfaces want to be a trackpad — the guest's screen, and the middle of the on-screen keyboard
- * once you start dragging across it — and the second is only worth having if it feels like the
- * first. Not "similar": the same. Sensitivity, what counts as a tap, how long the double-tap window
- * stays open, which way two fingers scroll. A pointer that behaves one way on one half of the
- * screen and another way on the other half is a pointer you can't build a habit with, so there is
- * exactly one definition of what a finger does, and this is it.
+ * once you drag across it — and the second is only worth having if it feels like the first. Not
+ * similar: the same sensitivity, tap threshold, double-tap window and scroll direction. A pointer
+ * behaving one way on half the screen is one you cannot build a habit with, so there is exactly one
+ * definition of what a finger does and this is it.
  *
  * The API is per-pointer rather than per-[MotionEvent] because the keyboard's surface does not own
- * every finger on it — a thumb can be on a click button, or on Escape, while another hand drags —
- * so the caller decides which pointers belong here and hands over only those. The desktop hands
- * over all of them.
+ * every finger on it — a thumb can be on a click button or on Escape while another hand drags — so
+ * the caller hands over only the pointers that belong here. The desktop hands over all of them.
  *
- * Deltas are in view pixels and are converted with [Host.pointerScale], so a swipe of a given
- * length moves the cursor the same distance whichever surface it happened on, even though the two
- * are different widths.
+ * Deltas are view pixels converted with [Host.pointerScale], so a swipe of a given length moves the
+ * cursor equally far whichever surface it happened on, despite their different widths.
  *
- * ### No click counts on the wire
- *
- * macOS needs to be told that a click is the second of a pair; X11 does not, and works out
- * double-clicks from the timing of the presses it receives, exactly as it does for a real mouse. So
- * a tap here is one press and one release and nothing else, and a double-tap is two of those close
- * together — which is the whole of what a mouse would have sent.
+ * **No click counts on the wire.** macOS needs telling that a click is the second of a pair; X11
+ * works double-clicks out from the timing of the presses it receives, as it does for a real mouse.
+ * So a tap is one press and one release, and a double-tap is two of those close together.
  */
 internal class Trackpad(private val host: Host) {
 

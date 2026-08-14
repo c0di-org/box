@@ -11,42 +11,28 @@ data class GuestScreen(val width: Int, val height: Int) {
 /**
  * What size the guest's screen should be, given the views currently showing it.
  *
- * The rules here are the whole of the policy; [GuestDisplayMode][dev.localagent.runtime.qemu] only
- * carries it out. Three of them, and each exists because of something that went wrong without it.
+ * The rules here are the whole policy; `GuestDisplayMode` only carries it out. Each exists because
+ * of something that went wrong without it.
  *
- * ### The biggest view wins, and views that are only looked at never get here
+ * **The biggest view wins, and views only looked at never get here.** The same machine is drawn in
+ * several places at once — the box's header carries a live minimap while the computer fills the
+ * window. Following the largest surface is right; following *any* surface is not, or leaving the
+ * computer for the task list would resize the guest down to the minimap and back again: a whole X
+ * mode set, twice, for navigation. Which view is a picture rather than a screen cannot be decided
+ * by size — the minimap is larger than a desktop pane on a small window — so the caller says so
+ * and [VncDesktop] filters those out. [MIN_VIEWPORT_PIXELS] is the floor under what is left; below
+ * it the answer is null and the guest is left alone.
  *
- * The same machine is drawn in several places at once — the box's header on the home column
- * carries a live minimap while the computer fills the window behind it. Following the largest
- * surface is right; following *any* surface is not, because leaving the computer for the task list
- * would then resize the guest down to the minimap, and coming back would resize it up again. A
- * whole X mode set, twice, for navigation.
+ * **A ceiling on pixels, not on either side.** Every pixel of a full redraw is walked by the X
+ * server, then QEMU's VNC encoder, then [VncDesktop], on two emulated cores. The old fixed screen
+ * was 1.02 Mpx; a maximised DeX window on a 3440x1440 monitor asks for 4.95 Mpx. [MAX_PIXELS] is
+ * measured rather than chosen: 1080x2190, a phone pane filled edge to edge, is 2.37 Mpx, was tried
+ * on the device, stayed responsive, and made the terminal legible for the first time by rendering
+ * at 1:1 with the panel. The ceiling sits just above that; larger keeps its shape and loses density.
  *
- * Which view is a picture of the screen rather than a screen is not a question of size and cannot
- * be — the minimap is a few hundred pixels across on a phone, which is larger than a desktop pane
- * on a small window — so the caller says so, and [VncDesktop][dev.localagent.workstation.computer.VncDesktop]
- * filters those out before this sees them. [MIN_VIEWPORT_PIXELS] stays as the floor under whatever
- * is left: if nothing attached is bigger than that, the answer is null and the guest is left
- * exactly as it is.
- *
- * ### A ceiling on pixels, not on either side
- *
- * The guest is fully emulated — TCG, two cores — and every pixel of a full redraw is walked by the
- * X server, then by QEMU's VNC encoder, then by [VncDesktop]. The fixed screen was 1.02 Mpx. A
- * maximised DeX window on a 3440x1440 monitor asks for 4.95 Mpx, which is five times the work for
- * a desktop nobody is reading at that density.
- *
- * [MAX_PIXELS] is set from measurement rather than taste: 1080x2190 — a phone pane, filled edge to
- * edge — is 2.37 Mpx and was tried on the device before this code was written. It stayed
- * responsive, and the terminal in it became legible for the first time because the guest was
- * finally rendering at 1:1 with the panel instead of being scaled down. So the ceiling is just
- * above that, and anything larger keeps its shape and loses density.
- *
- * ### Stepped down, so that nearly-equal sizes are equal
- *
- * A window drag in DeX reports every intermediate width. Quantising to [STEP] means a few pixels of
- * movement resolve to the size the guest is already at, and [changeIsWorthIt] then discards it
- * without a mode set at all. Always downwards — see [step].
+ * **Stepped down, so nearly-equal sizes are equal.** A DeX window drag reports every intermediate
+ * width. Quantising to [STEP] resolves a few pixels of movement to the size the guest already has,
+ * and [changeIsWorthIt] discards it with no mode set. Always downwards — see [step].
  */
 object GuestScreenFit {
 

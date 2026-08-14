@@ -44,17 +44,15 @@ import kotlinx.coroutines.launch
 /**
  * Debug-only: the whole shell against a canned state, with no VM under it.
  *
- * Every interesting moment in Box's UI needs a Linux machine to exist — an emulator has none, and
- * the states worth looking at (the opening, the arrival, the computer) are exactly the ones a
- * developer cannot reach on their desk. `adb shell am start -n <pkg>/dev.localagent.workstation
- * .UiGalleryActivity --es scene computer`.
+ * Every interesting moment in Box's UI needs a Linux machine to exist, and an emulator has none —
+ * the opening, the arrival, the computer are exactly the states a developer cannot reach on a desk.
+ * `adb shell am start -n <pkg>/dev.localagent.workstation.UiGalleryActivity --es scene computer`.
  *
- * The conversation scenes are not written out here. They are *played*: [FakeAgentBackend] — the same
- * scripted backend the app itself falls back to — is run at zero pace and its events are folded
- * through the real [TranscriptBuilder], so a scene is a position in that script rather than a
- * second copy of it that goes stale the moment the script changes. Which is what makes this
- * screenshottable: `tools/screenshots.sh` walks [SCENES] on a phone and a tablet emulator, and the
- * pictures in the README are whatever the app draws today.
+ * The conversation scenes are *played*, not written out: [FakeAgentBackend] runs at zero pace and
+ * its events fold through the real [TranscriptBuilder], so a scene is a position in that script
+ * rather than a second copy that goes stale when the script changes. That is what makes this
+ * screenshottable — `tools/screenshots.sh` walks [SCENES] on a phone and tablet emulator, so the
+ * README's pictures are whatever the app draws today.
  *
  * Adding a scene means adding it to [SCENES] and to [GalleryModel.enter].
  */

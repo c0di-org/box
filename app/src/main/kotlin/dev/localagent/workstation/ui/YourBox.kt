@@ -72,20 +72,18 @@ import kotlinx.coroutines.delay
 /**
  * Your box, at whatever size the moment deserves.
  *
- * One component and not five screens on purpose. The box is the only thing Box has — both of the
- * things you can do are things you do *inside* it — so it holds the window until it is open, and
- * then becomes the first row of the task list. The user never dismisses anything and is never sent
- * somewhere; the shrink *is* the arrival, which is why the caller owns the height and animates it.
+ * One component, not five screens. The box is the only thing Box has — both of the things you can
+ * do are things you do *inside* it — so it holds the window until it is open and then becomes the
+ * first row of the task list. Nothing is dismissed and nobody is sent anywhere; the shrink *is*
+ * the arrival, which is why the caller owns the height and animates it.
  *
- * Four states, and each one is only allowed to say what is true at that moment:
+ * Four states, each only allowed to say what is true at that moment:
  *
- * - **Closed** — a mark and a button, or one line and one word once there are tasks to see behind
- *   it.
- * - **Opening** — the ring, what it is doing, how long is left, and something worth doing with the
- *   wait: the first task can be typed now and is sent the moment the guest can take it.
+ * - **Closed** — a mark and a button, or one line and one word once there are tasks behind it.
+ * - **Opening** — the ring, what it is doing, how long is left, and the first task, which can be
+ *   typed now and is sent the moment the guest can take it.
  * - **Just opened, once ever** — the arrival gets the window exactly one time in the life of an
- *   install, and spends it on the two ways to use this thing, or on the sign-in that has to happen
- *   before one of them works.
+ *   install, and spends it on the two ways to use this thing, or on the sign-in one of them needs.
  * - **Open** — the header, carrying the machine's own screen as large as the column can make it.
  *
  * Settled, all of that is one header rather than a bar plus a card: see [SettledBox].
@@ -291,15 +289,14 @@ private fun ClosedHero(state: BoxUiState, onOpen: () -> Unit) {
 /**
  * The wait, given something to do.
  *
- * This screen used to be nothing at all: pressing the button collapsed the hero to zero height and
- * handed back an app with no tasks, no transcript and no computer in it, so the honest three-minute
- * wait became three minutes of sitting in an empty list watching a 32dp ring. The ring was not the
- * problem — the emptiness was.
+ * Pressing the button used to collapse the hero to zero height and hand back an app with no tasks,
+ * no transcript and no computer in it, so an honest three-minute wait became three minutes in an
+ * empty list watching a 32dp ring. The ring was not the problem; the emptiness was.
  *
- * So the box keeps the window while it opens, and the wait carries the one thing that is genuinely
- * useful now: the first task. What is typed here queues and goes the moment the guest can take it
- * ([BoxUiState.queued]), which also means the arrival is something the user can *see* — their own
- * message finally sending — rather than a row quietly appearing behind them.
+ * So the box keeps the window while it opens, and the wait carries the one genuinely useful thing:
+ * the first task. What is typed here queues and goes the moment the guest can take it
+ * ([BoxUiState.queued]), which also makes the arrival something the user can *see* — their own
+ * message finally sending — rather than a row appearing quietly behind them.
  */
 @Composable
 private fun OpeningHero(
@@ -346,17 +343,16 @@ private fun OpeningHero(
 /**
  * The arrival, once ever.
  *
- * The only moment where saying what Box can do is free: the user is already looking at this screen,
- * waiting for exactly this. It is also the only place both doors are ever shown at the same size,
- * which is the point — the computer is not a feature of the chat.
+ * The only moment where saying what Box can do is free: the user is already looking at this screen
+ * waiting for exactly this. It is also the only place both doors are shown at the same size, which
+ * is the point — the computer is not a feature of the chat.
  *
- * It is also where the sign-in belongs, and this is the only screen that can hold it. Claude's
- * handshake runs *inside* the guest, so nothing can be asked before the box is open; the moment it
- * opens is therefore the first moment the question can be put, and it is already the moment the
- * user is looking at. Before this, sign-in was a banner discovered *after* a first task had been
- * sent, failed, and asked to be typed again.
+ * The sign-in belongs here because this is the only screen that can hold it. Claude's handshake
+ * runs *inside* the guest, so nothing can be asked before the box is open; the moment it opens is
+ * the first moment the question can be put, and already the moment the user is looking. Before
+ * this, sign-in was a banner discovered *after* a first task had been sent, failed, and retyped.
  *
- * [waiting] is that first task, if they typed one into the wait — shown here so their own words are
+ * [waiting] is that first task, if they typed one into the wait — shown so their own words are
  * visibly still in hand rather than something they have to trust Box kept.
  */
 @Composable
@@ -527,15 +523,15 @@ private fun HeroFrame(content: @Composable () -> Unit) {
 /**
  * The box once it has settled: one header, not two.
  *
- * There used to be a top bar — the mark, the word "Box", an overflow menu — sitting directly on a
- * card that said "Computer / Debian · in use" with a 96dp thumbnail and a *second* overflow menu
- * going to the same sheet as the first. Two headers, two menus, one box, and the only part of any
- * of it that changed by the second was the smallest thing on either.
+ * There was a top bar — mark, the word "Box", an overflow menu — sitting directly on a card
+ * reading "Computer / Debian · in use" with a 96dp thumbnail and a *second* overflow going to the
+ * same sheet. Two headers, two menus, one box, and the only part that changed by the second was
+ * the smallest thing on either.
  *
- * So identity is one strip — the mark, the name, one LED for how the machine is, one menu — and
- * everything under it belongs to the box's own state. Open, that is the machine's screen at
- * whatever size the column can spare: a minimap of what the agent is doing while it talks about
- * doing it, which is the whole claim of the product and the only label here that cannot go stale.
+ * So identity is one strip — mark, name, one LED for the machine, one menu — and everything under
+ * it belongs to the box's state. Open, that is the machine's screen at whatever size the column
+ * can spare: a minimap of what the agent is doing while it talks about doing it, which is the
+ * whole claim of the product and the only label here that cannot go stale.
  */
 @Composable
 private fun SettledBox(
@@ -559,9 +555,8 @@ private fun SettledBox(
 /**
  * The mark, the name, how the box is, and the one way into its details.
  *
- * The LED is doing the job three lines of prose used to: a colour is read without being read, and
- * "Debian · in use" was a subtitle that said the same thing every time somebody looked at it. The
- * words survive for anyone listening rather than looking — see [boxLedState].
+ * The LED carries the machine's state as a colour, read without being read. The words survive for
+ * anyone listening rather than looking — see [boxLedState].
  *
  * The opening gets a hairline under the strip rather than a ring around the mark. At this size a
  * ring is a decoration; a bar that crosses the whole column is legible from across the desk, and

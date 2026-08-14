@@ -30,25 +30,23 @@ import dev.localagent.workstation.computer.GuestPointer
 /**
  * The keys, and the bar you drag to decide how much of the screen they get.
  *
- * A band in the layout rather than a floating overlay, and that is the whole reason this exists
+ * A band in the layout rather than a floating overlay, which is the whole reason this exists
  * instead of a call to `showSoftInput`. An IME sits *on top of* the window and Android reports it
- * as an inset, so the guest's screen is either covered by it or resized to dodge it every time
- * somebody starts typing — a full X mode set, on an emulated machine, per keystroke session. A
- * sibling in a `Column` costs the guest one resize when the keyboard appears and one when it goes,
- * and every pixel it isn't using is the guest's.
+ * as an inset, so the guest's screen is either covered or resized to dodge it every time somebody
+ * types — a full X mode set, on an emulated machine, per typing session. A sibling in a `Column`
+ * costs one resize when the keyboard appears and one when it goes.
  *
- * ### The bar is not a nicety
+ * **The bar is not a nicety.** The right split between screen and keys differs for reading a long
+ * diff and typing one, and changes several times an hour. What the drag trades is key *size*
+ * against screen: a keyboard given less height keeps its key shape and gives up width, and that
+ * width becomes the gutter down the middle — so squeezing walks the halves apart into a split
+ * keyboard and letting it out closes them up. See
+ * [KeyboardLayout][dev.localagent.workstation.computer.KeyboardLayout].
  *
- * The right split between screen and keys is different for reading a long diff and for typing one,
- * and it changes several times an hour. What the drag actually trades is key *size* against screen:
- * a keyboard given less height than it wants keeps its key shape and gives up width, and the width
- * it gives up becomes the gutter down the middle — so squeezing it walks the halves apart into a
- * split keyboard and letting it out closes them up again. See [KeyboardLayout][dev.localagent.workstation.computer.KeyboardLayout].
- *
- * Dragging the bar *up*, past the height the keys asked for, is allowed and does not make the keys
- * bigger: they are already as wide as the screen permits, so the extra is empty space above them.
- * That is the point of letting it go there — on a half-folded phone it pushes the guest's screen off
- * the crease and onto the upright half, where a laptop's screen would be.
+ * Dragging *up* past the height the keys asked for is allowed and does not enlarge them: they are
+ * already as wide as the screen permits, so the extra is empty space above. That is the point of
+ * allowing it — on a half-folded phone it pushes the guest's screen off the crease and onto the
+ * upright half, where a laptop's screen would be.
  */
 @Composable
 internal fun OnScreenKeyboard(
