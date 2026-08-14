@@ -43,19 +43,37 @@ data class GuestSizing(val memoryMb: Int, val processors: Int) {
         const val MIN_PROCESSORS = 1
 
         /**
-         * Every vCPU is a host thread translating ARM into ARM, and a phone has perhaps four cores
-         * worth running one on. Past that the threads contend, the guest sees vCPUs that stall
-         * long enough for its own RCU to complain, and the phone gets hot — so the ceiling is low
-         * on purpose, and [choicesFor] lowers it again on a device with fewer cores.
+         * Every vCPU is a host thread translating ARM into ARM, and they contend far sooner than
+         * the core count suggests. Measured cold boot to a ready agent on a Fold 7, two runs each
+         * from a cooled SoC: **72 s at one processor, 177 s at two, 317 s at four**, and at six one
+         * run took 439 s while the other was killed by Android's low-memory killer before it
+         * finished. Every boot phase degrades monotonically — udev coldplug alone goes 18 s → 43 s →
+         * 63 s → 100 s — because an emulated kernel boot is mostly cross-CPU TLB invalidation, and
+         * TCG has to serialise every one of them.
+         *
+         * Four is kept as a ceiling rather than lowered because it is a choice the user can make
+         * and parallel work does benefit; nothing above it is worth offering. [choicesFor] lowers
+         * it again on a device with fewer cores.
          */
         const val MAX_PROCESSORS = 4
 
         /**
-         * What Box has always built, and what a phone with no opinion should keep getting: 2 GB is
-         * what a desktop session plus an agent's toolchain fits in, and 2 processors is what the
-         * TCG spike measured against.
+         * What a phone with no opinion gets. 2 GB is what a desktop session plus an agent's
+         * toolchain fits in, and it is not the binding constraint: under four parallel Python
+         * processes and a compile the guest reported 1.76 GiB still available, no swap, and a flat
+         * major-fault count.
+         *
+         * One processor rather than two, which is measured rather than assumed. A second vCPU costs
+         * **105 seconds on every cold boot** (72 s against 177 s, see [MAX_PROCESSORS]) and wins
+         * nothing back on the work Box actually does: single-threaded CPU, a one-file compile and
+         * interpreter startup all measured equal or better at one. It pays only for genuinely
+         * parallel guest work, where four concurrent jobs finished about 40% sooner on two — so the
+         * user who runs builds in here can still pick two, and everyone else stops paying for them.
+         *
+         * At one processor QEMU also drops out of multi-threaded TCG entirely and round-robins,
+         * which is where most of the saving comes from.
          */
-        val DEFAULT = GuestSizing(memoryMb = 2048, processors = 2)
+        val DEFAULT = GuestSizing(memoryMb = 2048, processors = 1)
 
         private val MEMORY_LADDER_MB = listOf(1024, 2048, 3072)
         private val PROCESSOR_LADDER = listOf(1, 2, 4)
