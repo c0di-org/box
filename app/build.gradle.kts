@@ -126,6 +126,26 @@ val prepareStockGuestAssets by tasks.registering {
     }
 }
 
+/**
+ * A build input that may come from `gradle.properties`, `-P`, or `ORG_GRADLE_PROJECT_*` in the
+ * environment. The release workflow uses the last of those: a keystore password on a Gradle
+ * command line is a keystore password in the process list.
+ */
+fun boxProperty(name: String): String? =
+    (project.findProperty(name) as String?)?.takeIf { it.isNotBlank() }
+
+/**
+ * The key the release build is signed with, when one is supplied.
+ *
+ * An unsigned release APK cannot be installed at all, so when no keystore is given this falls
+ * back to the debug key rather than producing an artifact nobody can put on a phone. That is a
+ * real difference and not a formality: the debug key is a well-known key shared by every Android
+ * developer on earth, and an APK signed with it can never be upgraded in place by one signed
+ * properly. A build made this way is fine for trying the app and wrong for anything a user is
+ * expected to keep.
+ */
+val releaseKeystore = boxProperty("boxKeystoreFile")
+
 android {
     namespace = "dev.localagent.workstation"
     compileSdk = 35
@@ -134,8 +154,8 @@ android {
         applicationId = "dev.localagent.workstation"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = boxProperty("boxVersionCode")?.toIntOrNull() ?: 1
+        versionName = boxProperty("boxVersionName")?.removePrefix("v") ?: "0.1.0"
 
         // Box's GitHub App, which is how a box connects to GitHub.
         //
@@ -165,6 +185,22 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = boxProperty("boxKeystorePassword")
+                keyAlias = boxProperty("boxKeyAlias")
+                keyPassword = boxProperty("boxKeyPassword")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
     }
 
     flavorDimensions += "runtime"

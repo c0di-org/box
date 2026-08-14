@@ -9,6 +9,11 @@ android {
 
     buildFeatures { aidl = true }
 
+    // Pinned rather than left to AGP's default, which is a version CI would have to download
+    // mid-build. This one is installed on the GitHub runner image and is the newer of the two a
+    // developer here already has, so both build the JNI shim with the same compiler.
+    ndkVersion = "28.2.13676358"
+
     defaultConfig {
         minSdk = 29
         ndk { abiFilters += "arm64-v8a" }

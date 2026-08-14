@@ -134,7 +134,14 @@ desktop ones are a real Fold 7 with a real VM behind it, so that Debian is runni
 
 ## Build it
 
-Onto a plugged-in arm64 phone, in one command. The first run needs `--image`, which builds
+The [latest release](https://github.com/garfbargle/box/releases/latest) has a prebuilt APK,
+if you only want it on a phone:
+
+```bash
+adb install -r box-*-stock.apk
+```
+
+To build it yourself: onto a plugged-in arm64 phone, in one command. The first run needs `--image`, which builds
 the guest image in a container first — a few minutes, and Docker has to be running:
 
 ```bash
