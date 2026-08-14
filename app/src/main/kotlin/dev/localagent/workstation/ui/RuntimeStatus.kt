@@ -415,9 +415,15 @@ private fun GitHubRow(github: GitHubAuth.State, onGitHub: () -> Unit) {
  * The one switch on this sheet: whether Box keeps a saved copy of the guest.
  *
  * Phrased as what the user gets and what it costs, in that order, because both halves are real.
- * A saved box reopens in about a second against the 95–120 s a cold boot takes on this hardware;
- * the saving is ~430 MB of guest memory written inside the system disk, which is a noticeable
- * slice of a phone.
+ * A saved box reopens in seconds against the 103–193 s a cold boot takes on this hardware; the
+ * saving is guest memory written inside the system disk, which is a noticeable slice of a phone.
+ *
+ * Both numbers used to be sharper — "about a second" and "around 430 MB" — and both were true of
+ * the box this switch was written for: one saved from an idle guest that had not read much. They
+ * stopped covering the case once the same setting started seeding a snapshot after a guest update,
+ * because a *warmed* snapshot is the expensive kind on purpose. Measured on a Fold 7: 1.2 s and
+ * +459 MB unwarmed, 7.3 s and +1.27 GB warmed. A range would be honest and unreadable; "seconds"
+ * and "about a gigabyte" are true of every case, and the one that would mislead is the small one.
  *
  * On by default, which is not a nudge — it is what Box already did before there was a choice, and
  * defaulting a new switch to off would have made every existing box slower overnight.
@@ -432,7 +438,8 @@ private fun OpenFasterRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
             Text("Open faster", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(2.dp))
             Text(
-                "Box keeps a saved copy, so it opens in about a second. Uses around 430 MB.",
+                "Box keeps a saved copy, so it opens in seconds instead of minutes. " +
+                    "Uses about a gigabyte.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

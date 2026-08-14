@@ -9,11 +9,14 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.database.ContentObserver
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.DocumentsContract
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -248,6 +251,7 @@ class BoxViewModel @JvmOverloads constructor(
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         resyncRuntimeState()
+        seedSavedBoxIfImageIsPending()
         observeAgents()
         watchSharedFolder()
         followWindowWithGuestScreen()
@@ -367,6 +371,70 @@ class BoxViewModel @JvmOverloads constructor(
             Intent(RuntimeService.ACTION_QUERY_STATE)
                 .setPackage(getApplication<Application>().packageName),
         )
+    }
+
+    /**
+     * Boots and saves the new guest once, before the user asks for it.
+     *
+     * The open this is for is the one "Open faster" cannot reach. Provisioning happens inside the
+     * Open gesture — `RuntimeService` installs the image and only then boots — so by the time a new
+     * guest is on the phone the user is already waiting on it, and the snapshot that would have
+     * made the open cheap was discarded by the install that replaced its disk. That makes the slow
+     * path follow every Box update carrying a new guest, which is precisely when somebody has just
+     * updated something and is looking at it.
+     *
+     * Launch is the trigger rather than a charging window, and that is a deliberate reading of the
+     * battery question rather than a dodge of it. "Charging and idle" sounds careful and is not:
+     * on a phone that is rarely plugged in it means the seeding never runs and the cold path stays
+     * normal, so the feature would be paid for in code and never delivered. Here the work starts
+     * while the person is in Box, which is both the moment they are most likely to open their box
+     * — in which case the boot becomes theirs, see [RuntimeService.seeding] — and the moment a
+     * notice about it is least of a surprise.
+     */
+    private fun seedSavedBoxIfImageIsPending() {
+        val application = getApplication<Application>()
+        val storage = runCatching { RuntimeStorage(application) }.getOrNull() ?: return
+        val bundled = runCatching { storage.bundledIdentity() }.getOrNull() ?: return
+        val installed = runCatching { storage.installedIdentity() }.getOrNull()
+        val attempted = preferences.getString(SEEDED_IMAGE_KEY, null)
+        val saver = application.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
+        val charge = application.getSystemService(BatteryManager::class.java)
+            ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
+        val seed = SeedDecision.shouldSeed(
+            openFaster = mutableUiState.value.openFaster,
+            installed = installed,
+            bundled = bundled,
+            lastAttempted = attempted,
+            batterySaver = saver,
+            batteryPercent = charge,
+            minimumBatteryPercent = MINIMUM_SEED_BATTERY_PERCENT,
+        )
+        // One line per launch, and the only account anywhere of why a phone did or did not spend
+        // two minutes of emulation on its own. A background boot that cannot be explained after the
+        // fact is the kind of thing that gets a feature blamed for battery it never used.
+        Log.i(
+            TAG,
+            "Seed check: openFaster=${mutableUiState.value.openFaster} installed=$installed " +
+                "bundled=$bundled attempted=$attempted saver=$saver battery=$charge -> $seed",
+        )
+        if (!seed) return
+
+        // Guarded, and the mark is only written if the start was actually accepted. This runs from
+        // the ViewModel's construction, so the app is on screen and the foreground-service start is
+        // allowed — but "allowed" here is a rule about process state that Box does not own, and the
+        // penalty for being wrong about it is a crash on launch. Nothing about a seed is worth
+        // that, and a refused seed costs only the cold open it was trying to avoid.
+        runCatching {
+            application.startForegroundService(
+                Intent(application, RuntimeService::class.java)
+                    .setAction(RuntimeService.ACTION_SEED)
+                    // Carried for the same reason [start] carries it: `:computer` is a fresh
+                    // process and a broadcast would arrive before anything was listening.
+                    .putExtra(RuntimeService.EXTRA_KEEP_SAVED, mutableUiState.value.openFaster),
+            )
+        }.onSuccess {
+            preferences.edit().putString(SEEDED_IMAGE_KEY, bundled.toString()).apply()
+        }
     }
 
     override fun onCleared() {
@@ -1444,10 +1512,27 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     private companion object {
+        const val TAG = "BoxViewModel"
+
         /** See [setOpenFaster]. Absent means true: saving an idle box is the older behaviour. */
         const val OPEN_FASTER_KEY = "open_faster"
         const val GUEST_MEMORY_KEY = "guest_memory_mb"
         const val GUEST_PROCESSORS_KEY = "guest_processors"
+
+        /**
+         * The image a saved box was last seeded for, so a guest that cannot boot cannot cost a
+         * boot on every launch. See [seedSavedBoxIfImageIsPending].
+         */
+        const val SEEDED_IMAGE_KEY = "seeded_image"
+
+        /**
+         * Below this, a background boot is not a trade worth making on the user's behalf.
+         *
+         * Deliberately low. The point of the number is to refuse the case where the answer is
+         * obvious to anybody looking at the phone, not to build a power policy — a threshold set
+         * where it started declining ordinary afternoons would quietly turn this feature off.
+         */
+        const val MINIMUM_SEED_BATTERY_PERCENT = 25
 
         const val COMMAND_TIMEOUT_SECONDS = 120
 

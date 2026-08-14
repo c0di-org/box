@@ -111,7 +111,9 @@ command -v git >/dev/null || { echo 'git is required (rebuild the builder image)
 # The repository is bind-mounted from the host, so it is owned by a different uid than the
 # builder runs as; without this git refuses to read it at all.
 git config --global --add safe.directory "$ROOT_DIR"
-test -d "$ROOT_DIR/.git" || { echo 'guest image must be built from a git checkout' >&2; exit 1; }
+# -e rather than -d: in a git worktree this is a file pointing at the real git directory, which
+# build-container.sh mounts alongside the checkout.
+test -e "$ROOT_DIR/.git" || { echo 'guest image must be built from a git checkout' >&2; exit 1; }
 BOX_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 BOX_REMOTE="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || echo unknown)"
 install -d -m 0755 "$ROOTFS/usr/src/box"
