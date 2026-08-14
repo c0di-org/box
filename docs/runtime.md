@@ -66,6 +66,16 @@ Comparing image identity alone would have turned every paused box into a failed 
 derived rather than a constant somebody has to remember to bump, because the failure it prevents
 is silent.
 
+That is also what makes the machine's *size* safe to hand to the user. `GuestSizing` supplies `-m`
+and `-smp`, the choice is kept in the UI process and travels to `:computer` on the start Intent
+(`EXTRA_MEMORY_MB`, `EXTRA_PROCESSORS`), and because both numbers are inside the fingerprint, a box
+saved at one size is discarded rather than restored into another. The suspend note is stamped with
+the size the running guest was *launched* with, not the current preference, so changing the setting
+under an open box cannot mislabel its snapshot. Ceilings live in `GuestSizing`: 3 GB, because
+`highmem=off` keeps the whole address map under 4 GB and RAM starts at the 1 GB mark, and four
+processors, because every vCPU is a host thread translating ARM into ARM. What a given phone is
+offered is narrowed again from its total RAM and core count.
+
 ## The guest resizes its own screen
 
 The desktop was a fixed 1280×800 letterboxed into every window: about 31% of a cover screen, with

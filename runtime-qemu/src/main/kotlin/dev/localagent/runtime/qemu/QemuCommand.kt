@@ -10,8 +10,14 @@ object QemuCommand {
      * them, rather than read from fixed fields here. Nothing below knows what an image is called
      * or where it is keyed — it is handed paths.
      */
-    fun boot(storage: RuntimeStorage, resumeFrom: String? = null): List<String> {
-        val command = storage.headlessBootFiles()?.let { headless(storage, it) } ?: uefi(storage)
+    fun boot(
+        storage: RuntimeStorage,
+        resumeFrom: String? = null,
+        sizing: GuestSizing = GuestSizing.DEFAULT,
+    ): List<String> {
+        val machine = sizing.clamped()
+        val command = storage.headlessBootFiles()?.let { headless(storage, it, machine) }
+            ?: uefi(storage, machine)
         // `-loadvm` is what makes reopening a box cheap: QEMU builds the same machine and then,
         // instead of running a bootloader, reads the guest's memory back out of the snapshot in
         // its qcow2. The device set either side of this has to be identical, which is why it is
@@ -34,8 +40,8 @@ object QemuCommand {
      * really invalidate a snapshot still changes the fingerprint — since being wrong that way costs
      * one cold boot, and booting cold is always safe.
      */
-    fun machine(storage: RuntimeStorage): String {
-        val command = boot(storage, resumeFrom = null).joinToString(" ")
+    fun machine(storage: RuntimeStorage, sizing: GuestSizing = GuestSizing.DEFAULT): String {
+        val command = boot(storage, resumeFrom = null, sizing = sizing).joinToString(" ")
         return java.security.MessageDigest.getInstance("SHA-256")
             .digest(command.toByteArray(Charsets.UTF_8))
             .take(8)
@@ -44,12 +50,12 @@ object QemuCommand {
 
     /** Temporary compatibility boot path used by the device proof image. Production images use
      * the direct-kernel headless path below, which is smaller and boots faster. */
-    private fun uefi(storage: RuntimeStorage): List<String> = listOf(
+    private fun uefi(storage: RuntimeStorage, sizing: GuestSizing): List<String> = listOf(
         "qemu-system-aarch64",
         "-machine", "virt,accel=tcg,highmem=off",
         "-cpu", "cortex-a53",
-        "-smp", "2",
-        "-m", "1024",
+        "-smp", sizing.processors.toString(),
+        "-m", sizing.memoryMb.toString(),
         "-nographic",
         "-drive", "if=pflash,format=raw,readonly=on,file=${storage.uefiCode.absolutePath}",
         "-drive", "if=pflash,format=raw,file=${storage.uefiVars.absolutePath}",
@@ -64,17 +70,18 @@ object QemuCommand {
         "-no-reboot",
     )
 
-    private fun headless(storage: RuntimeStorage, image: GuestImageFiles): List<String> = listOf(
+    private fun headless(
+        storage: RuntimeStorage,
+        image: GuestImageFiles,
+        sizing: GuestSizing,
+    ): List<String> = listOf(
         "qemu-system-aarch64",
         "-machine", "virt,accel=tcg,highmem=off",
         "-cpu", "cortex-a53",
-        "-smp", "2",
-        // 1024 was arbitrary, and a desktop does not fit in it. 2048 is bounded by two real
-        // ceilings rather than by taste: `highmem=off` keeps the whole address map under 4 GB, so
-        // the board itself cannot go much past 3 GB, and the phone reports ~2.7 GB *available* out
-        // of 11 GB — the rest is Android's. Guest RAM is one anonymous mapping in `:computer`, and
-        // the fatter that process is, the sooner the low-memory killer picks it.
-        "-m", "2048",
+        // The machine's size is the one part of this command the user chooses; everything
+        // either number is bounded by lives in [GuestSizing], which has already clamped them.
+        "-smp", sizing.processors.toString(),
+        "-m", sizing.memoryMb.toString(),
         // Where QEMU looks for its own data files. Without this the VNC server cannot load a
         // keymap and exits — see RuntimeStorage.qemuData.
         "-L", storage.qemuData.absolutePath,
