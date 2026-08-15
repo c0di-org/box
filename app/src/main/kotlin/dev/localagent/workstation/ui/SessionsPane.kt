@@ -79,6 +79,7 @@ fun SessionsPane(
     onOpenBox: () -> Unit,
     onOpenComputer: () -> Unit,
     onSendFirstTask: (String) -> Unit,
+    onTour: () -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
     onSignIn: () -> Unit,
@@ -111,6 +112,7 @@ fun SessionsPane(
                         ?: state.harnesses.firstOrNull()?.let { onNewConversation(it.id) }
                 },
                 onSendFirstTask = onSendFirstTask,
+                onTour = onTour,
                 onDismissGreeting = onDismissGreeting,
                 onShowDetails = onShowDetails,
                 onSignIn = onSignIn,
