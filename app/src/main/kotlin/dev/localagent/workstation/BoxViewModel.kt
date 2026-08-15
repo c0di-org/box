@@ -494,10 +494,6 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     fun selectComputerPanel(panel: ComputerPanel) {
-        // Before the state changes, while the open preview is still readable: leaving the panel is
-        // how a forward ends, and a hole in the phone's loopback interface should not outlive the
-        // panel that asked for it.
-        if (mutableUiState.value.computerPanel == ComputerPanel.Preview) closePreview()
         mutableUiState.update {
             it.copy(
                 computerPanel = if (it.computerPanel == panel) ComputerPanel.None else panel,
@@ -1071,7 +1067,14 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Opens something the agent is serving in the guest, in a panel over the machine.
+     * Opens something the agent is serving in the guest, over wherever the user already is.
+     *
+     * Deliberately no navigation. This used to send the user to the computer and draw the page as a
+     * panel on the desktop, which was two mistakes at once: it took away the conversation that
+     * offered the link — transcript, composer, and the thread of what they were doing — and it put
+     * a web page in a container built for a tool over a machine, so a page arrived as a small card
+     * parked over an xterm. A preview is not a fourth panel on the desktop; it is a thing to look
+     * at, and it belongs over whatever you are doing, like every other sheet in Box.
      *
      * The forward is asked for every time rather than cached here: the runtime hands back the same
      * one for a guest port it has already opened, and that is the only place that can know whether
@@ -1079,27 +1082,32 @@ class BoxViewModel @JvmOverloads constructor(
      */
     fun openPreview(artifact: Artifact.Preview) {
         val runtime = control ?: return showNotice("The computer is still starting.")
-        mutableUiState.update {
-            it.copy(destination = BoxDestination.Computer, computerPanel = ComputerPanel.Preview)
-        }
+        // Up on the tap, before the forward exists, so the sheet can say it is coming.
+        mutableUiState.update { it.copy(preview = OpenedPreview(guestPort = artifact.guestPort)) }
         runCatching {
             runtime.forwardPort(
                 artifact.guestPort,
                 object : IPortForwardCallback.Stub() {
                     override fun onForwarded(guestPort: Int, url: String) {
-                        mutableUiState.update {
-                            it.copy(preview = OpenedPreview(url = url, guestPort = guestPort))
+                        mutableUiState.update { state ->
+                            // Only if this is still the preview being waited on: a sheet closed
+                            // while the forward was being set up must not reopen when it lands.
+                            val waiting = state.preview
+                            if (waiting == null || waiting.guestPort != guestPort) {
+                                return@update state
+                            }
+                            state.copy(preview = waiting.copy(url = url))
                         }
                     }
 
                     override fun onError(message: String) {
-                        mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+                        mutableUiState.update { it.copy(preview = null) }
                         showNotice(message)
                     }
                 },
             )
         }.onFailure { error ->
-            mutableUiState.update { it.copy(computerPanel = ComputerPanel.None) }
+            mutableUiState.update { it.copy(preview = null) }
             showNotice(error.message ?: "Box could not open that preview.")
         }
     }
@@ -1108,7 +1116,7 @@ class BoxViewModel @JvmOverloads constructor(
      * Closes the preview and gives the port back.
      *
      * `release` is honoured rather than left to the VM's lifetime because a forward is a hole in
-     * the phone's loopback interface: it should not outlive the panel that asked for it.
+     * the phone's loopback interface: it should not outlive the sheet that asked for it.
      */
     fun closePreview() {
         val open = mutableUiState.value.preview ?: return

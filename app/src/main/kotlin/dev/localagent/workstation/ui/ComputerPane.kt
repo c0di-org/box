@@ -211,7 +211,6 @@ fun ComputerPane(
                                 onCloseFile = onCloseFile,
                                 onOpenInPhoneFiles = onOpenInPhoneFiles,
                             )
-                            ComputerPanel.Preview -> PreviewTool(state)
                             ComputerPanel.None -> Unit
                         }
                     }
@@ -517,7 +516,6 @@ private fun FloatingPanel(
                                     ComputerPanel.Chat -> "Agent"
                                     ComputerPanel.Terminal -> "Terminal"
                                     ComputerPanel.Files -> "Files"
-                                    ComputerPanel.Preview -> "Preview"
                                     ComputerPanel.None -> ""
                                 },
                                 style = MaterialTheme.typography.labelLarge,

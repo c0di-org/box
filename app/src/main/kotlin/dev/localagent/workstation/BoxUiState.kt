@@ -34,7 +34,7 @@ enum class BoxDestination { Tasks, Computer }
  * panels drawn on top of it — the agent, a shell, the workspace — one at a time, dismissable back
  * to nothing. A tab bar would have made the desktop one of four equal things instead of the thing.
  */
-enum class ComputerPanel { None, Chat, Terminal, Files, Preview }
+enum class ComputerPanel { None, Chat, Terminal, Files }
 
 /**
  * The two places files live, and the Files panel opens on the first of them.
@@ -398,8 +398,16 @@ data class BoxUiState(
         }
 }
 
-/** A forwarded guest port, and the address on the phone that reaches it. */
-data class OpenedPreview(val url: String, val guestPort: Int)
+/**
+ * A preview the user asked to see: the guest port from the moment they tap, the phone-side address
+ * once the forward exists.
+ *
+ * The url is nullable because opening one is two steps and the first is instant. Asking the runtime
+ * to forward a port takes as long as it takes; the sheet goes up on the tap regardless, and shows
+ * that it is coming. Modelling the wait as "no preview yet" would mean the tap did nothing visible
+ * until the forward landed, which reads as a button that did not work.
+ */
+data class OpenedPreview(val guestPort: Int, val url: String? = null)
 
 
 /** An agent's outstanding request for an account, and the session that is waiting on it. */

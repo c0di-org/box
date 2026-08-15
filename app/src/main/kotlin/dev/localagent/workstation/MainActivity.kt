@@ -201,6 +201,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onCloseFile = boxViewModel::closeFile,
             onOpenInPhoneFiles = boxViewModel::openSharedInPhoneFiles,
             onNoticeShown = boxViewModel::noticeShown,
+            onClosePreview = boxViewModel::closePreview,
             onDismissGreeting = boxViewModel::dismissReadyGreeting,
             desktop = BoxContainer.desktop(LocalContext.current.applicationContext as android.app.Application),
             onSetDesktopControl = boxViewModel::setDesktopControl,

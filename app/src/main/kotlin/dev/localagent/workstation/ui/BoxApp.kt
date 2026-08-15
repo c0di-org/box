@@ -99,6 +99,7 @@ fun BoxApp(
     onCloseFile: () -> Unit,
     onOpenInPhoneFiles: () -> Unit,
     onNoticeShown: () -> Unit,
+    onClosePreview: () -> Unit = {},
     onDismissGreeting: () -> Unit = {},
     onShowSignIn: () -> Unit = {},
     onDismissSignIn: () -> Unit = {},
@@ -340,6 +341,12 @@ fun BoxApp(
                 )
             }
         }
+    }
+
+    // Over whatever is on screen, and never a place you are sent to: a link offered in the
+    // conversation should not cost the conversation. See [BoxViewModel.openPreview].
+    state.preview?.let { preview ->
+        PreviewSheet(preview = preview, onDismiss = onClosePreview)
     }
 
     if (state.signInVisible) {
