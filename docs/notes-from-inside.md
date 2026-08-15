@@ -158,6 +158,15 @@ The round trip runs through the permission channel that was already there, becau
 - **None of it has run.** No guest image was rebuilt and nothing was executed on a
   device. The Kotlin compiles and its unit tests pass; the harness's node tests pass.
   That is a long way from a person tapping an option on a phone.
+
+  **Still true on 14 Aug 2026, for a new reason.** An image carrying this *was* built and
+  run on a Fold 7, and the round trip is still unverified — because the agent never called
+  the tool. Asked to show someone what was inside the box, it put its question in prose and
+  the person answered by typing. Nothing failed; the path simply was not taken, and a
+  re-check that only looked for a crash would have reported success. `AskUserQuestion` is
+  reached by a model *choosing* it, so the instruction asking for it is part of the
+  apparatus under test: `guest/agent-conventions.md` now says to call the tool and not to
+  ask in prose, and that wording is itself untested.
 - **The `PreToolUse` hook is reasoned from the SDK's types, not observed.** That a hook
   returning `permissionDecision: 'ask'` routes through `canUseTool` under
   `bypassPermissions` follows from the contract and has not been watched happening. If it
