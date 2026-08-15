@@ -24,6 +24,27 @@ before installing.
 
 **Use `--image` whenever anything under `guest/` changed.** The image carries a copy of
 `agentd.py` and the harness, so a stale one boots an old service against a new client.
+That includes `guest/agent-conventions.md` — the agent's instructions are baked in, so a
+wording change there needs a full image build like any other guest file.
+
+**After `--image`, wait before touching the app.** The first start provisions the new
+image and then *seeds* it: it boots the guest, warms the harness, saves a snapshot and
+shuts the VM down again. Measured on a Fold 7, 2026-08-14:
+
+```
+Seed reached a ready agent in 83410ms
+Seed warmed the harness in 231994ms (exit=0)
+Seeded a saved box in 324580ms total
+```
+
+Five and a half minutes, and the app looks usable throughout. A task started inside that
+window dies with the seed VM — *"The computer stopped before this finished."* — which
+reads like a crash and is not one. Watch for the `Seeded a saved box` line before sending
+anything:
+
+```bash
+adb logcat -s LocalAgentRuntime:I
+```
 
 `--image` no longer implies `--wipe`. Each image build writes `guest/image/out/image.json`
 describing the image, including a version derived from the payload digests, so a rebuild

@@ -132,7 +132,8 @@ readable from in here, and a claim you actually checked is the whole difference 
 and a brochure. Run the commands, and let what comes back be the answer:
 
 ```bash
-uname -a; nproc; free -h            # an ARM64 Linux machine, emulated, on their phone
+uname -a; nproc                     # an ARM64 Linux machine, emulated, on their phone
+head -3 /proc/meminfo               # not `free`: procps is not in this image
 cat /etc/os-release                 # a real Debian, not a sandbox pretending to be one
 cat /usr/src/box/BUILD-INFO         # the commit of Box you are running inside
 ```

@@ -12,6 +12,11 @@ visible at once. This document is written from that seat.
 
 **Observed on image `6206ff49ca6e63c4a6a8c43573493890a4745bfe`, 2026-08-13.**
 
+**Finding 1 re-checked and passed on image `9617ace1b2197543` (app commit
+`e8c0b6a`), 2026-08-14** — the first time its round trip has run on a device. See the
+finding for what was watched. Nothing else in this document was re-run that day, so every
+other observation below still dates from the image above.
+
 ## How to use this document
 
 Each finding is tagged with what it would take to invalidate it. On a new image, re-run
@@ -48,8 +53,9 @@ Stated up front, because it bounds every claim below.
 
 ## 1. `AskUserQuestion` was inert, and failed silently in the worst direction
 
-**Severity: high. Diagnosed, and fixed — but the fix had not run on a device when this
-was written.** Read the last two sub-sections before trusting it.
+**Severity: high. Diagnosed, fixed, and — as of 2026-08-14 — watched working on a
+phone.** The account below is left in the order it was learned, because the wrong turn it
+records is worth more than the fix.
 
 ### What the user saw
 
@@ -153,35 +159,47 @@ The round trip runs through the permission channel that was already there, becau
   that mode would be put to nobody and then reported as one the user declined to answer,
   which is this same bug with a setting in front of it.
 
-### What has *not* been established
+### What was established, on a phone, 2026-08-14
 
-- **None of it has run.** No guest image was rebuilt and nothing was executed on a
-  device. The Kotlin compiles and its unit tests pass; the harness's node tests pass.
-  That is a long way from a person tapping an option on a phone.
+Image `9617ace1b2197543`, app commit `e8c0b6a`, Galaxy Z Fold 7. The tour was started from
+the chip and the whole round trip was read out of the session log rather than off the
+screen:
 
-  **Still true on 14 Aug 2026, for a new reason.** An image carrying this *was* built and
-  run on a Fold 7, and the round trip is still unverified — because the agent never called
-  the tool. Asked to show someone what was inside the box, it put its question in prose and
-  the person answered by typing. Nothing failed; the path simply was not taken, and a
-  re-check that only looked for a crash would have reported success. `AskUserQuestion` is
-  reached by a model *choosing* it, so the instruction asking for it is part of the
-  apparatus under test: `guest/agent-conventions.md` now says to call the tool and not to
-  ask in prose, and that wording is itself untested.
-- **The `PreToolUse` hook is reasoned from the SDK's types, not observed.** That a hook
-  returning `permissionDecision: 'ask'` routes through `canUseTool` under
-  `bypassPermissions` follows from the contract and has not been watched happening. If it
-  turns out not to, the mode is the one case where a question still reaches nobody — and
-  the tool card the harness now draws for `AskUserQuestion` is what keeps that case from
-  being silent.
-- **The SDK evidence above was read on a laptop**, from `@anthropic-ai/claude-agent-sdk`
-  at `0.3.226`, the version `guest/harness/package.json` pins. It is not a guest
-  observation, and the guest could not have made it — see the second bullet under "what
-  the agent cannot do from in here".
+```
+tool_started         "Asked you" · "Let's build one small thing together… What should it be about?"
+permission_requested kind:"question" · 4 options
+permission_resolved  decision:"answer" · answers:{"…What should it be about?":"cats"}
+tool_finished        "The user answered: …=\"cats\""
+```
 
-**Re-check:** call `AskUserQuestion` with two options. Fixed when the options render and
-the choice comes back in the tool result. Still broken if the result is `The user did not
-answer the questions.` Then do it again with the permission mode set to allow everything,
-which is the half that rests on the hook.
+`The user did not answer the questions.` — the string this whole finding is about — does
+not occur anywhere in that session. The options rendered on their own card, a person
+typed a free-text answer into it, and the answer reached the model, which opened its next
+message with "Cats it is."
+
+Two things were being tested at once and both passed:
+
+- **The agent chose the tool.** The previous attempt failed here, not in the plumbing: the
+  wording in `guest/agent-conventions.md` telling it to call `AskUserQuestion` and not to
+  ask in prose was itself the untested part. It held.
+- **The `PreToolUse` hook works.** This was luck rather than design — the permission mode
+  had been switched to *Approve everything* at 20:32:14, and the question was asked at
+  20:33:01. So the call ran under `bypassPermissions`, fell through to `canUseTool`
+  anyway, and reached a person. That is the half that was reasoned from the SDK's types
+  and never watched; it no longer needs a separate run.
+
+### What is still only read, not observed
+
+- **The SDK evidence in this finding was read on a laptop**, from
+  `@anthropic-ai/claude-agent-sdk` at `0.3.226`, the version `guest/harness/package.json`
+  pins. It is not a guest observation, and the guest could not have made it — see the
+  second bullet under "what the agent cannot do from in here". The behaviour it predicts
+  has now been seen; the reading of the types has not been independently confirmed.
+
+**Re-check:** call `AskUserQuestion` with two options. Passing looks like the four log
+lines above. Still broken if the tool result is `The user did not answer the questions.`
+Worth re-running under both permission modes, since only `bypassPermissions` exercises the
+hook and a run in `default` would not notice it regressing.
 
 ---
 
@@ -249,6 +267,37 @@ on the phone.
 
 ---
 
+## 5. The tour's own first command does not exist in the image
+
+**Severity: low, and badly placed.** `guest/agent-conventions.md` told the agent to open
+the tour with:
+
+```bash
+uname -a; nproc; free -h
+```
+
+`free` ships in `procps`, which this image does not install — the same reason `ps` is
+missing, already noted at the top of this document. So the first command of the first
+minute anybody spends with Box returns:
+
+```
+/bin/bash: line 1: free: command not found
+```
+
+Observed on image `9617ace1b2197543`, 2026-08-14. The agent recovered by itself with
+`head -3 /proc/meminfo` and the user is unlikely to have noticed, which is the only reason
+this is low severity rather than embarrassing. It is worth its own entry because of where
+it sat: a file of instructions written on a laptop, naming a tool nobody had run in the
+place the instructions would run. The conventions file is now part of the shipped image
+and is testable the same way the code is.
+
+**Fixed** by replacing the call with `head -3 /proc/meminfo`.
+
+**Re-check:** run the tour and read its first shell card. Any `command not found` in the
+opening three commands is this finding again.
+
+---
+
 ## Resolved since the last image
 
 - **No inbound file channel** *(broken at `9cbeb134`, fixed by `6206ff49`)* — the `(+)`
@@ -257,10 +306,17 @@ on the phone.
   `scrot` is in the image; `scrot /tmp/screen.png` against `:0` works, so GUI work is no
   longer done blind.
 
-Findings 1 and 2 are *not* listed here, and will not be until an image carrying them has
-been run on a device and their **Re-check** lines have passed. A fix that
-compiles is not a fix that reproduces, and this section is the one place in the document
-that is allowed to mean "verified".
+- **`AskUserQuestion` was inert** *(finding 1; broken at `6206ff49`, fixed and verified on
+  image `9617ace1b2197543`, 2026-08-14)* — the question renders as its own card, the
+  answer reaches the model, and it does so under `bypassPermissions` too. The finding is
+  kept in full above rather than reduced to this line, because the mechanism it gets wrong
+  on the way is the useful part.
+
+Finding 2 is *not* listed here, and will not be until an image carrying it has been run on
+a device and its **Re-check** line has passed. Finding 5 was fixed in the same change that
+recorded it and has not been re-run either. A fix that compiles is not a fix that
+reproduces, and this section is the one place in the document that is allowed to mean
+"verified".
 
 ---
 

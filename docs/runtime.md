@@ -187,10 +187,31 @@ so the teardown happens either way. `quiesceGuest()` therefore does it deliberat
 before the snapshot, on a healthy guest with a real clock. Files the agent had already
 written are unaffected; the disks and the guest's memory are captured together.
 
-`RuntimeService` puts an untouched box away by itself after 15 minutes, counting a
-running agent session as activity however quiet it looks. That timer is only defensible
-because of the table above: it is allowed to act without asking precisely because being
-wrong costs about a second.
+`RuntimeService` puts an untouched box away by itself, counting a running agent session —
+or a live port forward — as activity however quiet it looks. There are two timers, not
+one, and which applies depends on the *Open faster* setting:
+
+| Setting | Constant | Idle before | What happens |
+| --- | --- | --- | --- |
+| Open faster **on** | `SAVE_IDLE_MILLIS` | 3 min | Saved. Comes back in about a second. |
+| Open faster **off** | `IDLE_TIMEOUT_MILLIS` | 15 min | Closed. Comes back in a cold boot. |
+
+The three-minute save surprises people who only know the fifteen-minute number, because
+`Nothing has needed the box for 180s; putting it away` looks like the box closing on them
+after three minutes of reading. It is the cheap one: the timers differ because the
+mistakes differ, and saving early loses nothing while waiting a quarter of an hour risks
+losing the save altogether when Android kills `:computer` first.
+
+Either timer is only defensible because of the table above: it is allowed to act without
+asking precisely because being wrong costs about a second.
+
+**One restore has been seen to crash.** On 2026-08-14, a `-loadvm` start segfaulted 120 s
+in: `SIGSEGV` writing `0x80008` on the `DefaultDispatch` thread, inside `synchronize_rcu`,
+with the process at 153 MB RSS — so not the memory-pressure kill that ends a box the
+common way. The cold boot before it and the restores after it were fine, and it has not
+reproduced. Recorded rather than diagnosed: one occurrence is not a pattern, but a
+snapshot restore that faults is worth recognising if it happens again, because the app
+reports it as the honest but unhelpful *"The computer stopped unexpectedly."*
 
 ## The cold start that is left
 
