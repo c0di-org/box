@@ -67,6 +67,7 @@ import dev.localagent.runtime.api.RuntimeState
 import dev.localagent.workstation.BoxProgress
 import dev.localagent.workstation.BoxStage
 import dev.localagent.workstation.BoxUiState
+import dev.localagent.workstation.TOUR_PROMPT
 import dev.localagent.workstation.computer.DesktopTransport
 import kotlinx.coroutines.delay
 
@@ -99,6 +100,8 @@ fun YourBox(
     onOpenComputer: () -> Unit,
     onOpenChat: () -> Unit,
     onSendFirstTask: (String) -> Unit,
+    /** [TOUR_PROMPT], in a conversation of its own. See `BoxViewModel.startTour`. */
+    onTour: () -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
     onSignIn: () -> Unit,
@@ -131,6 +134,7 @@ fun YourBox(
                 // it belongs to and the conversation takes the window.
                 waiting = state.heldForSignIn.map { it.text },
                 onSend = onSendFirstTask,
+                onTour = onTour,
                 onWatch = onOpenComputer,
             )
 
@@ -145,13 +149,12 @@ fun YourBox(
                     onDismissGreeting()
                     onOpenComputer()
                 },
-                // Sent, not navigated to: [TOUR_PROMPT] goes down the ordinary send path, which
-                // opens the task it belongs to and takes the window with it. [ReadyHero] draws
-                // this door only once somebody is signed in, because until then there is nobody
-                // to send it to — see the sign-in half of that screen.
+                // Its own conversation, not a reply into whatever happens to be selected — see
+                // `BoxViewModel.startTour` for why the tour is never appended to another thread.
+                // [ReadyHero] draws this door only once somebody is signed in.
                 onTour = {
                     onDismissGreeting()
-                    onSendFirstTask(TOUR_PROMPT)
+                    onTour()
                 },
                 // The greeting deliberately stays up behind the sheet. Signing in is a step of the
                 // arrival, not a way out of it — and when it lands, this screen is holding the two
@@ -174,21 +177,6 @@ fun YourBox(
 /** Which of the box's faces the window is showing. See [YourBox]. */
 private enum class BoxFace { ClosedHero, OpeningHero, ReadyHero, Settled }
 
-/**
- * The first thing worth saying to a box, offered so nobody has to invent it.
- *
- * An empty composer on a machine nobody has used before is a harder question than it looks: the
- * honest answer to "Ask Box anything…" requires already knowing what a box *is*. This is the one
- * request that answers that by being carried out — the agent reads the machine it is running on
- * and the copy of Box's own source baked in beside it at `/usr/src/box`, and then builds
- * something small with whatever the person says they want it to be about.
- *
- * It is an ordinary message, not a script. Tapping it sends exactly these words down the same
- * path a typed one takes — queued while the box opens, held if nobody has signed in yet — and
- * what comes back is real work, which is the entire reason for preferring it to a canned tour.
- * The itinerary it follows lives in `guest/agent-conventions.md`, in the guest image.
- */
-const val TOUR_PROMPT = "Show me what’s inside the box"
 
 /**
  * The mark, with the opening drawn around it.
@@ -329,6 +317,7 @@ private fun OpeningHero(
     canType: Boolean,
     waiting: List<String>,
     onSend: (String) -> Unit,
+    onTour: () -> Unit,
     onWatch: () -> Unit,
 ) {
     Column(
@@ -364,7 +353,7 @@ private fun OpeningHero(
         // suggestion is competing with it for the same slot — and theirs is the one that matters.
         if (canType && waiting.isEmpty()) {
             Spacer(Modifier.height(12.dp))
-            TourSuggestion { onSend(TOUR_PROMPT) }
+            TourSuggestion(onTour)
         }
         Spacer(Modifier.height(14.dp))
         TextButton(onClick = onWatch) { Text("Watch it boot") }
@@ -380,7 +369,7 @@ private fun OpeningHero(
  * be declined — it sits under the composer, not in front of it.
  */
 @Composable
-private fun TourSuggestion(onTap: () -> Unit) {
+internal fun TourSuggestion(onTap: () -> Unit) {
     Surface(
         onClick = onTap,
         shape = RoundedCornerShape(14.dp),

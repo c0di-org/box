@@ -744,6 +744,44 @@ class BoxViewModel @JvmOverloads constructor(
         if (needsWaking) start()
     }
 
+    /**
+     * The tour, always in a conversation of its own.
+     *
+     * Deliberately not [sendMessage] with the same words. That path appends to whatever is
+     * selected, so tapping the tour from inside a task would bury a first look at the machine in
+     * the middle of unrelated work — and the tour opens by reporting what this box *is*, which
+     * only reads as an answer when it is the first thing in the thread. A fresh session is also
+     * what makes the transcript worth keeping: it is the one conversation somebody might scroll
+     * back to a week later to remember what Box did on the day they installed it.
+     *
+     * Held prompts still behave: [beginSession] carries the prompt through the same queue, so a
+     * box with nobody signed in yet holds this exactly as it holds a typed one.
+     */
+    fun startTour() {
+        val harness = mutableUiState.value.harnesses.firstOrNull() ?: return
+        wakeComputerIfNeeded()
+        val state = mutableUiState.value
+        // The held branch, spelled out rather than delegated to [sendMessage], because the one
+        // thing that must not be inherited from it is the selected session: this is queued with a
+        // null id on purpose, which is the shape [flushHeldPrompts] answers by *starting* a
+        // conversation. Without this the first tap on a box nobody has signed into yet would open
+        // a task and fail it, which is the exact trade [sendMessage]'s own hold exists to avoid.
+        if (state.signInWanted) {
+            mutableUiState.update {
+                it.copy(
+                    queued = it.queued + QueuedPrompt(
+                        sessionId = null,
+                        text = TOUR_PROMPT,
+                        heldForSignIn = true,
+                    ),
+                )
+            }
+            if (state.computerReady) showSignIn()
+            return
+        }
+        startSession(harness.id, TOUR_PROMPT)
+    }
+
     fun startSession(
         harnessId: String,
         prompt: String? = null,

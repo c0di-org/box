@@ -202,6 +202,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             onOpenInPhoneFiles = boxViewModel::openSharedInPhoneFiles,
             onNoticeShown = boxViewModel::noticeShown,
             onDismissGreeting = boxViewModel::dismissReadyGreeting,
+            onTour = boxViewModel::startTour,
             desktop = BoxContainer.desktop(LocalContext.current.applicationContext as android.app.Application),
             onSetDesktopControl = boxViewModel::setDesktopControl,
             onShowSignIn = boxViewModel::showSignIn,

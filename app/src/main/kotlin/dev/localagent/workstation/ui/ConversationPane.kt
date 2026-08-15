@@ -122,6 +122,8 @@ fun ConversationPane(
     onStartComputer: () -> Unit,
     onOpenComputer: () -> Unit,
     onCloseSession: (String) -> Unit,
+    /** [TOUR_PROMPT], in a new conversation. See `BoxViewModel.startTour`. */
+    onTour: () -> Unit = {},
     modifier: Modifier = Modifier,
     showComputerAction: Boolean = true,
     /**
@@ -210,7 +212,8 @@ fun ConversationPane(
 
         Box(Modifier.weight(1f)) {
             when {
-                session == null && queued.isEmpty() -> NoSessionState(state.tasks.isNotEmpty())
+                session == null && queued.isEmpty() ->
+                    NoSessionState(state.tasks.isNotEmpty(), onTour)
                 // Not while the box is opening: nothing can arrive until it does, the banner
                 // above already says so, and a spinner that has to run for three minutes is the
                 // app pretending to work.
@@ -222,7 +225,7 @@ fun ConversationPane(
                 (state.computerReady || state.connection == SessionConnection.Connecting) &&
                     state.transcriptLoading && state.transcript == null &&
                     queued.isEmpty() -> TranscriptLoading()
-                nothingToShow -> EmptyTranscriptState(harness)
+                nothingToShow -> EmptyTranscriptState(harness, onTour)
                 else -> TranscriptList(
                     transcript = state.transcript,
                     queued = queued,
@@ -851,16 +854,21 @@ private fun TranscriptLoading() {
  * the second title is a description of what is already true rather than a new affordance.
  */
 @Composable
-private fun NoSessionState(hasTasks: Boolean) =
-    EmptyState(if (hasTasks) "Pick a task" else "Start a task")
+private fun NoSessionState(hasTasks: Boolean, onTour: () -> Unit) =
+    EmptyState(if (hasTasks) "Pick a task" else "Start a task", onTour)
 
 @Composable
-private fun EmptyTranscriptState(harness: HarnessDescriptor?) =
-    EmptyState(harness?.let { "Nothing yet with ${it.name}" } ?: "Nothing yet")
+private fun EmptyTranscriptState(harness: HarnessDescriptor?, onTour: () -> Unit) =
+    EmptyState(harness?.let { "Nothing yet with ${it.name}" } ?: "Nothing yet", onTour)
 
-/** A symbol and a statement. The composer underneath explains itself. */
+/**
+ * A symbol, a statement, and the one request worth suggesting. The composer underneath explains
+ * itself; the suggestion is for the person the composer does not help, who has a Linux computer in
+ * their pocket and no idea what to type at it. It opens a conversation of its own rather than
+ * filling this one in — see `BoxViewModel.startTour`.
+ */
 @Composable
-private fun EmptyState(title: String) {
+private fun EmptyState(title: String, onTour: () -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -876,6 +884,8 @@ private fun EmptyState(title: String) {
         }
         Spacer(Modifier.height(16.dp))
         Text(title, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(22.dp))
+        TourSuggestion(onTour)
     }
 }
 
