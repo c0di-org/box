@@ -56,6 +56,8 @@ Plug a keyboard or mouse in and use it directly.
 
 Tasks are conversations with an agent that has access to the same computer.
 
+The first time Box opens it offers one thing to say — **"Show me what's inside the box"** — and answers it by doing the work: the agent reads the machine it is running on, tells you what it found, asks what you would like it to build, and builds it. Nothing about that reply is scripted. It is the same agent you get afterwards, working for the first time.
+
 Ask it to clone a repo, fix something, run tests, work on a feature, review code, or prepare a PR. It can even work on Box itself.
 
 The useful part is that this is not a disposable remote sandbox. The agent works inside your box, with the same persistent `/workspace` you can open yourself.
@@ -83,9 +85,9 @@ Commands, diffs and permission requests stay visible in the conversation. If you
 | **Computer** | Debian 12 VM running locally under QEMU; commands run and files persist. |
 | **Desktop** | Open the guest desktop and take over with keyboard, mouse or touch. |
 | **Phone input** | Relative touch trackpad plus Box's own desktop keyboard. |
-| **Agent** | Claude Code runs inside the VM with persistent task history. |
+| **Agent** | Claude Code runs inside the VM with persistent task history. You sign in through the phone's browser — no API key to paste. |
 | **Other agents** | ChatGPT and Cursor are currently scripted demos. |
-| **Server preview** | Implemented, but not yet confirmed on hardware. |
+| **Server preview** | Confirmed on hardware. A server the agent starts in the guest is forwarded to the phone and opens in a panel beside the conversation. |
 
 The main cost today is performance: the stock runtime is fully emulated ARM64, so the first boot takes a couple of minutes on a Galaxy Z Fold 7.
 
