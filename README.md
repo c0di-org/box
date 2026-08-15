@@ -65,15 +65,9 @@ The useful part is that this is not a disposable remote sandbox. The agent works
 You can start something with the agent, open the desktop and inspect it, take over with the mouse and keyboard, then hand it back.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/phone-progress-dark.png">
-    <img alt="A Box task running commands inside the VM." src="docs/assets/screenshots/phone-progress-light.png" width="300">
-  </picture>
+  <img alt="The tour reading the machine it runs on: uname, the Box build commit, memory and disks, each command approved in the conversation." src="docs/assets/screenshots/device/tour-reading-the-machine.png" width="400">
   &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/phone-permission-dark.png">
-    <img alt="Box showing an agent file edit for approval." src="docs/assets/screenshots/phone-permission-light.png" width="300">
-  </picture>
+  <img alt="The tour asking what to build, answered inline in the conversation." src="docs/assets/screenshots/device/tour-question-answered.png" width="400">
 </p>
 
 Commands, diffs and permission requests stay visible in the conversation. If you want the actual computer, open it.

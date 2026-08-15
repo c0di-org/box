@@ -128,6 +128,21 @@ for e in good:
 '
 }
 
+# Which shape to use when nobody passed one.
+#
+# This used to default to "desktop" unconditionally, so every command on a phone that was not in
+# DeX failed with `No display for form "desktop"` -- a confusing way to be told that you forgot a
+# flag, on the one tool you reach for when you are already unsure what the device is doing.
+# Prefer an attached monitor when there is one, since that was the old intent, and otherwise use
+# whichever internal panel is actually awake.
+default_form() {
+  local lines pick
+  lines="$(displays)"
+  pick="$(echo "$lines" | awk '$6 == "on" && $1 == "desktop" {print $1; exit}')"
+  [[ -n "$pick" ]] || pick="$(echo "$lines" | awk '$6 == "on" {print $1; exit}')"
+  echo "${pick:-desktop}"
+}
+
 # Resolve a form name to "logicalId physicalId width height active", honouring --form.
 resolve_form() {
   local want="$1" line
@@ -288,7 +303,7 @@ cmd_launch() {
 }
 
 # --- arguments --------------------------------------------------------------------------------
-FORM="${BOX_FORM:-desktop}"
+FORM="${BOX_FORM:-}"
 full=0
 args=()
 while (( $# )); do
@@ -305,6 +320,11 @@ while (( $# )); do
   shift
 done
 set -- "${args[@]:-}"
+
+if [[ -z "$FORM" ]]; then
+  FORM="$(default_form)"
+  [[ "${1:-list}" == "list" ]] || note "no form given; using $FORM"
+fi
 
 case "${1:-list}" in
   list)   cmd_list ;;
