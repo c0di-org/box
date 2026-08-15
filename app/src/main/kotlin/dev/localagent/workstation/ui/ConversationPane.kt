@@ -122,7 +122,7 @@ fun ConversationPane(
     onStartComputer: () -> Unit,
     onOpenComputer: () -> Unit,
     onCloseSession: (String) -> Unit,
-    /** [TOUR_PROMPT], in a new conversation. See `BoxViewModel.startTour`. */
+    /** [TOUR_PROMPT], sent into this conversation. See `BoxViewModel.startTour`. */
     onTour: () -> Unit = {},
     modifier: Modifier = Modifier,
     showComputerAction: Boolean = true,
@@ -864,8 +864,8 @@ private fun EmptyTranscriptState(harness: HarnessDescriptor?, onTour: () -> Unit
 /**
  * A symbol, a statement, and the one request worth suggesting. The composer underneath explains
  * itself; the suggestion is for the person the composer does not help, who has a Linux computer in
- * their pocket and no idea what to type at it. It opens a conversation of its own rather than
- * filling this one in — see `BoxViewModel.startTour`.
+ * their pocket and no idea what to type at it. It is a shortcut for typing, not a mode: the words
+ * go into this conversation exactly as if they had been tapped out.
  */
 @Composable
 private fun EmptyState(title: String, onTour: () -> Unit) {
