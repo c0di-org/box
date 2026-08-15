@@ -1106,6 +1106,7 @@ fun ActivityRow(
     activity: AgentActivity,
     modifier: Modifier = Modifier,
     waitingOn: PermissionAsk? = null,
+    stopped: Boolean = false,
 ) {
     val label = when (activity) {
         is AgentActivity.Thinking -> activity.label ?: "Thinking"
@@ -1117,6 +1118,21 @@ fun ActivityRow(
         // there is no agent yet.
         is AgentActivity.Starting -> return
         AgentActivity.Idle, AgentActivity.Ended -> return
+    }
+    // Stopped keeps the line exactly where it was and changes only what it claims: the pulse is
+    // what says "still happening", so a dead harness must not keep it. The ellipsis goes with it —
+    // it is the punctuation of something ongoing.
+    if (stopped) {
+        Row(modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(MaterialTheme.colorScheme.error, 8.dp)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "$label — stopped when the computer did",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        return
     }
     val transition = rememberInfiniteTransition(label = "activity")
     val pulse by transition.animateFloat(
@@ -1151,7 +1167,11 @@ fun ActivityRow(
  * a lie of exactly the kind [BoxProgress] avoids.
  */
 @Composable
-fun StartingCard(activity: AgentActivity.Starting, modifier: Modifier = Modifier) {
+fun StartingCard(
+    activity: AgentActivity.Starting,
+    modifier: Modifier = Modifier,
+    stopped: Boolean = false,
+) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
@@ -1164,11 +1184,23 @@ fun StartingCard(activity: AgentActivity.Starting, modifier: Modifier = Modifier
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(10.dp))
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            )
+            // The card stays; only the bar's claim changes. A moving indeterminate bar is the
+            // whole of what this card asserts, and leaving one running under a machine that is
+            // gone is the failure this card was most able to hide — it is drawn precisely for the
+            // minutes when there is nothing else to show, so nobody can tell it apart from a wait.
+            if (stopped) {
+                Text(
+                    "The computer stopped before this finished.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
+            }
         }
     }
 }

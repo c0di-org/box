@@ -1,6 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      The guest keyboard's key ticks. A normal permission, granted at install with nothing to
+      prompt for — and undeclared until a crash on hardware found it, because the one call it
+      guards is reached by laying the keyboard out rather than by pressing a key, so opening the
+      computer was enough to take the app down. See `GuestKeyboardView.Feedback`.
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="false"

@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Forum
@@ -144,6 +145,14 @@ fun YourBox(
                     onDismissGreeting()
                     onOpenComputer()
                 },
+                // Sent, not navigated to: [TOUR_PROMPT] goes down the ordinary send path, which
+                // opens the task it belongs to and takes the window with it. [ReadyHero] draws
+                // this door only once somebody is signed in, because until then there is nobody
+                // to send it to — see the sign-in half of that screen.
+                onTour = {
+                    onDismissGreeting()
+                    onSendFirstTask(TOUR_PROMPT)
+                },
                 // The greeting deliberately stays up behind the sheet. Signing in is a step of the
                 // arrival, not a way out of it — and when it lands, this screen is holding the two
                 // doors that were the point of it.
@@ -164,6 +173,22 @@ fun YourBox(
 
 /** Which of the box's faces the window is showing. See [YourBox]. */
 private enum class BoxFace { ClosedHero, OpeningHero, ReadyHero, Settled }
+
+/**
+ * The first thing worth saying to a box, offered so nobody has to invent it.
+ *
+ * An empty composer on a machine nobody has used before is a harder question than it looks: the
+ * honest answer to "Ask Box anything…" requires already knowing what a box *is*. This is the one
+ * request that answers that by being carried out — the agent reads the machine it is running on
+ * and the copy of Box's own source baked in beside it at `/usr/src/box`, and then builds
+ * something small with whatever the person says they want it to be about.
+ *
+ * It is an ordinary message, not a script. Tapping it sends exactly these words down the same
+ * path a typed one takes — queued while the box opens, held if nobody has signed in yet — and
+ * what comes back is real work, which is the entire reason for preferring it to a canned tour.
+ * The itinerary it follows lives in `guest/agent-conventions.md`, in the guest image.
+ */
+const val TOUR_PROMPT = "Show me what’s inside the box"
 
 /**
  * The mark, with the opening drawn around it.
@@ -335,8 +360,51 @@ private fun OpeningHero(
             onSend = onSend,
             modifier = Modifier.widthIn(max = 520.dp),
         )
+        // Only while the wait is still empty. Once they have queued something of their own, the
+        // suggestion is competing with it for the same slot — and theirs is the one that matters.
+        if (canType && waiting.isEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            TourSuggestion { onSend(TOUR_PROMPT) }
+        }
         Spacer(Modifier.height(14.dp))
         TextButton(onClick = onWatch) { Text("Watch it boot") }
+    }
+}
+
+/**
+ * [TOUR_PROMPT], as something to tap.
+ *
+ * Drawn as the message it will become rather than as a button describing one, because that is what
+ * pressing it does: the words appear in the conversation over the user's name, and a control
+ * labelled "Take a tour" would have been Box putting words there they never chose. Quiet enough to
+ * be declined — it sits under the composer, not in front of it.
+ */
+@Composable
+private fun TourSuggestion(onTap: () -> Unit) {
+    Surface(
+        onClick = onTap,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+        modifier = Modifier.widthIn(max = 520.dp),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(17.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                TOUR_PROMPT,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
     }
 }
 
@@ -361,6 +429,7 @@ private fun ReadyHero(
     waiting: List<String>,
     onChat: () -> Unit,
     onComputer: () -> Unit,
+    onTour: () -> Unit,
     onSignIn: () -> Unit,
 ) {
     HeroFrame {
@@ -402,7 +471,11 @@ private fun ReadyHero(
             DoorButton(Icons.Outlined.Computer, "Use the computer", onComputer, primary = false)
         } else {
             Spacer(Modifier.height(34.dp))
-            DoorButton(Icons.Outlined.Forum, "Chat with an agent", onChat, primary = true)
+            // First, because it is the only one of the three that answers the question somebody
+            // standing on this screen actually has. The other two assume they already know.
+            DoorButton(Icons.Outlined.AutoAwesome, TOUR_PROMPT, onTour, primary = true)
+            Spacer(Modifier.height(12.dp))
+            DoorButton(Icons.Outlined.Forum, "Chat with an agent", onChat, primary = false)
             Spacer(Modifier.height(12.dp))
             DoorButton(Icons.Outlined.Computer, "Use the computer", onComputer, primary = false)
         }

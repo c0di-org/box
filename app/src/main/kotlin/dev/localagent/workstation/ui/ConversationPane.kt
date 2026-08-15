@@ -199,8 +199,14 @@ fun ConversationPane(
             connectionTrouble -> ConnectionBanner(state.connection)
         }
 
+        // A stopped agent counts as something to show, and has to: a turn that died before it
+        // produced anything — the cold start is minutes long, so this is the likeliest moment to
+        // lose one — leaves an empty item list and a queued copy that only lived in memory. After
+        // the process that held it is replaced, both are gone, and the task the list is drawing
+        // with a failure dot opens on the blank "say something" screen. The failed row below is
+        // the only account of it left.
         val nothingToShow = (state.transcript == null || state.transcript.items.isEmpty()) &&
-            queued.isEmpty()
+            queued.isEmpty() && !state.agentStopped
 
         Box(Modifier.weight(1f)) {
             when {
@@ -223,6 +229,7 @@ fun ConversationPane(
                     harness = harness,
                     listState = listState,
                     answers = answers,
+                    stopped = state.agentStopped,
                     onOpenArtifact = onOpenArtifact,
                     onRetry = onStartComputer,
                     onStopSubAgent = onStopSubAgent,
@@ -509,6 +516,8 @@ private fun TranscriptList(
     harness: HarnessDescriptor?,
     listState: LazyListState,
     answers: AnswerStore,
+    /** [BoxUiState.agentStopped] — the last activity is a claim nothing is backing any more. */
+    stopped: Boolean,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
     onStopSubAgent: (String) -> Unit,
@@ -590,12 +599,13 @@ private fun TranscriptList(
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                         val activity = live.activity
                         if (activity is AgentActivity.Starting) {
-                            StartingCard(activity, Modifier.widthIn(max = 760.dp))
+                            StartingCard(activity, Modifier.widthIn(max = 760.dp), stopped = stopped)
                         } else {
                             ActivityRow(
                                 activity,
                                 Modifier.widthIn(max = 760.dp),
                                 waitingOn = live.pendingPermission?.ask,
+                                stopped = stopped,
                             )
                         }
                     }
