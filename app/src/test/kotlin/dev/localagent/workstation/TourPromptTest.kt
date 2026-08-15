@@ -6,13 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The queue contract `BoxViewModel.startTour` depends on.
+ * The queue contract behind the tour chip.
  *
- * The tour is the one prompt that must always open a conversation of its own, and the way it says
- * so is a [QueuedPrompt] with a **null** session id — the shape `flushHeldPrompts` answers by
- * *starting* a session rather than sending into one. Nothing else in the app queues a null id on
- * purpose, so the two properties that decide where such a prompt is drawn are worth pinning
- * against a refactor that "tidies" them into filtering by session.
+ * `BoxViewModel.startTour` is [TOUR_PROMPT] through `sendMessage` and nothing else, so tapping it
+ * inside a task adds to that task. Tapped from the opening screen or the arrival there is no
+ * session yet, and the prompt is queued with a **null** id — the shape `flushHeldPrompts` answers
+ * by *starting* a conversation. That is the case pinned here, because it is the one where the chip
+ * is most likely to be used and the two properties deciding where such a prompt is drawn are
+ * exactly the sort a later tidy-up would "fix" into filtering by session.
  */
 class TourPromptTest {
 

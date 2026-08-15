@@ -100,7 +100,7 @@ fun YourBox(
     onOpenComputer: () -> Unit,
     onOpenChat: () -> Unit,
     onSendFirstTask: (String) -> Unit,
-    /** [TOUR_PROMPT], in a conversation of its own. See `BoxViewModel.startTour`. */
+    /** [TOUR_PROMPT], said as an ordinary message. See `BoxViewModel.startTour`. */
     onTour: () -> Unit,
     onDismissGreeting: () -> Unit,
     onShowDetails: () -> Unit,
@@ -149,9 +149,9 @@ fun YourBox(
                     onDismissGreeting()
                     onOpenComputer()
                 },
-                // Its own conversation, not a reply into whatever happens to be selected — see
-                // `BoxViewModel.startTour` for why the tour is never appended to another thread.
-                // [ReadyHero] draws this door only once somebody is signed in.
+                // An ordinary message, which from the arrival means a new conversation simply
+                // because nothing is selected yet. [ReadyHero] draws this door only once somebody
+                // is signed in.
                 onTour = {
                     onDismissGreeting()
                     onTour()

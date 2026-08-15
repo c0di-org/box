@@ -741,42 +741,20 @@ class BoxViewModel @JvmOverloads constructor(
     }
 
     /**
-     * The tour, always in a conversation of its own.
+     * The tour, said into whatever conversation the person is already in.
      *
-     * Deliberately not [sendMessage] with the same words. That path appends to whatever is
-     * selected, so tapping the tour from inside a task would bury a first look at the machine in
-     * the middle of unrelated work — and the tour opens by reporting what this box *is*, which
-     * only reads as an answer when it is the first thing in the thread. A fresh session is also
-     * what makes the transcript worth keeping: it is the one conversation somebody might scroll
-     * back to a week later to remember what Box did on the day they installed it.
+     * [TOUR_PROMPT] with no special handling at all, which is the point: the chip is a shortcut
+     * for typing, not a mode. Tapping it in an open task asks *that* agent to show you around the
+     * machine you have both been working on, and it can answer in the context of the work already
+     * there; tapping it with nothing selected starts a conversation, because that is what
+     * [sendMessage] does with any first message.
      *
-     * Held prompts still behave: [beginSession] carries the prompt through the same queue, so a
-     * box with nobody signed in yet holds this exactly as it holds a typed one.
+     * This briefly forced a new session of its own. That was wrong twice over: it made one chip
+     * behave unlike every other way of saying something, and it threw away the context that makes
+     * the answer better the second time somebody asks. Everything the hold needs — the sign-in
+     * queue, the wake, the title from the first line — is already here and did not need repeating.
      */
-    fun startTour() {
-        val harness = mutableUiState.value.harnesses.firstOrNull() ?: return
-        wakeComputerIfNeeded()
-        val state = mutableUiState.value
-        // The held branch, spelled out rather than delegated to [sendMessage], because the one
-        // thing that must not be inherited from it is the selected session: this is queued with a
-        // null id on purpose, which is the shape [flushHeldPrompts] answers by *starting* a
-        // conversation. Without this the first tap on a box nobody has signed into yet would open
-        // a task and fail it, which is the exact trade [sendMessage]'s own hold exists to avoid.
-        if (state.signInWanted) {
-            mutableUiState.update {
-                it.copy(
-                    queued = it.queued + QueuedPrompt(
-                        sessionId = null,
-                        text = TOUR_PROMPT,
-                        heldForSignIn = true,
-                    ),
-                )
-            }
-            if (state.computerReady) showSignIn()
-            return
-        }
-        startSession(harness.id, TOUR_PROMPT)
-    }
+    fun startTour() = sendMessage(TOUR_PROMPT)
 
     fun startSession(
         harnessId: String,
