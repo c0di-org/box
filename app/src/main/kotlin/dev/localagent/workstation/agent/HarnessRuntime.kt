@@ -48,10 +48,20 @@ internal val CODEX_RUNTIME = HarnessRuntime(
         name = "Codex",
         command = "codex",
         mark = HarnessMarkKind.Prism,
+        capabilities = HarnessCapabilities(
+            account = true,
+            models = true,
+            boxTools = true,
+            externalServices = setOf("github"),
+            controlCommand = listOf(
+                "/usr/bin/node",
+                "/opt/local-agent/codex/box-codex-control.mjs",
+            ),
+        ),
     ),
     command = arrayOf(
         "/usr/bin/node",
-        "/opt/local-agent/codex/box-codex-harness.mjs",
+        "/opt/local-agent/codex/box-codex-product-harness.mjs",
     ),
 )
 
