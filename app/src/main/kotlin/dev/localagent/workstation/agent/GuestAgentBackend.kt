@@ -50,7 +50,7 @@ class GuestAgentBackend(
 ) : AgentBackend {
     private val appContext = context.applicationContext
 
-    private val harnessesState = MutableStateFlow(listOf(CLAUDE_CODE))
+    private val harnessesState = MutableStateFlow(INSTALLED_HARNESSES.map { it.descriptor })
     override val harnesses: StateFlow<List<HarnessDescriptor>> = harnessesState.asStateFlow()
 
     private val sessionsState = MutableStateFlow<List<SessionSummary>>(emptyList())
@@ -409,6 +409,7 @@ class GuestAgentBackend(
         prompt: String?,
         attachments: List<Attachment>,
     ): String {
+        require(harnessRuntime(harnessId) != null) { "Unknown harness: $harnessId" }
         val id = "s-" + System.currentTimeMillis().toString(36)
         val record = Record(
             id = id,
@@ -576,26 +577,41 @@ class GuestAgentBackend(
         }
         if (!record.attached.compareAndSet(false, true)) return
         val callback = Listener(record)
+        val harness = harnessRuntime(record.harnessId) ?: run {
+            record.attached.set(false)
+            record.connection.value = SessionConnection.Ended
+            scope.launch { publish(record, SessionStatus.Failed("This harness is not installed.")) }
+            return
+        }
         runCatching {
             if (plan == AttachPlan.Open) {
                 record.opened = true
                 control.openAgentSession(
                     record.id,
-                    HARNESS_COMMAND,
+                    harness.command,
                     record.workingDirectory,
                     Bundle().apply {
                         putString("BOX_SESSION_CWD", record.workingDirectory)
-                        // Also sent as a standing setting the moment this attaches, and the
-                        // duplication is deliberate: the harness builds its query before it has
-                        // read a single line of stdin, so a session that learned its model only
-                        // from the command would open on the CLI's default and be corrected a
-                        // round trip later — through a call an older Claude Code may not have.
-                        // The command is what moves a session already running.
-                        putString("BOX_MODEL", modelState.value.wire)
-                        // The credential is read by the harness from this path. It is never placed
-                        // in the environment itself, which would put it in an open payload.
-                        putString("BOX_CREDENTIAL_FILE", CREDENTIAL_PATH)
                         putString("HOME", GUEST_HOME)
+                        if (harness.claudeEnvironment) {
+                            // Also sent as a standing setting the moment this attaches, and the
+                            // duplication is deliberate: the harness builds its query before it has
+                            // read a single line of stdin, so a session that learned its model only
+                            // from the command would open on the CLI's default and be corrected a
+                            // round trip later — through a call an older Claude Code may not have.
+                            // The command is what moves a session already running.
+                            putString("BOX_MODEL", modelState.value.wire)
+                            // The credential is read by the harness from this path. It is never placed
+                            // in the environment itself, which would put it in an open payload.
+                            putString("BOX_CREDENTIAL_FILE", CREDENTIAL_PATH)
+                        } else {
+                            // DSH keeps its own sessions/config on the persistent workspace disk.
+                            // The API key itself is read by the wrapper from a file in .config and
+                            // never crosses Android's session-open payload.
+                            putString("DSH_HOME", DSH_HOME)
+                            putString("DSH_SESSION_ROOT", DSH_SESSION_ROOT)
+                            putString("BOX_DEEPSEEK_API_KEY_FILE", DEEPSEEK_API_KEY_PATH)
+                        }
                     },
                     callback,
                 )
@@ -820,6 +836,9 @@ class GuestAgentBackend(
         // guest image update replaces it, which would quietly discard the credential and
         // make the user sign in again after every Box update.
         const val CREDENTIAL_PATH = "/workspace/.config/box/credentials.json"
+        const val DSH_HOME = "/workspace/.config/dsh"
+        const val DSH_SESSION_ROOT = "/workspace/.config/dsh/sessions"
+        const val DEEPSEEK_API_KEY_PATH = "/workspace/.config/box/deepseek-api-key"
         const val BIND_TIMEOUT_MILLIS = 4_000L
         const val PREFERENCES = "box_product"
         const val MODE_KEY = "agent_permission_mode"
@@ -828,18 +847,6 @@ class GuestAgentBackend(
         /** What a task is called before anybody has said anything in it. */
         const val UNNAMED = "New task"
         const val TITLE_CHARS = 60
-
-        val HARNESS_COMMAND = arrayOf(
-            "/usr/bin/node",
-            "/opt/local-agent/harness/box-claude-harness.mjs",
-        )
-
-        val CLAUDE_CODE = HarnessDescriptor(
-            id = "claude-code",
-            name = "Claude Code",
-            command = "claude",
-            mark = HarnessMarkKind.Burst,
-        )
     }
 }
 
