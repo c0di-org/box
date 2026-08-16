@@ -1,0 +1,11 @@
+{
+  "name": "Box",
+  "tagline": "One-tap Linux and agent workspace for Android.",
+  "description": "An Android workstation that bundles a Linux guest and agent runtime for local development workflows.",
+  "category": "Developer Tools",
+  "accent": "#A9FF68",
+  "featured": false,
+  "sourceVisible": true,
+  "provenance": "library-managed",
+  "assetPattern": "^box-.*\\.apk$"
+}
