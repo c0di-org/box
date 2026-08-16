@@ -15,7 +15,7 @@ SUITE="${DEBIAN_SUITE:-bookworm}"
 # image -- a bare Ubuntu, a toolchain-specific one -- exist without colliding with this one.
 IMAGE_ID="${IMAGE_ID:-box-minimal-claude}"
 IMAGE_NAME="${IMAGE_NAME:-Box Minimal}"
-IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-Debian ${SUITE} arm64 with Claude Code, DeepSeek Harness, agentd and a minimal desktop.}"
+IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-Debian ${SUITE} arm64 with Claude Code, DeepSeek Harness, Codex App Server, agentd and a minimal desktop.}"
 # Raised from 4096 to fit the baked harness (~315 MB). Unused space costs almost nothing in the
 # APK: the image ships as a compressed qcow2, and empty blocks compress to nearly zero.
 IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-6144}"
@@ -96,6 +96,19 @@ test -f "$DSH_APP/node_modules/@deepseek-ai/dsh-acp-demo/lib/bin.js" \
   || { echo 'DeepSeek Harness ACP runtime did not install' >&2; exit 1; }
 test -d "$DSH_APP/node_modules/@agentclientprotocol/sdk" \
   || { echo 'DeepSeek Harness ACP client SDK did not install' >&2; exit 1; }
+
+# Codex is a pinned native App Server release, packaged at image-build time. It deliberately does
+# not share or replace either harness's dependency tree. No npm/npx/cargo/download runs when a
+# user selects Codex inside the emulated guest.
+bash "$ROOT_DIR/guest/codex/install.sh" "$ROOTFS" "$ROOT_DIR"
+
+# Make installed harness cost visible in every image build. These are exact uncompressed directory
+# sizes in this rootfs. The final qcow2 size printed below is measurable globally; per-harness
+# compressed attribution is not meaningful without separately rebuilding the image for each one.
+echo 'Installed harness footprint (bytes):'
+printf '  Claude:   '; du -sb "$ROOTFS/opt/local-agent/harness" | awk '{print $1}'
+printf '  DeepSeek: '; du -sb "$ROOTFS/opt/local-agent/deepseek" | awk '{print $1}'
+printf '  Codex:    '; du -sb "$ROOTFS/opt/local-agent/codex" | awk '{print $1}'
 
 # Connecting this box to GitHub, and the one thing that reads the credential afterwards.
 #
@@ -307,6 +320,7 @@ qemu-img convert -f raw -O qcow2 -c "$RAW" "$QCOW2"
 (cd "$OUT_DIR" && sha256sum kernel > kernel.sha256)
 (cd "$OUT_DIR" && sha256sum initrd.img > initrd.img.sha256)
 rm "$RAW"
+printf 'Compressed system qcow2 bytes: '; wc -c < "$QCOW2" | tr -d ' '; echo
 
 WORKSPACE_RAW="$OUT_DIR/workspace.raw"
 WORKSPACE_QCOW2="$OUT_DIR/workspace.qcow2"
@@ -378,6 +392,11 @@ cat > "$OUT_DIR/image.json" <<EOF
         "id": "deepseek-harness",
         "name": "DeepSeek Harness",
         "entry": "/opt/local-agent/deepseek/app/box-deepseek-harness.mjs"
+      },
+      {
+        "id": "codex",
+        "name": "Codex",
+        "entry": "/opt/local-agent/codex/box-codex-harness.mjs"
       }
     ],
     "source": { "commit": "$BOX_COMMIT", "path": "/usr/src/box" }
