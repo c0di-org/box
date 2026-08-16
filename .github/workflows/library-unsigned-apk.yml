@@ -1,0 +1,100 @@
+name: Library release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example 0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: library-release-apk
+  cancel-in-progress: false
+
+jobs:
+  guest-image:
+    name: Guest image
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build guest image
+        run: ./guest/build-container.sh
+      - name: Upload guest image for APK build
+        uses: actions/upload-artifact@v4
+        with:
+          name: library-guest-image
+          path: guest/image/out
+          compression-level: 0
+          retention-days: 1
+
+  apk:
+    name: Library unsigned APK
+    needs: guest-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download guest image
+        uses: actions/download-artifact@v4
+        with:
+          name: library-guest-image
+          path: guest/image/out
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "platforms;android-35" "build-tools;36.0.0" "cmake;3.22.1"
+
+      - name: Disable local APK signing for Library build
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/build.gradle.kts")
+          text = path.read_text()
+          old = 'signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")'
+          new = 'signingConfig = null // Library signs the release centrally.'
+          if text.count(old) != 1:
+              raise SystemExit("Could not identify Box release signing assignment")
+          path.write_text(text.replace(old, new))
+          PY
+
+      - name: Build unsigned stock release APK
+        env:
+          ORG_GRADLE_PROJECT_boxVersionName: ${{ inputs.version }}
+          ORG_GRADLE_PROJECT_boxVersionCode: ${{ github.run_number }}
+        run: ./gradlew --no-daemon :app:assembleStockRelease
+
+      - name: Verify unsigned APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/stock/release -name '*.apk' -print -quit)"
+          test -n "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -q "package: name='dev.localagent.workstation.stock'"
+          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK" >/dev/null 2>&1; then
+            echo "Expected an unsigned APK, but apksigner verified it as signed." >&2
+            exit 1
+          fi
+          mkdir -p library-artifact
+          cp "$APK" library-artifact/box-release-unsigned.apk
+
+      - name: Upload unsigned APK for Library
+        uses: actions/upload-artifact@v4
+        with:
+          name: library-unsigned-apk
+          path: library-artifact/box-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
