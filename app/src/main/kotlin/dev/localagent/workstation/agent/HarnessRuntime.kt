@@ -13,6 +13,8 @@ internal data class HarnessRuntime(
     val command: Array<String>,
     /** Claude alone consumes Box's current Claude model and credential file. */
     val claudeEnvironment: Boolean = false,
+    /** Static guest environment owned by this harness, never secrets. */
+    val environment: Map<String, String> = emptyMap(),
 )
 
 internal val CLAUDE_RUNTIME = HarnessRuntime(
@@ -40,10 +42,28 @@ internal val DEEPSEEK_RUNTIME = HarnessRuntime(
         "/opt/local-agent/deepseek/node/bin/node",
         "/opt/local-agent/deepseek/app/box-deepseek-harness.mjs",
     ),
+    environment = mapOf(
+        "DSH_HOME" to "/workspace/.config/dsh",
+        "DSH_SESSION_ROOT" to "/workspace/.config/dsh/sessions",
+        "BOX_DEEPSEEK_API_KEY_FILE" to "/workspace/.config/box/deepseek-api-key",
+    ),
+)
+
+internal val CODEX_RUNTIME = HarnessRuntime(
+    descriptor = HarnessDescriptor(
+        id = "codex",
+        name = "Codex",
+        command = "codex",
+        mark = HarnessMarkKind.Prism,
+    ),
+    command = arrayOf(
+        "/usr/bin/node",
+        "/opt/local-agent/codex/box-codex-harness.mjs",
+    ),
 )
 
 /** Offered in this order: the existing Claude behavior remains the default. */
-internal val INSTALLED_HARNESSES = listOf(CLAUDE_RUNTIME, DEEPSEEK_RUNTIME)
+internal val INSTALLED_HARNESSES = listOf(CLAUDE_RUNTIME, DEEPSEEK_RUNTIME, CODEX_RUNTIME)
 
 internal fun harnessRuntime(id: String): HarnessRuntime? =
     INSTALLED_HARNESSES.firstOrNull { it.descriptor.id == id }
