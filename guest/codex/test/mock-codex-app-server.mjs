@@ -9,6 +9,7 @@ const TURN_ID = process.env.MOCK_TURN_ID ?? 'turn-box-test'
 const RESUME_FAIL = process.env.MOCK_RESUME_FAIL === '1'
 const CRASH_ON_TURN = process.env.MOCK_CRASH_ON_TURN === '1'
 const CRASH_MARKER = process.env.MOCK_CRASH_MARKER
+const INITIALIZE_DELAY_MS = Number(process.env.MOCK_INITIALIZE_DELAY_MS ?? 0)
 
 async function log(value) {
   if (!LOG) return
@@ -30,6 +31,7 @@ input.on('line', line => {
 
     switch (method) {
       case 'initialize':
+        if (INITIALIZE_DELAY_MS > 0) await new Promise(resolve => setTimeout(resolve, INITIALIZE_DELAY_MS))
         send({ id, result: { userAgent: 'mock-codex' } })
         break
       case 'account/read':
