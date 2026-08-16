@@ -42,8 +42,21 @@ internal val DEEPSEEK_RUNTIME = HarnessRuntime(
     ),
 )
 
+internal val CODEX_RUNTIME = HarnessRuntime(
+    descriptor = HarnessDescriptor(
+        id = "codex",
+        name = "Codex",
+        command = "codex",
+        mark = HarnessMarkKind.Prism,
+    ),
+    command = arrayOf(
+        "/usr/bin/node",
+        "/opt/local-agent/codex/box-codex-harness.mjs",
+    ),
+)
+
 /** Offered in this order: the existing Claude behavior remains the default. */
-internal val INSTALLED_HARNESSES = listOf(CLAUDE_RUNTIME, DEEPSEEK_RUNTIME)
+internal val INSTALLED_HARNESSES = listOf(CLAUDE_RUNTIME, DEEPSEEK_RUNTIME, CODEX_RUNTIME)
 
 internal fun harnessRuntime(id: String): HarnessRuntime? =
     INSTALLED_HARNESSES.firstOrNull { it.descriptor.id == id }
