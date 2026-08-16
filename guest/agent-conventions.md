@@ -32,6 +32,16 @@ it. This file, by contrast, is copied out of the image on every boot — so an e
 here is gone at the next start. Change `guest/agent-conventions.md` in the Box source and
 it corrects itself on every device.
 
+One thing that file must not do: record a defect as a standing rule without naming the
+image you saw it on and a check that could actually fail. Nothing overwrites it, so a rule
+written on the day a bug was real outlives the image that fixed it — and it outranks this
+file, because it is specific and cites evidence. That has already happened once here.
+`AskUserQuestion` was written up as broken, re-checked on each new image by grepping the
+Kotlin for a symbol the code never contained, and so re-confirmed for three images after
+it had been fixed. Two passes, zero information: the rule looked better verified the
+longer it was wrong. Prefer performing the behaviour to grepping for it, and when you do
+grep, grep for the name the code would really use.
+
 Credentials live under `/workspace/.config`, on the disk that survives updates, and are
 readable only by you.
 
@@ -233,6 +243,13 @@ gh pr create --fill                       # or --title/--body
 
 Say what the change does and why in the pull request body, and name the commit the box was built
 from — the reviewer is reading it away from the device and cannot see what you saw.
+
+This is also how you report what you *notice* rather than what you were asked for. Some defects
+are only visible from in here: a tool that reports something different to you than it shows the
+user, an instruction in this file naming a command the image does not carry. Send those back the
+same way — a pull request against the file or the code that is wrong, with the image you saw it
+on. A note left on the device is read by nobody, and is stale by the next image; a pull request
+reaches the person who can fix it.
 
 ## Ask before you send a subagent
 

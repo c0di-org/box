@@ -67,7 +67,7 @@ You can start something with the agent, open the desktop and inspect it, take ov
 <p align="center">
   <img alt="The tour reading the machine it runs on: uname, the Box build commit, memory and disks, each command approved in the conversation." src="docs/assets/screenshots/device/tour-reading-the-machine.png" width="400">
   &nbsp;
-  <img alt="The tour asking what to build, answered inline in the conversation." src="docs/assets/screenshots/device/tour-question-answered.png" width="400">
+  <img alt="The tour asking what to build with tappable options, waiting for an answer in the conversation." src="docs/assets/screenshots/device/tour-question-open.png" width="400">
 </p>
 
 Commands, diffs and permission requests stay visible in the conversation. If you want the actual computer, open it.
