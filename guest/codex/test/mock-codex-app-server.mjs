@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFile, mkdir } from 'node:fs/promises'
+import { access, appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { dirname } from 'node:path'
 
@@ -7,6 +7,8 @@ const LOG = process.env.MOCK_CODEX_LOG
 const THREAD_ID = process.env.MOCK_THREAD_ID ?? 'thread-box-test'
 const TURN_ID = process.env.MOCK_TURN_ID ?? 'turn-box-test'
 const RESUME_FAIL = process.env.MOCK_RESUME_FAIL === '1'
+const CRASH_ON_TURN = process.env.MOCK_CRASH_ON_TURN === '1'
+const CRASH_MARKER = process.env.MOCK_CRASH_MARKER
 
 async function log(value) {
   if (!LOG) return
@@ -41,6 +43,14 @@ input.on('line', line => {
         else send({ id, result: { thread: { id: params.threadId } } })
         break
       case 'turn/start':
+        if (CRASH_ON_TURN && CRASH_MARKER) {
+          let crashed = false
+          try { await access(CRASH_MARKER); crashed = true } catch {}
+          if (!crashed) {
+            await writeFile(CRASH_MARKER, 'crashed\n')
+            process.exit(77)
+          }
+        }
         send({ id, result: { turn: { id: TURN_ID, status: 'inProgress' } } })
         send({ method: 'turn/started', params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'inProgress' } } })
         send({ method: 'item/agentMessage/delta', params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: 'msg-1', delta: 'hello' } })
