@@ -37,12 +37,34 @@ class HarnessRuntimeTest {
             deepseek.command,
         )
         assertArrayEquals(
-            arrayOf("/usr/bin/node", "/opt/local-agent/codex/box-codex-harness.mjs"),
+            arrayOf("/usr/bin/node", "/opt/local-agent/codex/box-codex-product-harness.mjs"),
             codex.command,
         )
         assertTrue(claude.claudeEnvironment)
         assertFalse(deepseek.claudeEnvironment)
         assertFalse(codex.claudeEnvironment)
         assertNull(harnessRuntime("not-installed"))
+    }
+
+    @Test
+    fun productCapabilitiesAreAdvertisedPerHarnessWithoutLeakingClaudeState() {
+        val claude = harnessRuntime("claude-code")!!.descriptor.capabilities
+        val deepseek = harnessRuntime("deepseek-harness")!!.descriptor.capabilities
+        val codex = harnessRuntime("codex")!!.descriptor.capabilities
+
+        assertFalse(claude.hasSettings)
+        assertFalse(claude.models)
+        assertFalse(deepseek.hasSettings)
+        assertFalse(deepseek.models)
+
+        assertTrue(codex.account)
+        assertTrue(codex.models)
+        assertTrue(codex.boxTools)
+        assertTrue("github" in codex.externalServices)
+        assertTrue(codex.hasSettings)
+        assertEquals(
+            listOf("/usr/bin/node", "/opt/local-agent/codex/box-codex-control.mjs"),
+            codex.controlCommand,
+        )
     }
 }
