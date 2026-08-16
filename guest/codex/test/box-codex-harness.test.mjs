@@ -156,3 +156,20 @@ test('uses structured local image input and honest workspace paths for other att
   assert.match(turn.params.input[0].text, /notes\.pdf .*application\/pdf.*notes\.pdf/s)
   await stop(h)
 })
+
+test('restarts a crashed App Server and resumes the durable thread before the next turn', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'box-codex-'))
+  const marker = join(root, 'crashed-once')
+  const h = await startHarness(root, { MOCK_CRASH_ON_TURN: '1', MOCK_CRASH_MARKER: marker })
+  await h.waitFor(e => e.type === 'session_started')
+  h.child.stdin.write(`${JSON.stringify({ type: 'prompt', text: 'crash once', attachments: [] })}\n`)
+  await h.waitFor(e => e.type === 'error' && e.message === 'Codex App Server stopped unexpectedly.')
+
+  h.child.stdin.write(`${JSON.stringify({ type: 'prompt', text: 'continue after crash', attachments: [] })}\n`)
+  await h.waitFor(e => e.type === 'message' && e.complete === true)
+  const log = await rpcLog(h.log)
+  assert.equal(log.filter(m => m.method === 'thread/start').length, 1)
+  assert.ok(log.some(m => m.method === 'thread/resume' && m.params.threadId === 'thread-box-test'))
+  assert.ok(log.some(m => m.method === 'turn/start' && m.params.input?.[0]?.text === 'continue after crash'))
+  await stop(h)
+})
