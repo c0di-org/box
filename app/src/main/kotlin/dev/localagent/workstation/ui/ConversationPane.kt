@@ -1,5 +1,6 @@
 package dev.localagent.workstation.ui
 
+import android.app.Application
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -81,6 +82,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -89,6 +91,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.localagent.runtime.api.RuntimeState
+import dev.localagent.workstation.BoxContainer
 import dev.localagent.workstation.BoxUiState
 import dev.localagent.workstation.QueuedPrompt
 import dev.localagent.workstation.agent.AgentActivity
@@ -145,6 +148,11 @@ fun ConversationPane(
 ) {
     val session = state.selectedSession
     val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
+    val application = LocalContext.current.applicationContext as Application
+    val harnessControls = remember(application) { BoxContainer.harnessControls(application) }
+    val openHarnessSettings = harness?.takeIf { it.capabilities.hasSettings }?.let { selected ->
+        { harnessControls.show(selected, state.computerReady) }
+    }
     val queued = state.queuedForSelected
     // Held here rather than inside the list, because the composer's own way back to an unanswered
     // request is a scroll and not a modal. See [waitingAction].
@@ -163,6 +171,7 @@ fun ConversationPane(
             onInterrupt = onInterrupt,
             onOpenComputer = onOpenComputer,
             onCloseSession = session?.let { { onCloseSession(it.id) } },
+            onOpenHarnessSettings = openHarnessSettings,
             showComputerAction = showComputerAction,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -184,7 +193,9 @@ fun ConversationPane(
             state.connection !is SessionConnection.Ended
         val connectRequest = state.connectRequest?.takeIf { it.sessionId == state.selectedSessionId }
         when {
-            state.needsSignIn -> SignInBanner(onSignIn)
+            // [needsSignIn] is Claude's established credential state. Other harnesses expose
+            // account state through their advertised settings capability instead of inheriting it.
+            state.needsSignIn && (harness == null || harness.id == "claude-code") -> SignInBanner(onSignIn)
             // While the computer is down, its own banner is the true and actionable one. Showing
             // the transport's view as well says the same thing twice, in red, about a normal state.
             showBoxState && state.runtimeState != RuntimeState.Ready ->
@@ -304,13 +315,17 @@ fun ConversationPane(
             mode = state.permissionMode,
             onModeChange = onSetPermissionMode,
             model = state.agentModel,
-            onModelChange = onSetAgentModel,
+            // AgentModel remains Claude's existing product setting. A non-Claude harness gets the
+            // catalog it advertised in Agent settings rather than a list of Claude model names.
+            onModelChange = if (harness == null || harness.id == "claude-code") onSetAgentModel else null,
             attachments = state.pendingAttachments,
             onAttachPhoto = onAttachPhoto,
             onAttachFile = onAttachFile,
             onRemoveAttachment = onRemoveAttachment,
         )
     }
+
+    HarnessSettingsSheet(controller = harnessControls, onDismiss = harnessControls::dismiss)
 }
 
 @Composable
@@ -322,6 +337,7 @@ private fun ConversationHeader(
     onInterrupt: () -> Unit,
     onOpenComputer: () -> Unit,
     onCloseSession: (() -> Unit)?,
+    onOpenHarnessSettings: (() -> Unit)?,
     showComputerAction: Boolean,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -380,6 +396,15 @@ private fun ConversationHeader(
                 Icon(Icons.Outlined.MoreVert, contentDescription = "Task options")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                if (onOpenHarnessSettings != null) {
+                    DropdownMenuItem(
+                        text = { Text("Agent settings") },
+                        onClick = {
+                            menuOpen = false
+                            onOpenHarnessSettings()
+                        },
+                    )
+                }
                 if (onCloseSession != null) {
                     DropdownMenuItem(
                         text = { Text("Close task") },
