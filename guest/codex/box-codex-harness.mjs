@@ -215,7 +215,20 @@ class RpcClient {
     this.closed = true
     for (const waiter of this.pending.values()) waiter.reject(error)
     this.pending.clear()
+    if (rpc === this) rpc = null
+    // A thread id is only usable by the App Server process that loaded/created it. Clear
+    // the in-memory binding so the next prompt starts a replacement App Server and resumes
+    // the durable id from STATE_FILE instead of attempting a request on this closed client.
+    threadId = null
+    activeTurnId = null
+    interruptRequested = false
+    messageBuffers.clear()
+    reasoningBuffers.clear()
     if (!shuttingDown) {
+      for (const requestId of pendingApprovals.keys()) {
+        emit({ type: 'permission_resolved', requestId, decision: 'deny' })
+      }
+      pendingApprovals.clear()
       emit({
         type: 'error',
         message: 'Codex App Server stopped unexpectedly.',
