@@ -148,7 +148,6 @@ class HarnessControls(private val application: Application) {
                 WORKSPACE,
                 Bundle().apply {
                     putString("HOME", GUEST_HOME)
-                    putString("CODEX_HOME", "$WORKSPACE/.config/codex")
                     putString("BOX_SESSION_CWD", WORKSPACE)
                 },
                 object : GuestSessionCallback() {
