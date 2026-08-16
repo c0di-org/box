@@ -17,6 +17,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, readFile } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { Readable, Writable } from 'node:stream'
@@ -104,7 +105,7 @@ function permissionResponse(allowed) {
 async function requestPermission(params) {
   if (permissionMode === 'bypassPermissions') return permissionResponse(true)
 
-  const requestId = `deepseek-${params.toolCall?.toolCallId ?? crypto.randomUUID()}`
+  const requestId = `deepseek-${params.toolCall?.toolCallId ?? randomUUID()}`
   emit({
     type: 'permission_requested',
     requestId,
@@ -192,20 +193,38 @@ async function startAcp() {
     ),
   )
 
-  await Promise.race([
-    (async () => {
-      await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
-      const created = await conn.newSession({ cwd: CWD, mcpServers: [] })
-      acp = { child, conn, sessionId: created.sessionId, exited }
-    })(),
-    exited,
-  ])
+  try {
+    await Promise.race([
+      (async () => {
+        await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+        const created = await conn.newSession({ cwd: CWD, mcpServers: [] })
+        acp = { child, conn, sessionId: created.sessionId, exited }
+      })(),
+      exited,
+    ])
+  } catch (error) {
+    try { child.stdin.end() } catch {}
+    try { child.kill('SIGTERM') } catch {}
+    throw error
+  }
 
   return acp
 }
 
 async function runPrompt(command) {
-  const text = await promptText(command)
+  let text
+  try {
+    text = await promptText(command)
+  } catch (error) {
+    emit({
+      type: 'error',
+      message: 'Box could not prepare the attachments for DeepSeek.',
+      detail: errorMessage(error),
+      recoverable: true,
+    })
+    return
+  }
+
   emit({
     type: 'user_message',
     text: command.text ?? '',
