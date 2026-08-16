@@ -60,6 +60,17 @@ test('account device flow stays ephemeral and survives a fresh control process',
   assert.ok(restarted.output.some(e => e.type === 'account_state' && e.state === 'signed_in'))
 })
 
+test('account logout clears the persisted App Server account state', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'box-codex-product-'))
+  const login = await runControl(root, 'account-login')
+  assert.equal(login.code, 0)
+  const logout = await runControl(root, 'account-logout')
+  assert.equal(logout.code, 0)
+  assert.ok(logout.output.some(e => e.type === 'account_state' && e.state === 'signed_out'))
+  const restarted = await runControl(root, 'account-status')
+  assert.ok(restarted.output.some(e => e.type === 'account_state' && e.state === 'signed_out'))
+})
+
 test('account login cancellation calls the official cancel method and reports cancellation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'box-codex-product-'))
   let cancelled = false
@@ -93,6 +104,7 @@ test('Codex model catalog selection is dynamic, per-harness, persisted, and stal
   const statePath = join(result.workspace, '.config/box/harness-models.json')
   let state = JSON.parse(await readFile(statePath, 'utf8'))
   assert.equal(state.selections.codex.model, 'gpt-box-fast')
+  // An unrelated provider's state survives Codex writes.
   state.selections['future-harness'] = { model: 'other' }
   await writeFile(statePath, JSON.stringify(state))
   await runControl(root, 'model-set', ['gpt-box-default'])
@@ -140,6 +152,19 @@ test('App Server proxy injects Box MCP plus selected model into supported offici
   assert.match(start.params.config.mcp_servers.box.args[0], /box-tools\/box-mcp-server\.mjs$/)
   assert.equal(start.params.config.mcp_servers.box.env.BOX_SESSION_CWD, p.workspace)
   assert.equal(log.find(m => m.method === 'turn/start').params.model, 'gpt-box-fast')
+})
+
+test('a running proxy picks up a persisted model change on the next turn', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'box-codex-product-'))
+  const p = await startProxy(root)
+  await mkdir(join(p.workspace, '.config/box'), { recursive: true })
+  await writeFile(p.modelState, JSON.stringify({ version: 1, selections: { codex: { model: 'gpt-box-fast', codexVersion: '0.147.0' } } }))
+  await rpc(p.child, p.output, 1, 'turn/start', { threadId: 'thread-1', input: [] })
+  await writeFile(p.modelState, JSON.stringify({ version: 1, selections: { codex: { model: 'gpt-box-default', codexVersion: '0.147.0' } } }))
+  await rpc(p.child, p.output, 2, 'turn/start', { threadId: 'thread-1', input: [] })
+  p.child.stdin.end(); await new Promise(r => p.child.once('exit', r))
+  const turns = (await readFile(p.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(m => m.method === 'turn/start')
+  assert.deepEqual(turns.map(m => m.params.model), ['gpt-box-fast', 'gpt-box-default'])
 })
 
 test('unsupported persisted model retries the rejected request once without overriding App Server', async () => {
@@ -211,5 +236,18 @@ test('Box MCP GitHub request uses existing connect wire and returns only non-sec
   assert.equal(call.result.result.structuredContent.login, 'octocat')
   assert.doesNotMatch(JSON.stringify(call.result), /SHOULD_NOT_EXIST/)
   await waitFor(p.output, e => e.type === 'connect_resolved' && e.requestId === request.requestId && e.connected === true)
+  call.child.stdin.end(); call.child.kill(); p.child.stdin.end(); p.child.kill()
+})
+
+test('Box MCP GitHub decline returns an honest disconnected result', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'box-codex-product-'))
+  const p = await startProduct(root)
+  const callPromise = mcpCall(p, 9, 'connect', { service: 'github', reason: 'read a private issue' })
+  const request = await waitFor(p.output, e => e.type === 'connect_requested')
+  p.child.stdin.write(`${JSON.stringify({ type: 'connect_result', requestId: request.requestId, connected: false })}\n`)
+  const call = await callPromise
+  assert.equal(call.result.result.structuredContent.connected, false)
+  assert.match(call.result.result.content[0].text, /not connected/i)
+  await waitFor(p.output, e => e.type === 'connect_resolved' && e.requestId === request.requestId && e.connected === false)
   call.child.stdin.end(); call.child.kill(); p.child.stdin.end(); p.child.kill()
 })
