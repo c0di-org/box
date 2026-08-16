@@ -173,3 +173,15 @@ test('restarts a crashed App Server and resumes the durable thread before the ne
   assert.ok(log.some(m => m.method === 'turn/start' && m.params.input?.[0]?.text === 'continue after crash'))
   await stop(h)
 })
+
+test('serializes eager App Server initialization with the first prompt', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'box-codex-'))
+  const h = await startHarness(root, { MOCK_INITIALIZE_DELAY_MS: '200' })
+  await h.waitFor(e => e.type === 'session_started')
+  h.child.stdin.write(`${JSON.stringify({ type: 'prompt', text: 'race init', attachments: [] })}\n`)
+  await h.waitFor(e => e.type === 'message' && e.complete === true)
+  const log = await rpcLog(h.log)
+  assert.equal(log.filter(m => m.method === 'initialize').length, 1)
+  assert.ok(log.findIndex(m => m.method === 'initialize') < log.findIndex(m => m.method === 'account/read'))
+  await stop(h)
+})
