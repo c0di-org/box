@@ -35,6 +35,7 @@ const LOCK_FILE = join(BOX_STATE_ROOT, `${SESSION_ID}.lock`)
 
 let permissionMode = 'default'
 let rpc = null
+let rpcStarting = null
 let threadId = null
 let activeTurnId = null
 let interruptRequested = false
@@ -241,32 +242,43 @@ class RpcClient {
 }
 
 async function startRpc() {
+  if (rpcStarting) return rpcStarting
   if (rpc && !rpc.closed) return rpc
 
-  await mkdir(CODEX_HOME, { recursive: true })
-  const child = spawn(APP_SERVER, ['--listen', 'stdio://', '-c', 'cli_auth_credentials_store="file"'], {
-    cwd: CWD,
-    env: {
-      ...process.env,
-      CODEX_HOME,
-      HOME: process.env.HOME ?? '/home/agent',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  const client = new RpcClient(child)
-  rpc = client
+  rpcStarting = (async () => {
+    await mkdir(CODEX_HOME, { recursive: true })
+    const child = spawn(APP_SERVER, [
+      '--listen', 'stdio://',
+      '-c', 'cli_auth_credentials_store="file"',
+    ], {
+      cwd: CWD,
+      env: {
+        ...process.env,
+        CODEX_HOME,
+        HOME: process.env.HOME ?? '/home/agent',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    const client = new RpcClient(child)
+    rpc = client
 
-  await client.request('initialize', {
-    clientInfo: {
-      name: 'box_android',
-      title: 'Box',
-      version: '1',
-    },
-    capabilities: {},
-  })
-  client.notify('initialized')
+    await client.request('initialize', {
+      clientInfo: {
+        name: 'box_android',
+        title: 'Box',
+        version: '1',
+      },
+      capabilities: {},
+    })
+    client.notify('initialized')
+    return client
+  })()
 
-  return client
+  try {
+    return await rpcStarting
+  } finally {
+    rpcStarting = null
+  }
 }
 
 async function requireAuthentication(client) {
