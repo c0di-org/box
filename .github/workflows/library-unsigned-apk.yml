@@ -1,0 +1,168 @@
+name: Library unsigned APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: library-unsigned-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Release gate
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.gate.outputs.should_build }}
+      should_upload: ${{ steps.gate.outputs.should_upload }}
+      version: ${{ steps.gate.outputs.version }}
+      version_code: ${{ steps.gate.outputs.version_code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check committed version
+        id: gate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]]; then
+            echo "VERSION must start with semantic version major.minor.patch, found: $VERSION" >&2
+            exit 1
+          fi
+
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+          VERSION_CODE=$((10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH))
+
+          SHOULD_BUILD=true
+          SHOULD_UPLOAD=false
+          PREVIOUS=""
+          if [ "$EVENT_NAME" = "push" ]; then
+            SHOULD_BUILD=false
+            if [ -n "${BEFORE_SHA:-}" ] && ! [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+              PREVIOUS="$(git show "$BEFORE_SHA:VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+            fi
+            if [ "$VERSION" != "$PREVIOUS" ]; then
+              SHOULD_BUILD=true
+              SHOULD_UPLOAD=true
+            fi
+          fi
+
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+          echo "should_upload=$SHOULD_UPLOAD" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "Box version: ${PREVIOUS:-<none>} -> $VERSION ($VERSION_CODE); build: $SHOULD_BUILD; publish candidate: $SHOULD_UPLOAD" >> "$GITHUB_STEP_SUMMARY"
+
+  guest-image:
+    name: Guest image
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the guest image
+        run: ./guest/build-container.sh
+      - name: Describe what was built
+        run: |
+          cat guest/image/out/image.json
+          du -sh guest/image/out
+      - name: Hand the image to the APK job
+        uses: actions/upload-artifact@v4
+        with:
+          name: library-guest-image
+          path: guest/image/out
+          compression-level: 0
+          retention-days: 1
+
+  apk:
+    name: Unsigned APK
+    needs: [gate, guest-image]
+    if: needs.gate.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Take the guest image
+        uses: actions/download-artifact@v4
+        with:
+          name: library-guest-image
+          path: guest/image/out
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android build dependencies
+        run: sdkmanager --install "cmake;3.22.1"
+
+      - name: Tests
+        run: ./gradlew --no-daemon :runtime-qemu:testDebugUnitTest :app:testStockDebugUnitTest
+
+      - name: Guest tests
+        run: |
+          node --test guest/tests/*.mjs
+          python3 -m unittest discover -s guest/tests
+
+      - name: Disable release signing for the Library handoff
+        run: |
+          cat > "$RUNNER_TEMP/library-unsigned.init.gradle" <<'GRADLE'
+          gradle.beforeProject { project ->
+            if (project.path == ':app') {
+              project.afterEvaluate {
+                def android = project.extensions.findByName('android')
+                if (android != null) {
+                  android.buildTypes.getByName('release').signingConfig = null
+                }
+              }
+            }
+          }
+          GRADLE
+
+      - name: Build unsigned stock release APK
+        env:
+          ORG_GRADLE_PROJECT_boxVersionName: ${{ needs.gate.outputs.version }}
+          ORG_GRADLE_PROJECT_boxVersionCode: ${{ needs.gate.outputs.version_code }}
+        run: ./gradlew --no-daemon -I "$RUNNER_TEMP/library-unsigned.init.gradle" :app:assembleStockRelease
+
+      - name: Verify unsigned APK
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/stock/release -name '*.apk' -print -quit)"
+          test -n "$APK"
+          AAPT2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 -print | sort -V | tail -n1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n1)"
+          test -n "$AAPT2" && test -n "$APKSIGNER"
+          "$AAPT2" dump badging "$APK" | grep -q "package: name='dev.localagent.workstation.stock'"
+          if "$APKSIGNER" verify "$APK" >/dev/null 2>&1; then
+            echo "Expected an unsigned APK, but apksigner verified it as signed." >&2
+            exit 1
+          fi
+          mkdir -p library-artifact
+          cp "$APK" library-artifact/box-release-unsigned.apk
+
+      - name: Upload unsigned APK for Library
+        if: needs.gate.outputs.should_upload == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: library-unsigned-apk
+          path: library-artifact/box-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
