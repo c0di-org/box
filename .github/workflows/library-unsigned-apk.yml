@@ -1,6 +1,10 @@
 name: Library release APK
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/library-unsigned-apk.yml'
   workflow_dispatch:
     inputs:
       version:
@@ -73,7 +77,7 @@ jobs:
 
       - name: Build unsigned stock release APK
         env:
-          ORG_GRADLE_PROJECT_boxVersionName: ${{ inputs.version }}
+          ORG_GRADLE_PROJECT_boxVersionName: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '0.1.0' }}
           ORG_GRADLE_PROJECT_boxVersionCode: ${{ github.run_number }}
         run: ./gradlew --no-daemon :app:assembleStockRelease
 
