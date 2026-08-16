@@ -15,7 +15,7 @@ SUITE="${DEBIAN_SUITE:-bookworm}"
 # image -- a bare Ubuntu, a toolchain-specific one -- exist without colliding with this one.
 IMAGE_ID="${IMAGE_ID:-box-minimal-claude}"
 IMAGE_NAME="${IMAGE_NAME:-Box Minimal}"
-IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-Debian ${SUITE} arm64 with agentd, the Claude Code harness and a minimal desktop.}"
+IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-Debian ${SUITE} arm64 with Claude Code, DeepSeek Harness, agentd and a minimal desktop.}"
 # Raised from 4096 to fit the baked harness (~315 MB). Unused space costs almost nothing in the
 # APK: the image ships as a compressed qcow2, and empty blocks compress to nearly zero.
 IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-6144}"
@@ -61,6 +61,41 @@ test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent
 # A harness that installed for the wrong architecture would fail only once it reached the phone.
 test -d "$ROOTFS/opt/local-agent/harness/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64" \
   || { echo 'the harness installed without its linux-arm64 runtime' >&2; exit 1; }
+
+# DeepSeek Harness is baked beside Claude, but gets its own Node runtime.
+#
+# DSH 0.1.0-rc.5 requires Node >=22.19 while Debian Bookworm's nodejs is older. Replacing /usr/bin
+# node would unnecessarily move the known-good Claude path, so a pinned official ARM64 Node lives
+# under /opt/local-agent/deepseek/node and is used only by this harness. The archive is verified
+# against Node's published SHA256 list before anything from it is executed.
+DSH_NODE_VERSION="${DSH_NODE_VERSION:-22.23.2}"
+DSH_NODE_ARCHIVE="node-v${DSH_NODE_VERSION}-linux-arm64.tar.gz"
+DSH_NODE_RELEASE="https://nodejs.org/download/release/v${DSH_NODE_VERSION}"
+DSH_ROOT="$ROOTFS/opt/local-agent/deepseek"
+DSH_NODE="$DSH_ROOT/node"
+DSH_APP="$DSH_ROOT/app"
+command -v curl >/dev/null || { echo 'curl is required (rebuild the builder image)' >&2; exit 1; }
+install -d -m 0755 "$DSH_NODE" "$DSH_APP" "$ROOTFS/tmp"
+curl -fsSL -o "$ROOTFS/tmp/$DSH_NODE_ARCHIVE" "$DSH_NODE_RELEASE/$DSH_NODE_ARCHIVE"
+curl -fsSL -o "$ROOTFS/tmp/node-shasums.txt" "$DSH_NODE_RELEASE/SHASUMS256.txt"
+( cd "$ROOTFS/tmp" && grep " $DSH_NODE_ARCHIVE\$" node-shasums.txt | sha256sum -c - ) \
+  || { echo 'the DeepSeek Node runtime did not match Node.js published checksums' >&2; exit 1; }
+tar -xzf "$ROOTFS/tmp/$DSH_NODE_ARCHIVE" -C "$DSH_NODE" --strip-components=1
+rm -f "$ROOTFS/tmp/$DSH_NODE_ARCHIVE" "$ROOTFS/tmp/node-shasums.txt"
+"$DSH_NODE/bin/node" --version | grep -qx "v${DSH_NODE_VERSION}" \
+  || { echo 'the DeepSeek Node runtime did not install' >&2; exit 1; }
+
+install -m 0644 "$ROOT_DIR/guest/deepseek/package.json" "$DSH_APP/package.json"
+install -m 0644 "$ROOT_DIR/guest/deepseek/box.cordis.yml" "$DSH_APP/box.cordis.yml"
+install -m 0755 "$ROOT_DIR/guest/deepseek/box-deepseek-harness.mjs" "$DSH_APP/box-deepseek-harness.mjs"
+# npm's executable uses /usr/bin/env node, so put the private runtime first while resolving DSH.
+# All top-level packages are exact versions in package.json; this is intentionally separate from
+# Claude's lockfile so adding DSH cannot perturb Claude's dependency tree.
+PATH="$DSH_NODE/bin:$PATH" "$DSH_NODE/bin/npm" --prefix "$DSH_APP" install --omit=dev --no-audit --no-fund
+test -f "$DSH_APP/node_modules/@deepseek-ai/dsh-acp-demo/lib/bin.js" \
+  || { echo 'DeepSeek Harness ACP runtime did not install' >&2; exit 1; }
+test -d "$DSH_APP/node_modules/@agentclientprotocol/sdk" \
+  || { echo 'DeepSeek Harness ACP client SDK did not install' >&2; exit 1; }
 
 # Connecting this box to GitHub, and the one thing that reads the credential afterwards.
 #
@@ -338,6 +373,11 @@ cat > "$OUT_DIR/image.json" <<EOF
         "id": "claude-code",
         "name": "Claude Code",
         "entry": "/opt/local-agent/harness/box-claude-harness.mjs"
+      },
+      {
+        "id": "deepseek-harness",
+        "name": "DeepSeek Harness",
+        "entry": "/opt/local-agent/deepseek/app/box-deepseek-harness.mjs"
       }
     ],
     "source": { "commit": "$BOX_COMMIT", "path": "/usr/src/box" }
