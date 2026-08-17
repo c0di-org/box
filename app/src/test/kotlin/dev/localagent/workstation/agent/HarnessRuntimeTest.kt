@@ -13,6 +13,7 @@ class HarnessRuntimeTest {
         assertEquals(listOf("claude-code", "deepseek-harness"), INSTALLED_HARNESSES.map { it.descriptor.id })
         assertEquals("Claude Code", INSTALLED_HARNESSES.first().descriptor.name)
         assertEquals("DeepSeek Harness", INSTALLED_HARNESSES.last().descriptor.name)
+        assertNull(harnessRuntime("codex"))
     }
 
     @Test
@@ -34,5 +35,11 @@ class HarnessRuntimeTest {
         assertTrue(claude.claudeEnvironment)
         assertFalse(deepseek.claudeEnvironment)
         assertNull(harnessRuntime("not-installed"))
+    }
+
+    @Test
+    fun genericProductCapabilitiesStayOptIn() {
+        assertFalse(harnessRuntime("claude-code")!!.descriptor.capabilities.hasSettings)
+        assertFalse(harnessRuntime("deepseek-harness")!!.descriptor.capabilities.hasSettings)
     }
 }

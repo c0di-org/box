@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.localagent.workstation.agent.AgentBackend
 import dev.localagent.workstation.agent.GuestAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
+import dev.localagent.workstation.agent.HarnessControls
 import dev.localagent.workstation.computer.DesktopTransport
 import dev.localagent.workstation.computer.VncDesktop
 import kotlinx.coroutines.CoroutineScope
@@ -37,8 +38,19 @@ object BoxContainer {
             backendInstance ?: GuestAgentBackend(application, scope).also { backendInstance = it }
         }
 
-    /** One sign-in at a time, for the whole app. */
+    /** One Claude sign-in at a time, for the whole app. Existing behavior stays unchanged. */
     val auth: GuestAuth by lazy { GuestAuth() }
+
+    @Volatile private var harnessControlsInstance: HarnessControls? = null
+
+    /**
+     * Account/model hand-offs also outlive an Activity. Constructing this starts no guest process;
+     * a harness helper is launched only after the person opens that harness's settings sheet.
+     */
+    fun harnessControls(application: Application): HarnessControls =
+        harnessControlsInstance ?: synchronized(this) {
+            harnessControlsInstance ?: HarnessControls(application).also { harnessControlsInstance = it }
+        }
 
     @Volatile private var desktopInstance: VncDesktop? = null
 

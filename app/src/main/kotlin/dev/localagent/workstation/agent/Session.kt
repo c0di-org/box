@@ -13,6 +13,8 @@ data class HarnessDescriptor(
     val command: String,
     val mark: HarnessMarkKind,
     val installed: Boolean = true,
+    /** Product affordances this harness can actually back. The UI never infers provider APIs. */
+    val capabilities: HarnessCapabilities = HarnessCapabilities(),
 )
 
 /** Which geometric mark to draw for a harness. Deliberately abstract, not vendor artwork. */
