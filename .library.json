@@ -1,7 +1,7 @@
 {
   "name": "Box",
-  "tagline": "One-tap Linux and agent workspace for Android.",
-  "description": "An Android workstation that bundles a Linux guest and agent runtime for local development workflows.",
+  "tagline": "One-tap Linux on Android.",
+  "description": "Launch a Linux VM (with a packaged agent) for easy local development workflows on Android.",
   "category": "Developer Tools",
   "accent": "#A9FF68",
   "featured": false,
