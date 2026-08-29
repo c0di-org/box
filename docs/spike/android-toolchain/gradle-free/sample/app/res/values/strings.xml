@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Built in the Box</string>
+    <string name="headline">This app was compiled\ninside your phone.</string>
+    <string name="blurb">No laptop, no cloud build server, no Gradle. An agent in an emulated ARM64 Debian — running on this device — ran aapt2, javac, d8 and apksigner, and handed you the APK.</string>
+    <string name="btn">So where am I running?</string>
+</resources>
