@@ -233,6 +233,21 @@ sealed interface AgentEvent {
      * it, and the same line replayed from a log should raise nothing at all until the rest of the
      * log has had its say about how it ended. See `BoxViewModel.offerConnection`.
      */
+    /**
+     * How full the agent's context is, as the harness last saw it.
+     *
+     * Absent from every harness that does not report it, and from a Claude session until its first
+     * turn completes — the window size is named by the model that served the turn, and guessing it
+     * would make a gauge out of an assumption.
+     */
+    data class ContextChanged(
+        override val eventId: String,
+        override val sessionId: String,
+        override val at: Long,
+        val usedTokens: Long,
+        val contextWindow: Long,
+    ) : AgentEvent
+
     data class CaughtUp(
         override val eventId: String,
         override val sessionId: String,

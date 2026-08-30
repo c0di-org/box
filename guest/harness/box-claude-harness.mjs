@@ -888,6 +888,46 @@ function attribution(message) {
   return parent ? { subAgentId: parent } : {};
 }
 
+/**
+ * The size of the window, learned from the model that is actually answering.
+ *
+ * Not a constant, because it is not one: it differs by model, and Box lets the user change model
+ * mid-session. Nothing is reported until the SDK has named a number, which is the difference
+ * between a gauge and a guess.
+ */
+let contextWindow = null;
+
+/** The last figure sent, so an unchanged context does not re-emit on every message. */
+let contextUsed = null;
+
+/**
+ * How full the context is, from the only place that actually knows.
+ *
+ * A turn's `usage` counts the tokens the *request* carried, so input plus both cache figures is
+ * the conversation as the model just saw it — not a running total, which is what a session's
+ * cumulative usage would give and would climb past the window within a few turns.
+ *
+ * Sub-agents are excluded on purpose. A delegate has its own window, and folding its consumption
+ * into the parent's gauge would show the user a number belonging to a conversation they are not
+ * having.
+ */
+function reportContext(message) {
+  if (message.parent_tool_use_id) return;
+  const usage = message.message?.usage;
+  if (!usage) return;
+  const used = (usage.input_tokens ?? 0)
+    + (usage.cache_creation_input_tokens ?? 0)
+    + (usage.cache_read_input_tokens ?? 0);
+  if (!used || !contextWindow) return;
+  // Whole percent is the resolution anyone reads off a ring; below that this is just chatter on a
+  // wire that the app writes to disk line by line.
+  const before = contextUsed == null ? null : Math.round((contextUsed / contextWindow) * 100);
+  const after = Math.round((used / contextWindow) * 100);
+  contextUsed = used;
+  if (before === after) return;
+  emit({ type: 'context', usedTokens: used, contextWindow });
+}
+
 function translateAssistant(message) {
   const from = attribution(message);
   for (const block of message.message?.content ?? []) {
@@ -1689,6 +1729,7 @@ async function main() {
           }
           break;
         case 'assistant':
+          reportContext(message);
           translateAssistant(message);
           break;
         case 'user':
@@ -1712,6 +1753,14 @@ async function main() {
            * indicator and no Stop. `result` is a copy of the final assistant message, not a
            * description of the work, so there is nothing here to say the conversation has not.
            */
+          // The window arrives here rather than at init: `modelUsage` is keyed by the model that
+          // actually served the turn, which is the one whose window applies. Largest wins on the
+          // rare turn served by more than one, because the gauge is about the conversation and the
+          // conversation fits in the biggest of them.
+          for (const usage of Object.values(message.modelUsage ?? {})) {
+            if (usage?.contextWindow > (contextWindow ?? 0)) contextWindow = usage.contextWindow;
+          }
+
           if (message.subtype === 'success') {
             lastOutcome = { status: 'completed' };
           } else if (interruptRequested) {

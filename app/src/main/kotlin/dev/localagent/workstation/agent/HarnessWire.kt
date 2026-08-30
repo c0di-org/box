@@ -52,6 +52,16 @@ internal object HarnessWire {
                 workingDirectory = json.optStringOrNull("cwd") ?: context.workingDirectory,
             )
 
+            "context" -> {
+                val window = json.optLong("contextWindow")
+                val used = json.optLong("usedTokens")
+                // A window of zero is not a full context, it is a harness that does not know one.
+                // Dropped rather than drawn, because a gauge reading 100% would be a lie told
+                // confidently.
+                if (window <= 0 || used < 0) null
+                else AgentEvent.ContextChanged(eventId, session, at, used, window)
+            }
+
             "session_ended" -> AgentEvent.SessionEnded(
                 eventId, session, at, outcome(json.optJSONObject("outcome")),
             )

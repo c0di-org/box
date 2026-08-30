@@ -81,6 +81,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
@@ -103,6 +104,7 @@ import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.ConnectRequest
 import dev.localagent.workstation.agent.Attachment
+import dev.localagent.workstation.agent.ContextUsage
 import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
@@ -198,6 +200,7 @@ fun ConversationPane(
                         )
                     }
                 },
+            context = state.transcript?.context,
             showComputerAction = showComputerAction,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -365,6 +368,7 @@ private fun ConversationHeader(
     onCloseSession: (() -> Unit)?,
     onOpenHarnessSettings: (() -> Unit)?,
     onSaveTranscript: (() -> Unit)?,
+    context: ContextUsage?,
     showComputerAction: Boolean,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -418,6 +422,9 @@ private fun ConversationHeader(
                 Icon(Icons.Outlined.Computer, contentDescription = "Open the computer")
             }
         }
+        // Beside the menu rather than in it: a number you have to open something to read is one
+        // you find out about too late. Only once a harness has reported one — see [ContextUsage].
+        if (context != null) ContextRing(context)
         Box {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(Icons.Outlined.MoreVert, contentDescription = "Task options")
@@ -454,6 +461,51 @@ private fun ConversationHeader(
         }
     }
 }
+
+/**
+ * How full the context is, in the shape people already read this in.
+ *
+ * A ring rather than a bar because it sits in a title row next to two icon buttons, and a ring is
+ * what that row is made of. Quiet until it matters: the same colour as the other header glyphs
+ * while there is room, and the error colour once the conversation is close enough to the edge that
+ * the next long tool output is the one that compacts it.
+ *
+ * The percentage is not written next to it. This is an at-a-glance signal in a crowded row, and
+ * the number is on the label for anyone who asks for it.
+ */
+@Composable
+private fun ContextRing(context: ContextUsage) {
+    val tight = context.fraction >= TIGHT
+    val tint =
+        if (tight) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        Modifier
+            .padding(horizontal = 4.dp)
+            .size(24.dp)
+            .semantics { contentDescription = "Context ${context.percent}% full" },
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            progress = { 1f },
+            modifier = Modifier.size(18.dp),
+            color = MaterialTheme.colorScheme.outlineVariant,
+            strokeWidth = 2.dp,
+            trackColor = Color.Transparent,
+            strokeCap = StrokeCap.Round,
+        )
+        CircularProgressIndicator(
+            progress = { context.fraction },
+            modifier = Modifier.size(18.dp),
+            color = tint,
+            strokeWidth = 2.dp,
+            trackColor = Color.Transparent,
+            strokeCap = StrokeCap.Round,
+        )
+    }
+}
+
+/** Where a long tool result stops being something the conversation can absorb. */
+private const val TIGHT = 0.85f
 
 // ---------------------------------------------------------------------------
 // Banners: "not ready yet" is a normal state in Box, not an edge case.

@@ -25,12 +25,27 @@ data class Transcript(
     val pendingPermissions: List<PendingPermission> = emptyList(),
     val outcome: SessionOutcome? = null,
     val workingDirectory: String = "/workspace",
+    /** Null until a harness says otherwise, which is most of them and all of them at first. */
+    val context: ContextUsage? = null,
 ) {
     val isBusy: Boolean
         get() = activity is AgentActivity.Thinking || activity is AgentActivity.Working
 
     /** The one the sheet raises: whatever has been waiting longest. */
     val pendingPermission: PendingPermission? get() = pendingPermissions.firstOrNull()
+}
+
+/**
+ * How much of the agent's context the conversation is using.
+ *
+ * [fraction] is clamped, because a window that shrinks mid-session — the user changing model — can
+ * briefly describe a conversation larger than the thing holding it, and a ring drawn past full is
+ * a rendering bug rather than a report.
+ */
+@Immutable
+data class ContextUsage(val usedTokens: Long, val contextWindow: Long) {
+    val fraction: Float get() = (usedTokens.toFloat() / contextWindow).coerceIn(0f, 1f)
+    val percent: Int get() = (fraction * 100).toInt()
 }
 
 @Immutable
@@ -195,6 +210,7 @@ class TranscriptBuilder(
     private val pending = LinkedHashMap<String, PendingPermission>()
     private var outcome: SessionOutcome? = null
     private var workingDirectory: String = "/workspace"
+    private var context: ContextUsage? = null
     private var lastArtifactKey: String? = null
 
     fun accept(event: AgentEvent) {
@@ -210,6 +226,10 @@ class TranscriptBuilder(
         when (event) {
             is AgentEvent.SessionStarted -> {
                 workingDirectory = event.workingDirectory
+            }
+
+            is AgentEvent.ContextChanged -> {
+                context = ContextUsage(event.usedTokens, event.contextWindow)
             }
 
             is AgentEvent.SessionEnded -> {
@@ -477,6 +497,7 @@ class TranscriptBuilder(
         pendingPermissions = pending.values.toList(),
         outcome = outcome,
         workingDirectory = workingDirectory,
+        context = context,
     )
 }
 
