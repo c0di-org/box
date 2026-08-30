@@ -125,9 +125,23 @@ all of them are re-dexed. That is the wrong trade on a normal machine and the
 right one here, because the per-invocation cost *is* the cost. Worth remembering
 for anything else that shells out to a JVM tool in a loop inside the guest.
 
-> **Warm-build numbers are deliberately absent.** The cache was still populating
-> when this was written, and the ~20 min estimate this section corrects was also
-> reasonable-sounding. They should not be believed until measured.
+### Measured, warm
+
+| | Time |
+|---|---|
+| Cold, nothing cached | ~95 min |
+| Populating the cache (one batched `d8` pass) | 26m 05s |
+| **Warm rebuild** | **13m 11s** |
+
+**7.2× faster.** The cache is 18 MB: a 7.9 MB pre-dexed library set and a 9.6 MB
+merged classpath jar holding 6,011 classes.
+
+It is also not the ~5 min predicted before measuring — the second optimistic
+estimate this document has had to correct. The cause is visible in the build log:
+`aapt2` still recompiles **25 library resource sets on every build**, and those
+are exactly as app-independent as the jars were. Caching them the same way is the
+obvious next step, and is deliberately left unmeasured rather than estimated
+again.
 
 ---
 
