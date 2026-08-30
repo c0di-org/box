@@ -101,4 +101,125 @@ class MarkdownTest {
         assertEquals("half writ", spans.last().text)
         assertTrue(spans.last().bold)
     }
+    // ---- tables ----------------------------------------------------------
+
+    @Test
+    fun `a pipe table becomes a table block`() {
+        val table = parseMarkdown(
+            """
+            | Stage | Time |
+            |---|---|
+            | `d8` | ~59 min |
+            | `ecj` | ~16 min |
+            """.trimIndent(),
+        ).single() as MdBlock.Table
+
+        assertEquals(listOf("Stage", "Time"), table.headers)
+        assertEquals(listOf(listOf("`d8`", "~59 min"), listOf("`ecj`", "~16 min")), table.rows)
+    }
+
+    @Test
+    fun `alignment markers are read from the separator`() {
+        val table = parseMarkdown(
+            """
+            | a | b | c | d |
+            |:--|:-:|--:|---|
+            | 1 | 2 | 3 | 4 |
+            """.trimIndent(),
+        ).single() as MdBlock.Table
+
+        assertEquals(
+            listOf(MdAlign.Start, MdAlign.Center, MdAlign.End, MdAlign.Start),
+            table.alignments,
+        )
+    }
+
+    /** Tables arrive a line at a time, and every prefix has to render as something sane. */
+    @Test
+    fun `a header with no separator yet is still prose`() {
+        val blocks = parseMarkdown("| Stage | Time |")
+
+        assertTrue(blocks.single() is MdBlock.Paragraph)
+    }
+
+    @Test
+    fun `a table with no rows yet is a table`() {
+        val table = parseMarkdown(
+            """
+            | Stage | Time |
+            |---|---|
+            """.trimIndent(),
+        ).single() as MdBlock.Table
+
+        assertEquals(listOf("Stage", "Time"), table.headers)
+        assertTrue(table.rows.isEmpty())
+    }
+
+    /** A row still being typed is short; one cell too many is a slip. Both are shaped to fit. */
+    @Test
+    fun `ragged rows are squared off against the header`() {
+        val table = parseMarkdown(
+            """
+            | a | b | c |
+            |---|---|---|
+            | 1 |
+            | 1 | 2 | 3 | 4 |
+            """.trimIndent(),
+        ).single() as MdBlock.Table
+
+        assertEquals(listOf("1", "", ""), table.rows[0])
+        assertEquals(listOf("1", "2", "3"), table.rows[1])
+    }
+
+    /** The separator is what makes a table. Without it a pipe is punctuation. */
+    @Test
+    fun `prose containing a pipe is not a table`() {
+        val blocks = parseMarkdown("Use `a | b` for either one.")
+
+        assertTrue(blocks.single() is MdBlock.Paragraph)
+    }
+
+    @Test
+    fun `an escaped pipe stays inside its cell`() {
+        val table = parseMarkdown(
+            """
+            | expression | meaning |
+            |---|---|
+            | a \| b | either |
+            """.trimIndent(),
+        ).single() as MdBlock.Table
+
+        assertEquals(listOf("a | b", "either"), table.rows.single())
+    }
+
+    @Test
+    fun `a table ends at the blank line and the text after it survives`() {
+        val blocks = parseMarkdown(
+            """
+            | a |
+            |---|
+            | 1 |
+
+            And that is the summary.
+            """.trimIndent(),
+        )
+
+        assertTrue(blocks[0] is MdBlock.Table)
+        assertEquals("And that is the summary.", (blocks[1] as MdBlock.Paragraph).text)
+    }
+
+    /** Without the table branch running first, this separator reads as a horizontal rule. */
+    @Test
+    fun `a separator is not mistaken for a horizontal rule`() {
+        val blocks = parseMarkdown(
+            """
+            | a | b |
+            |---|---|
+            | 1 | 2 |
+            """.trimIndent(),
+        )
+
+        assertTrue(blocks.none { it is MdBlock.Rule })
+    }
+
 }

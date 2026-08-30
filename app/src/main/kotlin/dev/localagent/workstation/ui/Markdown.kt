@@ -1,6 +1,7 @@
 package dev.localagent.workstation.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,11 +13,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -43,9 +46,9 @@ import dev.localagent.workstation.agent.CodeLanguage
  *
  * Hand-rolled and small on purpose. A markdown library is a parser, a renderer, its own theming and
  * usually its own image loading, bought for a problem that is one screen of code at the subset an
- * agent actually emits: headings, lists, emphasis, inline code, fences, quotes, rules. Deliberately
- * absent: tables, images, footnotes, HTML — anything unrecognised falls through as its own literal
- * text, which is what the whole transcript did before. Degraded, never wrong.
+ * agent actually emits: headings, lists, emphasis, inline code, fences, quotes, rules, tables.
+ * Deliberately absent: images, footnotes, HTML — anything unrecognised falls through as its own
+ * literal text, which is what the whole transcript did before. Degraded, never wrong.
  *
  * The parse is a pure function over lines so it can be tested without a device; styling lives in
  * the composables below, where the theme is.
@@ -63,12 +66,64 @@ internal sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
 
     data object Rule : MdBlock
+
+    /**
+     * A pipe table. [rows] are padded and truncated to [headers] on the way in, so the renderer
+     * never has to ask whether a row is the right shape — a table an agent is halfway through
+     * writing is the normal case, not the broken one.
+     */
+    data class Table(
+        val headers: List<String>,
+        val alignments: List<MdAlign>,
+        val rows: List<List<String>>,
+    ) : MdBlock
 }
+
+enum class MdAlign { Start, Center, End }
 
 private val HEADING = Regex("^(#{1,6})\\s+(.*)$")
 private val ITEM = Regex("^(\\s*)([-*+]|\\d{1,9}[.)])\\s+(.*)$")
 private val RULE = Regex("^\\s{0,3}(-{3,}|\\*{3,}|_{3,})\\s*$")
 private const val FENCE = "```"
+
+/**
+ * The `|---|:--:|` line, which is the only thing that makes the line above it a header.
+ *
+ * Requiring it is what keeps prose safe: "use `a | b` for either" is a sentence, not a table, and
+ * without this rule any line containing a pipe would become one.
+ */
+private val TABLE_RULE = Regex("^\\|?\\s*:?-{1,}:?\\s*(\\|\\s*:?-{1,}:?\\s*)*\\|?$")
+
+/** Cells, with the outer pipes dropped and `\|` treated as a literal one. */
+private fun tableCells(line: String): List<String> {
+    val body = line.trim().removePrefix("|").removeSuffix("|")
+    val cells = mutableListOf<String>()
+    val cell = StringBuilder()
+    var index = 0
+    while (index < body.length) {
+        val char = body[index]
+        when {
+            char == '\\' && index + 1 < body.length && body[index + 1] == '|' -> {
+                cell.append('|'); index++
+            }
+            char == '|' -> { cells += cell.toString().trim(); cell.setLength(0) }
+            else -> cell.append(char)
+        }
+        index++
+    }
+    cells += cell.toString().trim()
+    return cells
+}
+
+private fun alignments(rule: String): List<MdAlign> = tableCells(rule).map { spec ->
+    val start = spec.startsWith(":")
+    val end = spec.endsWith(":")
+    when {
+        start && end -> MdAlign.Center
+        end -> MdAlign.End
+        else -> MdAlign.Start
+    }
+}
 
 /**
  * One pass over the lines, because that is all this needs.
@@ -118,6 +173,35 @@ internal fun parseMarkdown(source: String): List<MdBlock> {
 
         when {
             trimmed.isEmpty() -> flush()
+
+            // Before RULE, which would otherwise claim a `|---|---|` separator as a horizontal
+            // rule, and before the paragraph fallback, which would swallow the header.
+            line.contains('|') && index + 1 < lines.size &&
+                TABLE_RULE.matches(lines[index + 1].trim()) &&
+                lines[index + 1].contains('-') -> {
+                flush()
+                val headers = tableCells(line)
+                val align = alignments(lines[index + 1])
+                index += 2
+                val rows = mutableListOf<List<String>>()
+                while (index < lines.size &&
+                    lines[index].isNotBlank() &&
+                    lines[index].contains('|')
+                ) {
+                    val cells = tableCells(lines[index])
+                    // Ragged rows are normal — a row still being typed is short, and an agent
+                    // occasionally writes one cell too many. Both are shaped to the header here so
+                    // nothing downstream has to cope with a jagged table.
+                    rows += List(headers.size) { column -> cells.getOrElse(column) { "" } }
+                    index++
+                }
+                blocks += MdBlock.Table(
+                    headers = headers,
+                    alignments = List(headers.size) { align.getOrElse(it) { MdAlign.Start } },
+                    rows = rows,
+                )
+                continue
+            }
 
             RULE.matches(line) -> {
                 flush()
@@ -367,6 +451,58 @@ fun MarkdownText(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                /*
+                 * Laid out as a row of columns rather than a column of rows, so every cell in a
+                 * column shares one width without a measuring pass. That only holds because each
+                 * cell is a single unwrapped line — which is also why the whole table scrolls
+                 * sideways instead of squeezing: a five-column comparison on a phone has to
+                 * overflow somewhere, and the alternative is text wrapped to two characters.
+                 *
+                 * The scroll lives on the table alone. The transcript itself must never move
+                 * sideways.
+                 */
+                is MdBlock.Table -> Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    block.headers.forEachIndexed { column, header ->
+                        Column(
+                            horizontalAlignment = when (block.alignments[column]) {
+                                MdAlign.Start -> Alignment.Start
+                                MdAlign.Center -> Alignment.CenterHorizontally
+                                MdAlign.End -> Alignment.End
+                            },
+                        ) {
+                            Text(
+                                inlineAnnotated(header, color),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = color,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                            // Drawn per column rather than across the table, because the columns
+                            // sit flush against each other and the segments read as one line.
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(MaterialTheme.colorScheme.outlineVariant),
+                            )
+                            block.rows.forEach { row ->
+                                Text(
+                                    inlineAnnotated(row[column], color),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = color,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
                 }
 
                 MdBlock.Rule -> Box(
