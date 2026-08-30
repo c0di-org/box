@@ -3,8 +3,14 @@ bash
 ca-certificates
 coreutils
 curl
+file
 git
 iproute2
+procps
+time
+unzip
+xz-utils
+zip
 linux-image-arm64
 nodejs
 npm
