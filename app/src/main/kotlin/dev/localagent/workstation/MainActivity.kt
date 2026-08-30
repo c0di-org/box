@@ -183,6 +183,7 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
             // Both routes to closing — the swipe and the header menu — go the same way: the row
             // leaves, and the close itself happens when the undo snackbar does.
             onCloseSession = boxViewModel::beginClosingTask,
+            onSaveTranscript = boxViewModel::saveTranscript,
             onUndoCloseSession = boxViewModel::undoClosingTask,
             onCommitCloseSession = boxViewModel::commitClosingTask,
             onSelectComputerPanel = boxViewModel::selectComputerPanel,

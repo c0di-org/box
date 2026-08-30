@@ -37,6 +37,7 @@ import dev.localagent.workstation.agent.AgentEvent
 import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
+import dev.localagent.workstation.agent.toMarkdown
 import dev.localagent.workstation.agent.AgentViewport
 import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.files.Inbox
@@ -1541,6 +1542,49 @@ class BoxViewModel @JvmOverloads constructor(
             .onFailure {
                 showNotice("This phone has no Files app that can open the folder.")
             }
+    }
+
+    /**
+     * Write the conversation on screen to a file the user picked, as Markdown.
+     *
+     * The transcript, not the session log. The log is the replayable truth and is the wrong thing
+     * to hand someone: it is NDJSON, it is offset-stamped, and it carries every intermediate
+     * streaming frame. What the user means by "save this" is what they are looking at, which is
+     * the folded [Transcript] — see [toMarkdown].
+     *
+     * The destination is a SAF uri, so Box needs no storage permission and the file lands wherever
+     * the user said, including Downloads or Drive. Failure is a notice rather than a throw: a save
+     * that quietly does nothing is the bug this whole feature exists to fix.
+     */
+    fun saveTranscript(destination: Uri) {
+        val state = mutableUiState.value
+        val transcript = state.transcript
+        if (transcript == null) {
+            showNotice("There is nothing to save yet.")
+            return
+        }
+        val session = state.selectedSession
+        val harness = state.harnesses.firstOrNull { it.id == session?.harnessId }
+        val markdown = transcript.toMarkdown(
+            title = session?.title ?: "Box task",
+            harnessName = harness?.name,
+        )
+        viewModelScope.launch {
+            val written = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver
+                        .openOutputStream(destination, "wt")
+                        ?.use { it.write(markdown.toByteArray()) }
+                        ?: error("Box could not open that file for writing")
+                }
+            }
+            written
+                .onSuccess { showNotice("Transcript saved.") }
+                .onFailure { error ->
+                    Log.w(TAG, "could not save the transcript", error)
+                    showNotice(error.message ?: "Box could not save the transcript.")
+                }
+        }
     }
 
     fun noticeShown() {

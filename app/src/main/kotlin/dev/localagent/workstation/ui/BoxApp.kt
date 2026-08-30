@@ -1,5 +1,6 @@
 package dev.localagent.workstation.ui
 
+import android.net.Uri
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
@@ -81,6 +82,7 @@ fun BoxApp(
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onCloseSession: (String) -> Unit,
+    onSaveTranscript: (Uri) -> Unit,
     onUndoCloseSession: () -> Unit,
     onCommitCloseSession: () -> Unit,
     onSelectComputerPanel: (ComputerPanel) -> Unit,
@@ -238,6 +240,7 @@ fun BoxApp(
                     onStartComputer = onOpenBox,
                     onOpenComputer = { onDestinationSelected(BoxDestination.Computer) },
                     onCloseSession = onCloseSession,
+                    onSaveTranscript = onSaveTranscript,
                     onTour = onTour,
                     onPermissionDecision = onPermissionDecision,
                     onReviewRequest = { requestId -> reviewingRequestId = requestId },
@@ -513,6 +516,7 @@ private fun PreviewBox(state: BoxUiState) {
             onPermissionDecision = { _, _ -> },
             onOpenArtifact = {},
             onCloseSession = {},
+            onSaveTranscript = {},
             onUndoCloseSession = {},
             onCommitCloseSession = {},
             onSelectComputerPanel = {},

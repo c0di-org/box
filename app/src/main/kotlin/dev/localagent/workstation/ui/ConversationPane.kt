@@ -1,6 +1,9 @@
 package dev.localagent.workstation.ui
 
 import android.app.Application
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -106,6 +109,7 @@ import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
 import dev.localagent.workstation.agent.Transcript
 import dev.localagent.workstation.agent.TranscriptItem
+import dev.localagent.workstation.agent.transcriptFileName
 import kotlinx.coroutines.launch
 
 /**
@@ -125,6 +129,7 @@ fun ConversationPane(
     onStartComputer: () -> Unit,
     onOpenComputer: () -> Unit,
     onCloseSession: (String) -> Unit,
+    onSaveTranscript: (Uri) -> Unit,
     /** [TOUR_PROMPT], sent into this conversation. See `BoxViewModel.startTour`. */
     onTour: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -162,6 +167,16 @@ fun ConversationPane(
     // [AnswerStore] for why they cannot live in the card.
     val answers = remember { AnswerStore() }
 
+    /*
+     * The system's own Save dialog, so the file lands wherever the user keeps things — Downloads,
+     * Drive, the shared folder — and Box needs no storage permission to put it there.
+     * `CreateDocument` takes the mime type when it is built and the file name when it is launched,
+     * which is why the name is worked out at the call below rather than here.
+     */
+    val saveTranscript = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/markdown"),
+    ) { uri -> uri?.let(onSaveTranscript) }
+
     Column(modifier.fillMaxSize()) {
         ConversationHeader(
             title = session?.title ?: "Box",
@@ -172,6 +187,17 @@ fun ConversationPane(
             onOpenComputer = onOpenComputer,
             onCloseSession = session?.let { { onCloseSession(it.id) } },
             onOpenHarnessSettings = openHarnessSettings,
+            // Offered only when there is something to write. A Save that produces a file
+            // containing a heading and nothing else is worse than no menu item.
+            onSaveTranscript = state.transcript
+                ?.takeIf { it.items.isNotEmpty() }
+                ?.let {
+                    {
+                        saveTranscript.launch(
+                            transcriptFileName(session?.title ?: "Box task"),
+                        )
+                    }
+                },
             showComputerAction = showComputerAction,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -338,6 +364,7 @@ private fun ConversationHeader(
     onOpenComputer: () -> Unit,
     onCloseSession: (() -> Unit)?,
     onOpenHarnessSettings: (() -> Unit)?,
+    onSaveTranscript: (() -> Unit)?,
     showComputerAction: Boolean,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -402,6 +429,15 @@ private fun ConversationHeader(
                         onClick = {
                             menuOpen = false
                             onOpenHarnessSettings()
+                        },
+                    )
+                }
+                if (onSaveTranscript != null) {
+                    DropdownMenuItem(
+                        text = { Text("Save transcript") },
+                        onClick = {
+                            menuOpen = false
+                            onSaveTranscript()
                         },
                     )
                 }
