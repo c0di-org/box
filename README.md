@@ -82,8 +82,33 @@ Commands, diffs and permission requests stay visible in the conversation. If you
 | **Agent** | Claude Code runs inside the VM with persistent task history. You sign in through the phone's browser — no API key to paste. |
 | **Other agents** | ChatGPT and Cursor are currently scripted demos. |
 | **Server preview** | Confirmed on hardware. A server the agent starts in the guest is forwarded to the phone and opens in a panel beside the conversation. |
+| **Android apps** | Confirmed on hardware. The agent can build a signed, installable APK inside the guest and hand it back — no Gradle, no Android Studio, no laptop. |
 
 The main cost today is performance: the stock runtime is fully emulated ARM64, so the first boot takes a couple of minutes on a Galaxy Z Fold 7.
+
+### The phone builds its own apps
+
+Google ships Android's build tools as x86-64 binaries, so the usual route does not run on an
+ARM64 phone. Box assembles a toolchain that does: a community ARM64 `aapt2`, `d8` and
+`apksigner` lifted unchanged out of Google's own archive because they are pure Java, and `ecj`
+in place of a JDK. Roughly 100 MB, installed into `/workspace` where it survives app updates.
+
+There are two paths, and the fast one is more capable than it sounds:
+
+| | **From scratch** | **With AndroidX** |
+| --- | --- | --- |
+| Clean build | **~3 min** | ~13 min, cache warm |
+| Available API | the whole Android platform | the same, plus Material |
+| Needs | nothing | Maven resolution + a dex cache |
+
+Building from scratch is not a stripped-down mode. `android.jar` is the entire platform —
+SQLite, Camera2, sensors, notifications, home-screen widgets, `Canvas`, and WebView, which makes
+a native shell around local HTML a real option rather than a workaround. What AndroidX adds is
+mostly convenience and Material's look, and the boilerplate a library saves is the part an agent
+can simply write.
+
+So the agent resolves Maven when an app genuinely needs it and otherwise stays on the fast path.
+Details and measurements in [`docs/spike/android-toolchain/gradle-free/`](docs/spike/android-toolchain/gradle-free/).
 
 ## Install it
 

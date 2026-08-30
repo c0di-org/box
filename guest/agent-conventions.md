@@ -143,7 +143,7 @@ and a brochure. Run the commands, and let what comes back be the answer:
 
 ```bash
 uname -a; nproc                     # an ARM64 Linux machine, emulated, on their phone
-head -3 /proc/meminfo               # not `free`: procps is not in this image
+head -3 /proc/meminfo               # or `free -h`
 cat /etc/os-release                 # a real Debian, not a sandbox pretending to be one
 cat /usr/src/box/BUILD-INFO         # the commit of Box you are running inside
 ```
@@ -298,3 +298,48 @@ them the desktop beats a screenshot: they get the window live rather than a mome
 
 There is no JDK, no Android SDK, and no Docker, so this box cannot build the Box app
 itself. Read and patch the source freely; leave building and deploying to the host.
+
+## Building an Android app, and which path to take
+
+You can build a real, signed, installable APK in here and hand it to the person. Google ships
+the build tools as x86-64 only, so `provision.sh` in
+`docs/spike/android-toolchain/gradle-free/` assembles an ARM64 one instead — about 100 MB into
+`/workspace`, once per box. Read that directory's README before starting.
+
+**Default to building from scratch.** It is not a reduced mode: `android.jar` is the whole
+platform — SQLite, Camera2, sensors, notifications, widgets, `Canvas`, and WebView, so a native
+shell around local HTML is a real design rather than a dodge. What libraries add is mostly
+convenience and Material's look, and the boilerplate they save you is the part you can write.
+
+| | From scratch | With AndroidX |
+| --- | --- | --- |
+| Clean build | **~3 min** | ~13 min once the dex cache is warm, far longer cold |
+
+So reach for `app/deps.txt` when the app genuinely needs Material's look or a library that
+wraps a *service* — maps, payments — and not to save yourself typing. Both paths were measured
+on this hardware; the numbers and the reasoning are in that directory.
+
+Two things that will bite you there. Emulated, a `d8` or `ecj` run costs minutes almost
+regardless of input size, so batch JVM tool invocations rather than looping over inputs —
+caching per jar measured *six hours* against 26 minutes for one pass. And builds run long
+enough that you should start them in the background and say so, rather than leaving the person
+watching a turn that looks finished.
+
+## A missing command can read as success
+
+The image is small, so something you expect may be absent — and `command not found` is an
+exit status, which a shell will fold into an answer that looks like good news.
+
+```bash
+until ! pgrep -f build.sh; do sleep 5; done   # pgrep missing -> exits at once, "finished"
+some-tool 2>&1 | grep -E "error|done"         # tool missing -> message filtered -> silence
+```
+
+Observed on the image built from `a9f2e9e`: together these cost an hour spent debugging a
+failure that had not happened, while the real build ran to completion in the background.
+
+So check the status before the output — `echo "exit=$?"` before any pipe, `${PIPESTATUS[0]}`
+after one. And wait on something you can see, like a file appearing or a log line being
+written, rather than on a process being absent, which is what a missing `pgrep` lies about.
+
+If something you need is not here, send a pull request against `guest/packages.txt`.
