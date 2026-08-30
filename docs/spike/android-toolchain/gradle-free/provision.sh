@@ -31,6 +31,43 @@ cd "$PREFIX"
 
 say() { echo "[$(date +%H:%M:%S)] $*"; }
 
+# Expected sha256 of every artifact, verified after download and before use.
+#
+# TLS authenticates the host, not the bytes, and one of these - the ARM64 aapt2 -
+# is a community build with no official equivalent to fall back on. It is also
+# the piece that runs untrusted-ish native code over every resource in a project.
+# A silent substitution there is the worst failure this script could have, so the
+# hashes are checked rather than assumed. Recorded from the artifacts this
+# toolchain was measured against, on 2026-08-30.
+#
+# A mismatch is fatal on purpose: continuing with an unexpected compiler is worse
+# than not building. To update, bump the version in the URL and replace the hash
+# in the same commit, so the two never drift apart.
+SHA_JRE=b8efcd5acc9109fe8d35bed132499643048a257b4f6042906ece37d03c839d77
+SHA_TOOLS=db1cea2c4454d5f9c5a802646b2d1cf560b4ee7badbe23e51ab8e1881bb50fc2
+SHA_ECJ=f7686c4960cf70c2ebc5c500a73a8cfc04541b730c18f1c5c21329889b137f45
+# extracted members, not the archives: ranged reads never fetch the whole zip
+SHA_D8=305622ad00535684534eb8f742cbf5e628a9abc09d8ea4d39d1babb95bf0cee5
+SHA_APKSIGNER=00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7
+SHA_ANDROID_JAR=4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b
+SHA_AAPT2=db737b3bbee99dd8a9e56108cc05d032597874d3f8ac557a69f3c5de5efaf57f
+
+verify() { # path expected-sha label
+  [ -f "$1" ] || { echo "MISSING: $3 ($1)" >&2; exit 1; }
+  actual=$(sha256sum "$1" | cut -d' ' -f1)
+  if [ "$actual" != "$2" ]; then
+    echo "" >&2
+    echo "CHECKSUM MISMATCH: $3" >&2
+    echo "  file:     $1" >&2
+    echo "  expected: $2" >&2
+    echo "  actual:   $actual" >&2
+    echo "Refusing to build with an artifact that is not the one this was" >&2
+    echo "tested against. If the upstream release changed legitimately," >&2
+    echo "update the hash in provision.sh in the same commit as the URL." >&2
+    exit 1
+  fi
+}
+
 get() { # url dest
   [ -s "$2" ] && return 0
   curl -sL --retry 3 --retry-delay 2 -o "$2.part" "$1" && mv "$2.part" "$2"
@@ -42,6 +79,7 @@ get() { # url dest
 if [ ! -x "$PREFIX/jre/bin/java" ]; then
   say "fetching JRE (46 MB)"
   get "$JRE_URL" "$CACHE/jre.tar.gz"
+  verify "$CACHE/jre.tar.gz" "$SHA_JRE" "JRE 17 (aarch64)"
   rm -rf .jretmp && mkdir -p .jretmp
   tar xzf "$CACHE/jre.tar.gz" -C .jretmp
   mv .jretmp/* jre && rmdir .jretmp
@@ -53,12 +91,14 @@ if [ ! -s "$PREFIX/lib/ecj.jar" ]; then
   say "fetching ecj (3 MB)"
   get "$ECJ_URL" "$PREFIX/lib/ecj.jar"
 fi
+verify "$PREFIX/lib/ecj.jar" "$SHA_ECJ" "ecj 3.33.0"
 
 # 3. android.jar, read out of a 64 MB zip without downloading the other 39 MB.
 if [ ! -s "$PREFIX/platforms/android-35/android.jar" ]; then
   say "fetching android.jar by ranged read"
   python3 "$HERE/zipget.py" "$PLATFORM_ZIP" "$PREFIX/platforms/android-35" /android.jar
 fi
+verify "$PREFIX/platforms/android-35/android.jar" "$SHA_ANDROID_JAR" "android.jar (API 35)"
 
 # 4. d8 + apksigner. Google's zip is x86_64, but these two members are pure
 #    Java and run anywhere - so take only them and drop the native binaries.
@@ -66,17 +106,23 @@ if [ ! -s "$PREFIX/lib/d8.jar" ]; then
   say "fetching d8 + apksigner by ranged read"
   python3 "$HERE/zipget.py" "$BUILDTOOLS_ZIP" "$PREFIX/lib" lib/d8.jar lib/apksigner.jar
 fi
+verify "$PREFIX/lib/d8.jar" "$SHA_D8" "d8"
+verify "$PREFIX/lib/apksigner.jar" "$SHA_APKSIGNER" "apksigner"
 
 # 5. the native ARM64 tools that have no official equivalent.
 if [ ! -x "$PREFIX/build-tools/aapt2" ]; then
   say "fetching ARM64 aapt2 / zipalign (14 MB)"
   get "$TOOLS_URL" "$CACHE/arm64tools.zip"
+  verify "$CACHE/arm64tools.zip" "$SHA_TOOLS" "ARM64 build-tools"
   python3 -c "
 import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
     "$CACHE/arm64tools.zip" "$PREFIX"
   chmod +x build-tools/* platform-tools/* 2>/dev/null || true
   rm -rf "$PREFIX/others"
 fi
+# checked again after extraction: the archive hash covers the download, this
+# covers the binary that will actually be executed
+verify "$PREFIX/build-tools/aapt2" "$SHA_AAPT2" "aapt2 (ARM64)"
 
 # 6. a signing key. Self-signed is what sideloading wants.
 if [ ! -f "$PREFIX/debug.keystore" ]; then
