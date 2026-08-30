@@ -20,8 +20,14 @@
 #   DEXDIR=$(./predex.sh <libinfo.json>)      # progress on stderr, path on stdout
 set -eu
 
-SDK=/workspace/android
-CACHE=$SDK/.dexcache
+# Tools from wherever they are (baked at /opt/android, or hand-provisioned); the cache always on
+# the workspace disk, which survives the update that would replace a baked toolchain.
+if [ -n "${BOX_ANDROID_SDK:-}" ]; then SDK=$BOX_ANDROID_SDK
+elif [ -x /workspace/android/jre/bin/java ]; then SDK=/workspace/android
+elif [ -x /opt/android/jre/bin/java ]; then SDK=/opt/android
+else SDK=/workspace/android
+fi
+CACHE=${BOX_ANDROID_WORK:-/workspace/android}/.dexcache
 JAVA=$SDK/jre/bin/java
 ANDROID_JAR=$SDK/platforms/android-35/android.jar
 LIBINFO=${1:-$SDK/build/libinfo.json}

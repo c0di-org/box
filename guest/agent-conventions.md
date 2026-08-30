@@ -301,10 +301,17 @@ itself. Read and patch the source freely; leave building and deploying to the ho
 
 ## Building an Android app, and which path to take
 
-You can build a real, signed, installable APK in here and hand it to the person. Google ships
-the build tools as x86-64 only, so `provision.sh` in
-`docs/spike/android-toolchain/gradle-free/` assembles an ARM64 one instead — about 100 MB into
-`/workspace`, once per box. Read that directory's README before starting.
+You can build a real, signed, installable APK in here and hand it to the person, and the
+toolchain is **already installed** — Google ships the build tools as x86-64 only, so this box
+carries an ARM64 set at `/opt/android`, with the scripts on top of it in `/opt/android/bin`.
+Nothing to download and nothing to wait for. Read `/opt/android/bin/README` — the same notes as
+`docs/spike/android-toolchain/gradle-free/` — before starting.
+
+`/opt/android` is on the system disk, so an update replaces it and anything you leave there is
+gone. Builds already write to `/workspace/android` instead: your project, the dex cache, and this
+box's own signing key, which is generated here on first build and belongs to this device alone.
+`provision.sh` is still there and still works, for a prefix you assemble yourself; you should not
+need it.
 
 **Default to building from scratch.** It is not a reduced mode: `android.jar` is the whole
 platform — SQLite, Camera2, sensors, notifications, widgets, `Canvas`, and WebView, so a native

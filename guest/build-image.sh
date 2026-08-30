@@ -16,9 +16,11 @@ SUITE="${DEBIAN_SUITE:-bookworm}"
 IMAGE_ID="${IMAGE_ID:-box-minimal-claude}"
 IMAGE_NAME="${IMAGE_NAME:-Box Minimal}"
 IMAGE_DESCRIPTION="${IMAGE_DESCRIPTION:-Debian ${SUITE} arm64 with Claude Code, DeepSeek Harness, agentd and a minimal desktop.}"
-# Raised from 4096 to fit the baked harness (~315 MB). Unused space costs almost nothing in the
-# APK: the image ships as a compressed qcow2, and empty blocks compress to nearly zero.
-IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-6144}"
+# Raised from 4096 to fit the baked harness (~315 MB), and again for the Android toolchain
+# (~220 MB). Unused space costs almost nothing in the APK: the image ships as a compressed qcow2,
+# and empty blocks compress to nearly zero. Occupied space is the part that is paid for, which is
+# why the toolchain was a decision and this number was not.
+IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-8192}"
 mkdir -p "$OUT_DIR"
 command -v mmdebstrap >/dev/null || { echo 'mmdebstrap is required (use the CI image)' >&2; exit 1; }
 command -v qemu-img >/dev/null || { echo 'qemu-img is required' >&2; exit 1; }
@@ -194,6 +196,53 @@ install -m 0644 "$ROOT_DIR/guest/agent-conventions.md" "$ROOTFS/usr/share/box/ag
 install -d -m 0755 "$ROOTFS/home/agent/.claude"
 install -m 0644 "$ROOT_DIR/guest/agent-conventions.md" "$ROOTFS/home/agent/.claude/CLAUDE.md"
 chroot "$ROOTFS" chown -R agent:agent /home/agent/.claude
+
+# The Android build toolchain, baked for the same reason as the harness and one more.
+#
+# Google ships Android's build-tools as x86_64 Linux binaries only, so the usual route produces a
+# toolchain that cannot run in here at all. The way through is a hybrid -- community ARM64 aapt2
+# and zipalign, with d8 and apksigner lifted out of Google's x86_64 zip because those two are pure
+# Java -- and it was measured end to end on a phone before it was believed. See
+# docs/spike/android-toolchain/gradle-free/.
+#
+# Three reasons it is baked rather than fetched on demand:
+#
+#   1. The ARM64 aapt2 is one community build with no official equivalent. If that release ever
+#      disappears, an image that fetches it loses the ability to build Android apps and no amount
+#      of retrying brings it back. 14 MB of the ~220 is insurance against a single point of
+#      failure outside anyone's control.
+#   2. Provisioning it inside the guest took 6m30s of emulated CPU, once per box. Here it is a
+#      native download on the build host and costs a user nothing.
+#   3. It makes the toolchain a property of the image, so an agent can rely on it being present
+#      and matching, instead of discovering the machine and negotiating with the network.
+#
+# It goes on the system disk, which every update replaces -- so a Box update ships a coherent
+# toolchain everywhere, exactly like agent-conventions.md above. Nothing a build *writes* goes
+# here; build.sh keeps projects, caches and this box's signing key on the workspace disk, which
+# survives. SKIP_KEYSTORE is the load-bearing half of that split: a key generated here would be
+# one key inside every copy of Box, with its password in a script in this repo and its private
+# half extractable from any APK.
+#
+# Runs on the build host, which is linux/arm64, so provision.sh's verification step executes the
+# same binaries the guest will and a broken artifact fails the build rather than the phone.
+install -d -m 0755 "$ROOTFS/opt/android"
+SKIP_KEYSTORE=1 CACHE="$(mktemp -d)" \
+  "$ROOT_DIR/docs/spike/android-toolchain/gradle-free/provision.sh" "$ROOTFS/opt/android"
+test -x "$ROOTFS/opt/android/build-tools/aapt2" \
+  || { echo 'the Android toolchain did not install' >&2; exit 1; }
+test ! -f "$ROOTFS/opt/android/debug.keystore" \
+  || { echo 'a signing key was baked into the image; it must be per device' >&2; exit 1; }
+install -d -m 0755 "$ROOTFS/opt/android/bin"
+for script in build.sh predex.sh provision.sh; do
+  install -m 0755 "$ROOT_DIR/docs/spike/android-toolchain/gradle-free/$script" "$ROOTFS/opt/android/bin/$script"
+done
+for module in maven.py aar.py zipget.py; do
+  install -m 0644 "$ROOT_DIR/docs/spike/android-toolchain/gradle-free/$module" "$ROOTFS/opt/android/bin/$module"
+done
+# agent-conventions.md sends the agent here to read before starting, so it has to be here.
+install -m 0644 "$ROOT_DIR/docs/spike/android-toolchain/gradle-free/README.md" "$ROOTFS/opt/android/bin/README"
+install -m 0644 "$ROOT_DIR/docs/spike/android-toolchain/gradle-free/DEPENDENCIES.md" "$ROOTFS/opt/android/bin/DEPENDENCIES.md"
+chroot "$ROOTFS" chown -R agent:agent /opt/android
 
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agentd.service" "$ROOTFS/etc/systemd/system/local-agentd.service"
 install -m 0644 "$ROOT_DIR/guest/systemd/local-agent-workspace-prepare.service" "$ROOTFS/etc/systemd/system/local-agent-workspace-prepare.service"
