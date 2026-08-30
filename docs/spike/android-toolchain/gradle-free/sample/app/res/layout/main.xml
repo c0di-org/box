@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F1115"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="26dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="LIVE FROM INSIDE"
+            android:textColor="#6EE7A8"
+            android:textSize="11sp"
+            android:letterSpacing="0.16"
+            android:textStyle="bold"
+            android:layout_marginTop="18dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/headline"
+            android:textColor="#E8EAF0"
+            android:textSize="27sp"
+            android:lineSpacingMultiplier="1.15"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/blurb"
+            android:textColor="#878FA3"
+            android:textSize="14sp"
+            android:lineSpacingMultiplier="1.35"
+            android:layout_marginTop="14dp" />
+
+        <!-- the build card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#171A21"
+            android:padding="17dp"
+            android:layout_marginTop="24dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="BUILD PROVENANCE"
+                android:textColor="#878FA3"
+                android:textSize="10sp"
+                android:letterSpacing="0.13"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/build_info"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#E8EAF0"
+                android:textSize="12sp"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="4dp"
+                android:layout_marginTop="10dp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/whereami"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/btn"
+            android:layout_marginTop="18dp" />
+
+        <TextView
+            android:id="@+id/runtime_info"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#F0B46A"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:lineSpacingExtra="4dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="24dp" />
+    </LinearLayout>
+</ScrollView>
