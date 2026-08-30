@@ -16,6 +16,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -107,6 +108,7 @@ import dev.localagent.workstation.agent.HarnessDescriptor
 import dev.localagent.workstation.agent.PermissionAsk
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
+import dev.localagent.workstation.agent.TaskState
 import dev.localagent.workstation.agent.Transcript
 import dev.localagent.workstation.agent.TranscriptItem
 import dev.localagent.workstation.agent.transcriptFileName
@@ -592,11 +594,34 @@ private fun TranscriptList(
     val lastKey = items.lastOrNull()?.key
     val total = items.size + queued.size
     val scope = rememberCoroutineScope()
+
+    /*
+     * Arriving at a conversation means arriving at the end of it.
+     *
+     * The list state does not survive leaving this pane — open the computer and come back and it
+     * is a fresh one, sitting at the top. The follow effect below cannot rescue that, because it
+     * only follows a reader who is already near the end, and index 0 of a long transcript is as
+     * far from the end as it gets. So the newest message was there all along, a hundred cards
+     * down, and the way back to it was to scroll.
+     *
+     * Keyed on the session rather than on nothing, so switching tasks lands at the bottom of the
+     * new one too; and instant rather than animated, because this is where the conversation
+     * *starts*, not somewhere it travelled to while someone watched.
+     */
+    LaunchedEffect(transcript?.sessionId) {
+        if (total > 0) listState.scrollToBottom(total, animate = false)
+    }
+
     // Following the agent is the default, but only while the user is actually down here. Reading
     // something ten cards back and being dragged to the bottom by an event they were not watching
     // is the transcript taking the conversation away from them mid-sentence.
-    LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity) {
-        if (total > 0 && listState.isNearEnd()) listState.animateScrollToItem(total)
+    //
+    // [growth] is in the key set because none of the others move while a card fills in. A tool
+    // streaming output and a sub-agent working through its own list both change one card that is
+    // already on screen — same last key, same count, same activity — so following stopped exactly
+    // when there was most to follow, and the fix people found was to scroll by hand.
+    LaunchedEffect(lastKey, items.size, queued.size, transcript?.activity, items.lastOrNull()?.growth()) {
+        if (total > 0 && listState.isNearEnd()) listState.scrollToBottom(total, animate = true)
     }
 
     /*
@@ -790,6 +815,38 @@ private fun TranscriptItem.holds(requestId: String): Boolean = when (this) {
  * routinely one or two behind the newest one. Anything further back than that was a deliberate
  * scroll by a person, and is left alone.
  */
+/**
+ * To the end of the conversation, not merely to the last card.
+ *
+ * The two differ whenever the last card is taller than the window, which a sub-agent that has done
+ * twenty things reliably is. `scrollToItem` puts that card's *first* pixel at the top of the
+ * screen, which is the beginning of the newest thing rather than the end of it. The trailing
+ * scroll clamps at the bottom of the content, so it costs nothing when the card already fits.
+ */
+private suspend fun LazyListState.scrollToBottom(index: Int, animate: Boolean) {
+    if (animate) animateScrollToItem(index) else scrollToItem(index)
+    scrollBy(OVERSHOOT)
+}
+
+/** Past the tallest card worth chasing; the scroll clamps at the end of the content. */
+private const val OVERSHOOT = 100_000f
+
+/**
+ * A number that moves when the newest card grows without a new card appearing.
+ *
+ * Only ever compared with its own previous value, so what it counts matters less than that it
+ * changes: streamed prose lengthening, a tool writing more output, a sub-agent taking another
+ * step. Cheap on purpose — it is read on every recomposition of the transcript.
+ */
+internal fun TranscriptItem.growth(): Int = when (this) {
+    is TranscriptItem.Agent -> text.length
+    is TranscriptItem.Thinking -> text.length
+    is TranscriptItem.Tool -> output.length + if (outcome == null) 0 else 1
+    is TranscriptItem.SubAgent -> items.size * 31 + (items.lastOrNull()?.growth() ?: 0)
+    is TranscriptItem.Checklist -> items.count { it.state == TaskState.Done }
+    else -> 0
+}
+
 internal fun LazyListState.isNearEnd(slack: Int = 2): Boolean {
     val info = layoutInfo
     if (info.totalItemsCount == 0) return true
