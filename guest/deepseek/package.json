@@ -6,7 +6,7 @@
   "description": "Runs DeepSeek Harness inside the Box guest through its published ACP transport.",
   "dependencies": {
     "@agentclientprotocol/sdk": "0.25.1",
-    "@deepseek-ai/dsh": "0.1.0-rc.5",
-    "@deepseek-ai/dsh-acp-demo": "0.1.0-rc.5"
+    "@deepseek-ai/dsh": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-acp-demo": "0.1.0-rc.6"
   }
 }
