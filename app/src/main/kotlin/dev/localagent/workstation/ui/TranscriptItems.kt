@@ -626,15 +626,38 @@ private fun toolIcon(call: ToolCall): ImageVector = when (call) {
 
 @Composable
 private fun toolSubtitle(item: TranscriptItem.Tool): String? = when (val outcome = item.outcome) {
-    null -> when (val call = item.call) {
+    null -> progressLine(item.output) ?: when (val call = item.call) {
         is ToolCall.Shell -> "Running in ${call.workingDirectory}"
         else -> "Running…"
     }
-    is ToolOutcome.Success -> outcome.summary
+    is ToolOutcome.Success -> outcome.summary ?: progressLine(item.output)
     is ToolOutcome.Failure -> outcome.message
     ToolOutcome.Denied -> "You denied this"
     ToolOutcome.Cancelled -> "Cancelled"
 }
+
+/**
+ * The newest thing a tool has actually said, for the line under its name.
+ *
+ * "Running…" is true and says nothing, and it said it for the whole of a twenty-minute build while
+ * the output it could have been quoting was already in hand. A card is not a terminal — the full
+ * output is a tap away, and this is the one line that answers "is it moving, and on what".
+ *
+ * The last *non-blank* line, because tools end their output with a newline and the honest answer
+ * is never the empty string after it. Progress written with carriage returns — every downloader,
+ * every packer — is kept to its final segment, so a redrawn percentage reads as one number rather
+ * than as its own history.
+ */
+internal fun progressLine(output: String): String? = output
+    .lineSequence()
+    .lastOrNull { it.isNotBlank() }
+    ?.substringAfterLast('\r')
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.let { if (it.length <= PROGRESS_LIMIT) it else it.take(PROGRESS_LIMIT).trimEnd() + "…" }
+
+/** One line on a phone. Past this the card is quoting rather than summarising. */
+private const val PROGRESS_LIMIT = 80
 
 @Composable
 private fun DiffCard(item: TranscriptItem.Diff, modifier: Modifier = Modifier) {
