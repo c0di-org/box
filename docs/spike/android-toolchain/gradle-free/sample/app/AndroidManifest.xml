@@ -7,7 +7,7 @@
     <application
         android:label="@string/app_name"
         android:icon="@drawable/ic_box"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@style/Theme.Material3.DayNight.NoActionBar"
         android:allowBackup="false">
 
         <activity
