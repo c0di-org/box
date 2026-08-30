@@ -1,8 +1,13 @@
 package dev.localagent.workstation.ui
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
+import android.os.Environment
+import android.webkit.URLUtil
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
+import androidx.core.net.toUri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -158,6 +163,41 @@ fun PreviewSheet(preview: OpenedPreview, onDismiss: () -> Unit) {
                                 }
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
+                                // A WebView with no download listener does not fail on a
+                                // response it cannot render — it discards it, showing nothing
+                                // and reporting nothing. So a link to a file the agent just
+                                // built read as a dead tap, and the only way out was to copy
+                                // the loopback address into another browser.
+                                //
+                                // DownloadManager rather than writing the stream here: it owns
+                                // the notification, the Downloads entry and the retry, so the
+                                // file lands somewhere the person can actually find it again.
+                                setDownloadListener { downloadUrl, userAgent, disposition, mime, _ ->
+                                    val name = URLUtil.guessFileName(downloadUrl, disposition, mime)
+                                    val ok = runCatching {
+                                        val request = DownloadManager.Request(downloadUrl.toUri())
+                                            .setMimeType(mime)
+                                            .addRequestHeader("User-Agent", userAgent)
+                                            .setTitle(name)
+                                            .setNotificationVisibility(
+                                                DownloadManager.Request
+                                                    .VISIBILITY_VISIBLE_NOTIFY_COMPLETED,
+                                            )
+                                            .setDestinationInExternalPublicDir(
+                                                Environment.DIRECTORY_DOWNLOADS,
+                                                name,
+                                            )
+                                        context.getSystemService(DownloadManager::class.java)
+                                            .enqueue(request)
+                                    }.isSuccess
+                                    // Silence is what this whole listener exists to stop, so
+                                    // say something either way.
+                                    Toast.makeText(
+                                        context,
+                                        if (ok) "Downloading $name" else "Could not download $name",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
                                 web = this
                             }
                         },
