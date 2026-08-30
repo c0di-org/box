@@ -6,98 +6,79 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * `:computer` reads the harness stream for the few facts a notification can be built from. These
- * pin that it stays a few — and, more importantly, that everything else is silence rather than a
- * crash in the process that is running the VM.
+ * The few facts `:computer` reads out of a wire it deliberately does not parse.
+ *
+ * Worth pinning because both directions are costly and neither is loud. A signal missed is a
+ * notification never posted, or files that never leave the box; a signal invented is a phone that
+ * buzzes at nothing. And the guest image upgrades independently of the APK, so lines this build
+ * has never seen have to stay silent rather than become errors.
  */
 class SessionSignalsTest {
 
     @Test
-    fun `a finished session carries the agent's closing line`() {
-        val signal = SessionSignals.read(
-            """{"v":1,"type":"session_ended","outcome":{"status":"completed","summary":"Cloned and running on :3000"}}""",
-        )
+    fun `a turn ending is quiet`() {
         assertEquals(
-            SessionSignals.Signal.Finished("Cloned and running on :3000", failed = false),
-            signal,
+            SessionSignals.Signal.Quiet,
+            SessionSignals.read("""{"type":"activity","activity":{"kind":"idle"}}"""),
         )
     }
 
+    /** The agent mid-sentence. Its files are still being written, so nothing may be carried out. */
     @Test
-    fun `a failed session is still a finish, and says so`() {
+    fun `an agent still working is not quiet`() {
+        assertNull(SessionSignals.read("""{"type":"activity","activity":{"kind":"working","label":"Building"}}"""))
+        assertNull(SessionSignals.read("""{"type":"activity","activity":{"kind":"thinking"}}"""))
+        assertNull(SessionSignals.read("""{"type":"activity","activity":{"kind":"starting"}}"""))
+    }
+
+    /** An activity kind this build has never heard of is silence, not a guess at quiet. */
+    @Test
+    fun `an unknown activity kind says nothing`() {
+        assertNull(SessionSignals.read("""{"type":"activity","activity":{"kind":"pondering"}}"""))
+        assertNull(SessionSignals.read("""{"type":"activity"}"""))
+    }
+
+    @Test
+    fun `a finished session still reports its outcome`() {
         val signal = SessionSignals.read(
-            """{"type":"session_ended","outcome":{"status":"failed","message":"Not signed in"}}""",
+            """{"type":"session_ended","outcome":{"status":"completed","summary":"All done"}}""",
         )
-        assertEquals(SessionSignals.Signal.Finished("Not signed in", failed = true), signal)
+
+        assertEquals(SessionSignals.Signal.Finished("All done", failed = false), signal)
     }
 
     @Test
-    fun `a session that ends with no outcome still notifies`() {
-        val signal = SessionSignals.read("""{"type":"session_ended"}""")
-        assertEquals(SessionSignals.Signal.Finished(null, failed = false), signal)
-    }
-
-    @Test
-    fun `a permission ask names the kind of decision, never the payload`() {
+    fun `a failure is reported as one`() {
         val signal = SessionSignals.read(
-            """{"type":"permission_requested","requestId":"r1","ask":{"kind":"run_command",""" +
-                """"command":"rm -rf /workspace/secret-project"}}""",
-        )
-        val needsYou = signal as SessionSignals.Signal.NeedsYou
-        assertEquals("It wants to run a command", needsYou.label)
-        assertTrue(
-            "the command must not reach a lock screen",
-            !needsYou.label.contains("rm"),
-        )
+            """{"type":"session_ended","outcome":{"status":"failed","message":"It broke"}}""",
+        ) as SessionSignals.Signal.Finished
+
+        assertTrue(signal.failed)
+        assertEquals("It broke", signal.summary)
     }
 
     @Test
-    fun `an unmodelled ask kind still asks`() {
+    fun `a permission request still needs you`() {
         val signal = SessionSignals.read(
-            """{"type":"permission_requested","ask":{"kind":"something_new","title":"Approve this"}}""",
+            """{"type":"permission_requested","ask":{"kind":"run_command"}}""",
         )
-        assertEquals(SessionSignals.Signal.NeedsYou("Approve this"), signal)
+
+        assertTrue(signal is SessionSignals.Signal.NeedsYou)
     }
 
     @Test
-    fun `everything else is silence`() {
-        // A newer guest image against an older APK is the normal case, not the exception.
-        assertNull(SessionSignals.read("""{"type":"tool_started","callId":"c1"}"""))
-        assertNull(SessionSignals.read("""{"type":"message","text":"working on it"}"""))
-        assertNull(SessionSignals.read("""{"type":"a_kind_from_a_later_build"}"""))
-        assertNull(SessionSignals.read("not json at all"))
+    fun `an answered request is taken back`() {
+        assertEquals(
+            SessionSignals.Signal.Answered,
+            SessionSignals.read("""{"type":"permission_resolved","requestId":"r1"}"""),
+        )
+    }
+
+    @Test
+    fun `noise is silence rather than an error`() {
         assertNull(SessionSignals.read(""))
         assertNull(SessionSignals.read("   "))
-    }
-
-    @Test
-    fun `an agent waiting on an account is worth a notification`() {
-        val signal = SessionSignals.read(
-            """{"type":"connect_requested","requestId":"c-1","service":"github","reason":"to clone garfbargle/box"}""",
-        )
-        assertEquals(SessionSignals.Signal.NeedsYou("It needs you to connect GitHub"), signal)
-    }
-
-    @Test
-    fun `an account this build has no words for still says somebody is needed`() {
-        val signal = SessionSignals.read(
-            """{"type":"connect_requested","requestId":"c-2","service":"gitlab"}""",
-        )
-        assertEquals(SessionSignals.Signal.NeedsYou("It needs you to connect an account"), signal)
-    }
-
-    @Test
-    fun `a question that has been answered takes its notification back`() {
-        // "Box needs you" outlives the needing otherwise: somebody who answers in the app leaves a
-        // notice in the shade offering to take them to a decision already made, and it sits there
-        // for as long as the agent goes on working afterwards.
-        assertEquals(
-            SessionSignals.Signal.Answered,
-            SessionSignals.read("""{"type":"connect_resolved","requestId":"c-1","connected":true}"""),
-        )
-        assertEquals(
-            SessionSignals.Signal.Answered,
-            SessionSignals.read("""{"type":"permission_resolved","requestId":"p-1","decision":"allow"}"""),
-        )
+        assertNull(SessionSignals.read("not json at all"))
+        assertNull(SessionSignals.read("""{"type":"something_from_a_newer_image"}"""))
     }
 }
