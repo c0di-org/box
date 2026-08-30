@@ -14,7 +14,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
@@ -1403,6 +1403,96 @@ async function loadSdk() {
 }
 
 /**
+ * Where Claude Code keeps its state, which is also where the conversation it can resume lives.
+ *
+ * On a Box this is `/workspace/.config/claude` — agentd sets `CLAUDE_CONFIG_DIR` there precisely
+ * so it survives an app update, unlike the agent's home on the system disk. That is what makes
+ * resuming possible at all: the transcript the SDK would reload is on the disk Box never replaces.
+ */
+function claudeConfigDir() {
+  return process.env.CLAUDE_CONFIG_DIR
+    || (process.env.HOME ? `${process.env.HOME}/.claude` : null);
+}
+
+/**
+ * Box's session id → the SDK session id that is actually holding the conversation.
+ *
+ * Two different ids for what the user experiences as one task, and they cannot be collapsed. Box's
+ * id names a row in the task list and is minted before any agent exists; the SDK's is minted by
+ * the CLI when a conversation starts and is the only thing `resume` accepts. Nothing else records
+ * the pairing, so without this file a reopened task starts a brand-new conversation while the log
+ * replays the old one to the screen — history on the display that the agent has never seen.
+ */
+function pointerPath(boxSessionId) {
+  const configDir = claudeConfigDir();
+  if (!configDir || !boxSessionId) return null;
+  // The id comes from Box, but it reaches here through an environment variable, and a path is not
+  // the place to find out it was something else.
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(boxSessionId)) return null;
+  return `${configDir}/box-sessions/${boxSessionId}.json`;
+}
+
+/**
+ * Whether the SDK still has the transcript this id names.
+ *
+ * Asked because `resume` on a session the CLI cannot find is an error, and an error here would
+ * take down a session that would otherwise have started perfectly well as a fresh one. The
+ * workspace can be wiped (`deploy.sh --wipe`) while this pointer survives in a stale form, so a
+ * dangling id is a normal state rather than a corruption.
+ *
+ * Found by scanning rather than by deriving the project directory name: the CLI's slug rule for
+ * `projects/` is its own business and has changed before, and a glob costs one readdir.
+ */
+function transcriptExists(sdkSessionId) {
+  const configDir = claudeConfigDir();
+  if (!configDir || !sdkSessionId) return false;
+  const projects = `${configDir}/projects`;
+  if (!existsSync(projects)) return false;
+  try {
+    return readdirSync(projects).some((slug) =>
+      existsSync(`${projects}/${slug}/${sdkSessionId}.jsonl`));
+  } catch {
+    return false;
+  }
+}
+
+/** The conversation to continue, or null to start a new one. Never throws; a miss is a fresh start. */
+function resumableSession(boxSessionId) {
+  const path = pointerPath(boxSessionId);
+  if (!path || !existsSync(path)) return null;
+  let stored = null;
+  try {
+    stored = JSON.parse(readFileSync(path, 'utf8'))?.sdkSessionId ?? null;
+  } catch {
+    diagnostic('session pointer unreadable; starting a new conversation');
+    return null;
+  }
+  if (!stored) return null;
+  if (!transcriptExists(stored)) {
+    // Worth a line rather than silence: this is the case where the user sees their old messages
+    // replayed from Box's log and the agent genuinely cannot see them, and someone reading the
+    // guest log later deserves to know which of the two happened.
+    diagnostic(`session ${stored} has no transcript on disk; starting a new conversation`);
+    return null;
+  }
+  return stored;
+}
+
+/** Record the pairing, so the next start of this task continues this conversation. */
+function rememberSession(boxSessionId, sdkSessionId) {
+  const path = pointerPath(boxSessionId);
+  if (!path || !sdkSessionId) return;
+  try {
+    mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+    writeFileSync(path, JSON.stringify({ sdkSessionId, at: Date.now() }));
+  } catch (error) {
+    // Losing the pointer costs the *next* start its history. It must not cost this session
+    // anything, so it is reported and stepped over.
+    diagnostic(`could not record the session pointer: ${error?.message ?? error}`);
+  }
+}
+
+/**
  * Whether some credential appears to be present. Diagnostics only — never a gate.
  *
  * Deliberately loose about where a profile lives, for the same reason Box's sign-in screen does not
@@ -1519,6 +1609,9 @@ async function runAuth(query, cwd) {
 
 async function main() {
   const cwd = process.env.BOX_SESSION_CWD || '/workspace';
+  // Absent on an older app, which simply means no conversation is ever resumed — the behaviour
+  // this file had before. A harness must not require the app to have shipped first.
+  const boxSessionId = process.env.BOX_SESSION_ID || null;
 
   // The credential is read here and handed straight to the SDK. It is never emitted, never logged,
   // and never placed in an argv the process list could show.
@@ -1597,10 +1690,20 @@ async function main() {
 
   const box = await boxServer(sdk);
 
+  // Decided before the query is built, and reported, because "your task reopened but the agent
+  // does not remember it" is otherwise indistinguishable from the agent having forgotten.
+  const resume = resumableSession(boxSessionId);
+  if (resume) diagnostic(`resuming conversation ${resume}`);
+
   activeQuery = query({
     prompt: prompts(),
     options: {
       cwd,
+      // Continues the conversation the user is looking at, instead of starting a new one behind a
+      // replayed transcript. Spread rather than passed as undefined: `resume` is mutually
+      // exclusive with `continue`, and an explicit key is not the same as an absent one to every
+      // version of the CLI.
+      ...(resume ? { resume } : {}),
       // Kept even under a mode that never calls it: the SDK only reaches `canUseTool` when the
       // permission flow falls through to a prompt, so this is the ask path rather than a gate, and
       // dropping it when the mode is permissive would mean rebuilding the query to get it back.
@@ -1675,6 +1778,10 @@ async function main() {
       switch (message.type) {
         case 'system':
           if (message.subtype === 'init') {
+            // The only place the SDK says which conversation this is. Recorded on every init
+            // rather than only on a fresh start: a resumed session can be given a new id by the
+            // CLI, and a pointer left naming the old one would resume a stale branch forever.
+            rememberSession(boxSessionId, message.session_id);
             emit({ type: 'activity', activity: { kind: 'thinking' } });
           } else if (message.subtype === 'task_started' || message.subtype === 'task_progress') {
             // The only place the two ids for one sub-agent appear together: the tool_use id its
