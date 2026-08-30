@@ -3,9 +3,24 @@
 #   aapt2 compile -> aapt2 link -> javac -> d8 -> zip -> zipalign -> apksigner
 set -eu
 
-SDK=/workspace/android
-APP=$SDK/app
-OUT=$SDK/build
+# Where the tools are, and where the work is. They are no longer the same place.
+#
+# Box bakes the toolchain into the guest image at /opt/android, on the system disk -- so it is
+# there on first boot with nothing to download, and every image update replaces it with a matching
+# set. A hand-provisioned prefix on the workspace disk still works and wins if present, which is
+# what makes `provision.sh` a fallback rather than dead code.
+#
+# Everything written during a build goes on the workspace disk regardless, because the system disk
+# is replaced wholesale by the next update and anything left there goes with it.
+if [ -n "${BOX_ANDROID_SDK:-}" ]; then SDK=$BOX_ANDROID_SDK
+elif [ -x /workspace/android/jre/bin/java ]; then SDK=/workspace/android
+elif [ -x /opt/android/jre/bin/java ]; then SDK=/opt/android
+else SDK=/workspace/android
+fi
+WORK=${BOX_ANDROID_WORK:-/workspace/android}
+APP=$WORK/app
+OUT=$WORK/build
+KEYSTORE=$WORK/debug.keystore
 PKG=com.c0di.builtinbox
 NAME=BuiltInTheBox
 
@@ -29,6 +44,18 @@ TARGET_SDK=34
 step() { echo ""; echo "==> $*"; }
 
 rm -rf "$OUT"; mkdir -p "$OUT"/{res,gen,classes,dex,libs}
+
+# This box's own signing key, made once and kept on the disk that survives updates. Per device on
+# purpose: see the keystore note in provision.sh for why one shipped in the image would be a hole
+# rather than a convenience.
+if [ ! -f "$KEYSTORE" ]; then
+    step "generating this box's signing key"
+    mkdir -p "$(dirname "$KEYSTORE")"
+    "$JDK_HOME/bin/keytool" -genkeypair \
+        -keystore "$KEYSTORE" -storepass boxbox -keypass boxbox \
+        -alias boxkey -keyalg RSA -keysize 2048 -validity 10950 \
+        -dname "CN=Built in the Box, O=Box, C=GB" >/dev/null 2>&1
+fi
 
 # --- dependencies --------------------------------------------------------
 # app/deps.txt holds Maven coordinates, one per line. Resolving them, unpacking
@@ -219,7 +246,7 @@ step "zipalign"
 # --- 7. sign -------------------------------------------------------------
 step "apksigner"
 "$JAVA" -Xmx256m -jar "$SDK/lib/apksigner.jar" sign \
-    --ks "$SDK/debug.keystore" \
+    --ks "$KEYSTORE" \
     --ks-pass pass:boxbox --key-pass pass:boxbox \
     --ks-key-alias boxkey \
     --min-sdk-version "$MIN_SDK" \

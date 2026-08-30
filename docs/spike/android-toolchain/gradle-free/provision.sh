@@ -18,6 +18,10 @@ set -eu
 
 PREFIX=${1:-/workspace/android}
 CACHE=${CACHE:-/tmp/andl}
+# The tools are the same on every phone; the signing key must not be. Set when this runs at image
+# build time, where a key would be baked into the APK and shared by every Box on earth -- see the
+# keystore step below.
+SKIP_KEYSTORE=${SKIP_KEYSTORE:-0}
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 JRE_URL=https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jre_aarch64_linux_hotspot_17.0.20.1_1.tar.gz
@@ -125,7 +129,14 @@ fi
 verify "$PREFIX/build-tools/aapt2" "$SHA_AAPT2" "aapt2 (ARM64)"
 
 # 6. a signing key. Self-signed is what sideloading wants.
-if [ ! -f "$PREFIX/debug.keystore" ]; then
+#
+#    Never baked into the image. A key that shipped with Box would be the same
+#    key on every device, with its password in this file and its private half
+#    extractable from any APK -- so anyone could sign an update to anybody's
+#    app. It is generated per device instead, on first build, next to the
+#    project rather than next to the tools. build.sh does that; this step is
+#    for a hand-provisioned prefix, and skips when the tools are being baked.
+if [ "$SKIP_KEYSTORE" = 0 ] && [ ! -f "$PREFIX/debug.keystore" ]; then
   say "generating signing key"
   "$PREFIX/jre/bin/keytool" -genkeypair \
     -keystore "$PREFIX/debug.keystore" -storepass boxbox -keypass boxbox \
