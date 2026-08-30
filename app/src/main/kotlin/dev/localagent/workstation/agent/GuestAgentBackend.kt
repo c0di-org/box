@@ -592,6 +592,12 @@ class GuestAgentBackend(
                     record.workingDirectory,
                     Bundle().apply {
                         putString("BOX_SESSION_CWD", record.workingDirectory)
+                        // Which task this is, so the harness can continue the conversation the
+                        // transcript is about to replay rather than opening a fresh one behind it.
+                        // Box's id and the agent's own session id are different things; the
+                        // harness keeps the pairing on the workspace disk, because that is where
+                        // the transcript it would resume also survives an update.
+                        putString("BOX_SESSION_ID", record.id)
                         putString("HOME", GUEST_HOME)
                         if (harness.claudeEnvironment) {
                             // Also sent as a standing setting the moment this attaches, and the
