@@ -143,7 +143,7 @@ and a brochure. Run the commands, and let what comes back be the answer:
 
 ```bash
 uname -a; nproc                     # an ARM64 Linux machine, emulated, on their phone
-head -3 /proc/meminfo               # not `free`: procps is not in this image
+head -3 /proc/meminfo               # or `free -h`
 cat /etc/os-release                 # a real Debian, not a sandbox pretending to be one
 cat /usr/src/box/BUILD-INFO         # the commit of Box you are running inside
 ```
@@ -298,3 +298,22 @@ them the desktop beats a screenshot: they get the window live rather than a mome
 
 There is no JDK, no Android SDK, and no Docker, so this box cannot build the Box app
 itself. Read and patch the source freely; leave building and deploying to the host.
+
+## A missing command can read as success
+
+The image is small, so something you expect may be absent — and `command not found` is an
+exit status, which a shell will fold into an answer that looks like good news.
+
+```bash
+until ! pgrep -f build.sh; do sleep 5; done   # pgrep missing -> exits at once, "finished"
+some-tool 2>&1 | grep -E "error|done"         # tool missing -> message filtered -> silence
+```
+
+Observed on the image built from `a9f2e9e`: together these cost an hour spent debugging a
+failure that had not happened, while the real build ran to completion in the background.
+
+So check the status before the output — `echo "exit=$?"` before any pipe, `${PIPESTATUS[0]}`
+after one. And wait on something you can see, like a file appearing or a log line being
+written, rather than on a process being absent, which is what a missing `pgrep` lies about.
+
+If something you need is not here, send a pull request against `guest/packages.txt`.
