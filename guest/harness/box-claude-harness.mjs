@@ -1438,7 +1438,25 @@ const AUTH_FAILURE = /unauthor|authentication|not logged in|invalid api key|api 
 async function runAuth(query, cwd) {
   const session = query({
     prompt: (async function* () { await new Promise(() => {}); })(),
-    options: { cwd, permissionMode: 'default', includePartialMessages: false },
+    options: {
+      cwd,
+      permissionMode: 'default',
+      includePartialMessages: false,
+      // Signing in leaves nothing behind, and this is the half of that which the SDK owns.
+      //
+      // Box already treats it as structural rather than a flag somebody remembers: sign-in comes
+      // in through `openEphemeralSession`, a separate AIDL method from `openAgentSession`, so
+      // "do not persist this" cannot be forgotten at a call site. But the CLI keeps its own
+      // transcripts, defaulting to on, and CLAUDE_CONFIG_DIR points at /workspace — the one disk
+      // that survives an update. So the flow designed to leave nothing behind was writing a file
+      // that outlives everything.
+      //
+      // Near enough to empty today, because the handshake travels over the control protocol and
+      // this query's prompt stream never yields. That is an argument for the cost of fixing it
+      // being nil, not for leaving it: what goes through this query is exactly the kind of thing
+      // that changes later, and it would change quietly.
+      persistSession: false,
+    },
   });
   activeQuery = session;
 
