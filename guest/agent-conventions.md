@@ -313,6 +313,11 @@ box's own signing key, which is generated here on first build and belongs to thi
 `provision.sh` is still there and still works, for a prefix you assemble yourself; you should not
 need it.
 
+When it is built, offer it with `show(install: '/workspace/shared/<name>.apk')` and the person
+gets a button that installs it. The APK has to be **in the shared folder** — that is the only
+route bytes take out of the box — and it reaches the phone when your turn ends, so say it may
+take a moment rather than letting them tap a button whose file is still on its way.
+
 **Default to building from scratch.** It is not a reduced mode: `android.jar` is the whole
 platform — SQLite, Camera2, sensors, notifications, widgets, `Canvas`, and WebView, so a native
 shell around local HTML is a real design rather than a dodge. What libraries add is mostly

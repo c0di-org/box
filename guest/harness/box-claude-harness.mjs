@@ -1132,6 +1132,40 @@ function showable(rawPath) {
 }
 
 /**
+ * An APK the person can install, or why they cannot.
+ *
+ * Stricter than [showable] on two counts, both of which are the difference between a button that
+ * works and one that apologises when tapped.
+ *
+ * It has to be **under the shared folder**, because that is the only route bytes take out of the
+ * box: everything else in /workspace is readable only through a transport that hands the app a
+ * String, and an APK is not text. The shared folder is copied out as real files, so a file there
+ * is a file the phone can be handed.
+ *
+ * And it has to end in `.apk`, checked here rather than trusted from the caller, because the whole
+ * point of this artifact is that tapping it asks Android to install something.
+ */
+const SHARED = WORKSPACE + 'shared/';
+
+function installable(given) {
+  if (typeof given !== 'string' || !given.startsWith(WORKSPACE)) {
+    return { refusal: `An installable has to be an absolute path under ${SHARED}.` };
+  }
+  if (!given.toLowerCase().endsWith('.apk')) {
+    return { refusal: `${given} is not an .apk. Only an APK can be offered for install; show anything else with path.` };
+  }
+  const { artifact, refusal } = showable(given);
+  if (refusal) return { refusal };
+  if (!artifact.guestPath.startsWith(SHARED)) {
+    return {
+      refusal: `${artifact.guestPath} is not under ${SHARED}, and only that folder is copied out to the phone. Move the APK there and offer it again.`,
+    };
+  }
+  return { artifact: { kind: 'install', guestPath: artifact.guestPath, name: artifact.name } };
+}
+
+/**
+ * Where to read the kernel's TCP tables./**
  * Where to read the kernel's TCP tables. A single path, or several separated by `:`.
  *
  * Overridable for the same reason [INBOX_ON_DISK] is: these tests do not run on Linux, and a
@@ -1192,13 +1226,15 @@ function showTool(tool, z) {
       'and it is not a substitute for saying what the thing is — offer it alongside your answer,',
       'not instead of one.',
       '',
-      'Give exactly one of path, port or desktop.',
+      'Give exactly one of path, port, install or desktop.',
     ].join('\n'),
     {
       path: z.string().optional()
         .describe('An absolute path under /workspace to a file you have finished writing. It opens in a text viewer, so it is for things that read as text — not an image.'),
       port: z.number().int().optional()
         .describe('A port something in this box is already listening on. Box forwards it to the phone and loads it in a browser panel.'),
+      install: z.string().optional()
+        .describe('An absolute path to an .apk under /workspace/shared. The person gets a button that installs it on their phone. It must be in the shared folder, because that is the only place files are copied out of the box.'),
       desktop: z.boolean().optional()
         .describe('True to offer the live desktop — worth it once you have something drawn on it.'),
     },
@@ -1206,11 +1242,12 @@ function showTool(tool, z) {
       const asked = [
         args.path != null ? 'path' : null,
         args.port != null ? 'port' : null,
+        args.install != null ? 'install' : null,
         args.desktop ? 'desktop' : null,
       ].filter(Boolean);
       if (asked.length !== 1) {
         return refused(asked.length === 0
-          ? 'Give exactly one of path, port or desktop.'
+          ? 'Give exactly one of path, port, install or desktop.'
           : `That asked for ${asked.join(' and ')} at once. One thing per call, so the person can tell what each button is.`);
       }
 
@@ -1219,6 +1256,15 @@ function showTool(tool, z) {
         if (refusal) return refused(refusal);
         emit({ type: 'artifact', ...artifact });
         return shown(`${artifact.name} is now a button in the conversation.`);
+      }
+
+      if (args.install != null) {
+        const { artifact, refusal } = installable(args.install);
+        if (refusal) return refused(refusal);
+        emit({ type: 'artifact', ...artifact });
+        return shown(
+          `${artifact.name} is now an install button in the conversation. It reaches the phone when this turn ends, so tell them it may take a moment to appear.`,
+        );
       }
 
       if (args.port != null) {

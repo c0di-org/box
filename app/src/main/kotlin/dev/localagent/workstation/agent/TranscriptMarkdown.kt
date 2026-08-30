@@ -144,6 +144,7 @@ private fun render(item: TranscriptItem, clock: SimpleDateFormat, depth: Int): S
                     when (artifact) {
                         Artifact.Computer -> "- The computer's desktop"
                         is Artifact.Preview -> "- ${artifact.url} (guest port ${artifact.guestPort})"
+                        is Artifact.Install -> "- ${artifact.name} (offered for install) — `${artifact.guestPath}`"
                         is Artifact.Document -> "- ${artifact.name} — `${artifact.guestPath}`"
                     },
                 ).append('\n')

@@ -568,6 +568,19 @@ sealed interface Artifact {
         val name: String,
         val mimeType: String,
     ) : Artifact
+
+    /**
+     * An APK the agent built, offered for installing.
+     *
+     * Separate from [Document] because tapping it does something rather than shows something, and
+     * a row that installs software should not be reachable by mislabelling a file. The path is
+     * always under `/workspace/shared`: that is the only route bytes leave the box by, and the
+     * harness refuses anything else before it becomes a button.
+     */
+    data class Install(
+        val guestPath: String,
+        val name: String,
+    ) : Artifact
 }
 
 @Immutable

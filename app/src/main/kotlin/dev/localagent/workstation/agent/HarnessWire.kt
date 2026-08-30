@@ -186,6 +186,9 @@ internal object HarnessWire {
         }
     }
 
+    /** Mirrors `SharedFolder.IN_BOX`, which `:app` cannot see from here. */
+    private const val SHARED_IN_BOX = "/workspace/shared/"
+
     // ---- payloads ----------------------------------------------------------
 
     private fun toolCall(json: JSONObject?, defaultCwd: String): ToolCall {
@@ -391,6 +394,19 @@ internal object HarnessWire {
         "preview" -> json.optStringOrNull("url")?.let { url ->
             Artifact.Preview(url = url, guestPort = json.optInt("guestPort"))
         }
+
+        // Checked here as well as in the harness. The guest image and the app ship independently,
+        // so the app can meet a guest older or newer than itself, and "the sender validated it" is
+        // not a property the receiving side can verify — which matters for the one artifact whose
+        // button installs software.
+        "install" -> json.optStringOrNull("guestPath")
+            ?.takeIf { it.startsWith(SHARED_IN_BOX) && it.endsWith(".apk", ignoreCase = true) }
+            ?.let { path ->
+                Artifact.Install(
+                    guestPath = path,
+                    name = json.optStringOrNull("name") ?: path.substringAfterLast('/'),
+                )
+            }
 
         "document" -> json.optStringOrNull("guestPath")?.let { path ->
             Artifact.Document(
