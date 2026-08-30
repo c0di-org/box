@@ -29,13 +29,19 @@ import java.io.File
  * **The folder changes while the box is up** — inotify, not a poll, so a file copied in from the
  * Files app is in the box a second later.
  *
- * **A session finishes** — the one that brings the agent's own files out, chosen over the
- * alternatives: on opening Box's Files panel only helps someone already inside Box, which is the
- * opposite of the point; on shutdown is too late and unreliable, since the process that would run
- * it is the one being killed; a poll is a timer running for hours to catch a twice-a-day event.
- * A session ending is when the output is finished, costs nothing while idle, and lines up with
- * something the user already understands. An agent that leaves a file mid-task and keeps working
- * waits for the next trigger, which is the price of not polling.
+ * **The agent goes quiet** — the one that brings the agent's own files out. Both the end of a
+ * session and the end of each turn within it, because an agent works for an hour in turns and a
+ * file made in the first minute should not be invisible for the other fifty-nine; the moment it is
+ * most wanted is right after the agent says it made it. A turn ending is a real quiescent point
+ * rather than a guess at one — the agent has stopped writing, by its own account — which is what
+ * makes this cheap where a poll is not, and it is still nothing at all while the box sits idle.
+ *
+ * The alternatives, for the record: on opening Box's Files panel only helps someone already inside
+ * Box, which is the opposite of the point; on shutdown is too late and unreliable, since the
+ * process that would run it is the one being killed; a timer is work done on a schedule that has
+ * no relationship to when anything changed. An agent that leaves a file *mid-turn* and keeps
+ * working still waits for the end of that turn, which is the remaining price of not polling — and
+ * a much smaller one than waiting for the session.
  *
  * Nothing here promises *when*. A pass is idempotent and self-healing, so a missed trigger costs a
  * delay and never a lost file.
@@ -67,8 +73,8 @@ internal class SharedFolderBridge(
         }
     }
 
-    /** An agent stopped. See the class doc: this is the trigger that brings its files out. */
-    fun onSessionFinished() = ask("a session finished")
+    /** An agent stopped talking, for a turn or for good. This is what brings its files out. */
+    fun onAgentQuiet() = ask("the agent went quiet")
 
     fun stop() {
         watcher.stop()

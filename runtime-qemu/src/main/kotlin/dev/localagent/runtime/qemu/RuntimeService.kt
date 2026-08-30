@@ -759,12 +759,20 @@ class RuntimeService : Service() {
      * would die with it.
      */
     private fun notifySession(sessionId: String, signal: SessionSignals.Signal) {
-        // An agent that has stopped is an agent whose files are finished being written. This is
-        // the trigger that carries anything it left in `/workspace/shared` out to the phone; see
-        // [SharedFolderBridge] for why this moment and not a poll.
-        if (signal is SessionSignals.Signal.Finished) sharedFolder.onSessionFinished()
+        // An agent that has stopped talking is an agent whose files are finished being written.
+        // Both moments count: the end of the session, and the end of each turn within it. Waiting
+        // only for the session meant a file made in the first minute of an hour's work was
+        // invisible for the other fifty-nine — and the moment it is most wanted is right after the
+        // agent says it made it. See [SharedFolderBridge] for why these moments and not a poll.
+        if (signal is SessionSignals.Signal.Finished || signal is SessionSignals.Signal.Quiet) {
+            sharedFolder.onAgentQuiet()
+        }
 
         val manager = getSystemService(NotificationManager::class.java) ?: return
+
+        // Never a notification. The agent pausing between turns is not news, and a phone that
+        // buzzed every time it drew breath would be unusable.
+        if (signal is SessionSignals.Signal.Quiet) return
 
         // Nothing to say, and something to take back. Keyed the same way the notification was
         // posted, so this takes down exactly the "Box needs you" that is no longer true — while a
@@ -791,9 +799,11 @@ class RuntimeService : Service() {
             } else {
                 "The agent finished" to (signal.summary ?: "Your task is done.")
             }
-            // Taken back above rather than posted. Spelled out because the compiler cannot see
-            // that early return, and an `else` here would silently swallow a signal added later.
-            SessionSignals.Signal.Answered -> return
+            // Both handled above rather than posted — one takes a notification back, the other
+            // is not news. Spelled out because the compiler cannot see those early returns, and an
+            // `else` here would silently swallow a signal added later. Which is not theoretical:
+            // adding `Quiet` failed to compile here first, which is the point of the rule.
+            SessionSignals.Signal.Answered, SessionSignals.Signal.Quiet -> return
         }
 
         val pending = openAppIntent(sessionId.hashCode())

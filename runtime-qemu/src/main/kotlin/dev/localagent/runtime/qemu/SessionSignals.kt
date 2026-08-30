@@ -3,11 +3,12 @@ package dev.localagent.runtime.qemu
 import org.json.JSONObject
 
 /**
- * The two moments in a session worth interrupting someone for.
+ * The moments in a session `:computer` has to act on.
  *
  * Deliberately *not* a second parser of the harness wire format — `HarnessWire` owns that and stays
  * the only place that learns the vocabulary. This reads two type tags and one line of prose each,
- * because `:computer` needs exactly two facts: the agent finished, or it is stuck waiting on you.
+ * because `:computer` needs a handful of facts: the agent finished, it is stuck waiting on you, or
+ * it has gone quiet between turns.
  *
  * It lives here rather than in the UI process for the reason the whole session design exists:
  * Android kills the Compose process whenever it likes, and "start work, pocket the phone, get told
@@ -24,6 +25,15 @@ internal object SessionSignals {
 
         /** The agent is blocked on a decision only the user can make. */
         data class NeedsYou(val label: String) : Signal
+
+        /**
+         * The agent stopped talking, without the session being over.
+         *
+         * Nobody is interrupted for this — it is the opposite of news. It exists because it is the
+         * moment the agent's files have stopped being written, which is the only thing that makes
+         * carrying them out at all safe. See [dev.localagent.runtime.qemu.shared.SharedFolderBridge].
+         */
+        data object Quiet : Signal
 
         /**
          * A question that is over, however it ended.
@@ -56,6 +66,12 @@ internal object SessionSignals {
             // second parser of the wire format: it is the same two facts, plus the fact that they
             // have stopped being true.
             "permission_resolved", "connect_resolved" -> Signal.Answered
+
+            // A turn ending, which the harness says by going idle. Only that one kind: `thinking`
+            // and `working` are the agent mid-sentence, and a file being written is not a file
+            // worth carrying anywhere.
+            "activity" ->
+                Signal.Quiet.takeIf { json.optJSONObject("activity")?.optString("kind") == "idle" }
 
             // Also a thing only the user can do, and the one most worth a notification: the agent
             // is holding its turn open indefinitely waiting for it, so a phone in a pocket is the
