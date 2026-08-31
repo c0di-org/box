@@ -86,7 +86,17 @@ const promptQueue = [];
 let promptWaiter = null;
 let inputClosed = false;
 
+/**
+ * Whether a turn has ever arrived, however briefly it was held.
+ *
+ * Not the same question as whether the queue is empty: a turn that arrives while the generator is
+ * already waiting resolves the waiter and is never queued at all. The one place that cares is the
+ * idle report after `query`, which is about a session that has never been spoken to.
+ */
+let promptSeen = false;
+
 function pushPrompt(turn) {
+  promptSeen = true;
   if (promptWaiter) {
     const resolve = promptWaiter;
     promptWaiter = null;
@@ -1865,6 +1875,26 @@ async function main() {
       // to connect GitHub?" is the connect card's own question, one screen earlier.
       ...(box ? { mcpServers: { box }, allowedTools: [SHOW_TOOL, CONNECT_TOOL] } : {}),
     },
+  });
+
+  // The start-up is over, and never saying so is what made it look like a hang.
+  //
+  // Box opens a session when its conversation is *looked at*, not only when it is spoken to, so
+  // that the SDK import and the CLI's own start-up are behind us before anyone types. That is
+  // deliberate and it is worth the minutes it saves. What was not deliberate is that the last
+  // thing such a session ever said was "Waking the agent": the SDK narrates nothing of its own
+  // until `init`, and in streaming-input mode the CLI withholds `init` until it has a first user
+  // message — so a session nobody had typed into sat under a starting label for as long as the
+  // box was up, indistinguishable from a wedged one. Measured on a Fold 7: four minutes of that,
+  // then a reply in forty seconds the moment a prompt arrived. See issue #71.
+  //
+  // Deferred a turn of the loop, and not because the timing is delicate. A queued turn is the
+  // ordinary case — the app writes the first prompt the moment the box is up, so it is sitting in
+  // the pipe unread while everything above runs, which is the same fact that makes `BOX_MODEL` an
+  // environment variable rather than a command. `setImmediate` fires after the poll phase that
+  // delivers it, so a session with work already waiting is never reported at rest first.
+  setImmediate(() => {
+    if (!promptSeen) emit({ type: 'activity', activity: { kind: 'idle' } });
   });
 
   /**

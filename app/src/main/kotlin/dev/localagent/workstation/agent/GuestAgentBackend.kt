@@ -576,7 +576,7 @@ class GuestAgentBackend(
             return
         }
         if (!record.attached.compareAndSet(false, true)) return
-        val callback = Listener(record)
+        val callback = Listener(record, opening = plan == AttachPlan.Open)
         val harness = harnessRuntime(record.harnessId) ?: run {
             record.attached.set(false)
             record.connection.value = SessionConnection.Ended
@@ -634,7 +634,17 @@ class GuestAgentBackend(
         }
     }
 
-    private inner class Listener(private val record: Record) : IAgentSessionCallback.Stub() {
+    private inner class Listener(
+        private val record: Record,
+        /**
+         * Whether this attachment is the one that started the process.
+         *
+         * A newly started harness has nothing in flight by definition, which is what lets
+         * [onAttached] tell a session that has only been looked at from one that is working. False
+         * for a reattachment, where the process has been running without us and may be mid-turn.
+         */
+        private val opening: Boolean,
+    ) : IAgentSessionCallback.Stub() {
         /**
          * Whether there was ever a process behind this attachment.
          *
@@ -654,6 +664,9 @@ class GuestAgentBackend(
                 if (session == null) SessionConnection.Ended else SessionConnection.Live
             if (!record.logPath.isCompleted) record.logPath.complete(logPath)
             if (session != null) {
+                // Read before the flush below empties it, because it is the difference between a
+                // session that has work and one that has only been looked at. See the publish.
+                val waiting = synchronized(record.outbox) { record.outbox.isNotEmpty() }
                 // Whatever the user asked for while the computer was still starting — with the
                 // standing settings ahead of it. Every harness process starts out asking, on no
                 // particular model, and knowing nothing about the window, including one that came
@@ -669,8 +682,21 @@ class GuestAgentBackend(
                     ),
                 )
                 // A session that failed to open earlier is no longer failed, and the list has to
-                // stop saying so.
-                scope.launch { publish(record, SessionStatus.Active) }
+                // stop saying so. What it must not say instead is that the agent is working.
+                //
+                // Attaching is not working. Box opens a session when its conversation is looked
+                // at, so most attachments have nobody waiting on them, and reporting every one as
+                // [SessionStatus.Active] put a live dot on tasks nobody had asked for anything —
+                // next to a transcript stuck on "Waking the agent", which is how a warm session
+                // came to be indistinguishable from a wedged one. See issue #71.
+                //
+                // Two exceptions, and both really are work. A turn queued in the outbox while the
+                // box was shut is about to run. And a reattachment is to a process that has been
+                // going without us, which may well be mid-turn — [opening] is false there, and
+                // nothing else would put the status back.
+                scope.launch {
+                    publish(record, if (opening && !waiting) SessionStatus.Idle else SessionStatus.Active)
+                }
             }
         }
 
