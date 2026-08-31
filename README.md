@@ -91,7 +91,8 @@ The main cost today is performance: the stock runtime is fully emulated ARM64, s
 Google ships Android's build tools as x86-64 binaries, so the usual route does not run on an
 ARM64 phone. Box assembles a toolchain that does: a community ARM64 `aapt2`, `d8` and
 `apksigner` lifted unchanged out of Google's own archive because they are pure Java, and `ecj`
-in place of a JDK. Roughly 100 MB, installed into `/workspace` where it survives app updates.
+in place of a JDK. It ships inside the image at `/opt/android`, so it is there on first boot with
+nothing to download; builds write to `/workspace/android`, which survives app updates.
 
 There are two paths, and the fast one is more capable than it sounds:
 
@@ -112,11 +113,17 @@ Details and measurements in [`docs/spike/android-toolchain/gradle-free/`](docs/s
 
 ## Install it
 
-The [latest release](https://github.com/garfbargle/box/releases/latest) has a prebuilt APK:
+Box is distributed through Library, which signs it centrally — that signature is what lets an
+update land in place rather than asking you to uninstall first. The
+[latest release](https://github.com/c0di-org/box/releases/latest) also carries the APK directly:
 
 ```bash
 adb install -r box-*-stock.apk
 ```
+
+An APK you build yourself is signed with a different key, so it **cannot** be installed over one
+from Library. See [Development › Releases](docs/development.md#releases) before reaching for a
+local build to fix a device.
 
 ## Build it
 

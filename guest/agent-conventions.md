@@ -355,3 +355,19 @@ after one. And wait on something you can see, like a file appearing or a log lin
 written, rather than on a process being absent, which is what a missing `pgrep` lies about.
 
 If something you need is not here, send a pull request against `guest/packages.txt`.
+
+The same shape catches work that is not a missing command at all:
+
+- **A filter that matches nothing looks like a pass.** `grep -i waking` on a log also matches
+  `awaking` in an unrelated line — and a wait loop built on it returns immediately, for the wrong
+  reason. Match on something specific enough to be wrong loudly.
+- **An edit you did not check may not have happened.** A script that rewrites a file and finds none
+  of what it expected still exits cleanly if nothing asserted; and a script that fails *after*
+  editing in memory writes nothing at all, so an earlier change in the same run vanishes with it.
+  Assert that each replacement matched, and read back the one line that proves it landed.
+- **Tests that only prove refusal prove very little.** A parser branch was once missing entirely
+  while every test asserting "this input is rejected" passed — because everything was being
+  rejected. Only the test asserting a *good* input is accepted found it. Write that one first.
+
+All four are the same mistake: taking silence, or an exit status, for a result. Ask for something
+positive that only success can produce.
