@@ -115,8 +115,34 @@ relaunched.** The comment is correct about the case it was written for — a res
 surface — and wrong about the one it now also catches, a stream that has already died.
 
 `pump` is set to null in exactly one place: `detach`, and only once the *last* surface has gone
-(`:95-97`). So recovery requires every view of the desktop to be torn down and rebuilt. That is
-what the user found by trial: back all the way out and come back in, and the picture returns.
+(`:95-97`). So recovery requires every view of the desktop to be torn down and rebuilt.
+
+### And there is no in-app gesture that does that
+
+This is the part that turns an annoyance into a dead end. The desktop is attached from **two**
+places, not one. `ui/YourBox.kt:774` puts a minimap of it on the home surface:
+
+```kotlin
+DesktopSurface(
+    desktop,
+    interactive = false,
+    preview = true,
+    modifier = Modifier.fillMaxSize(),
+)
+```
+
+That preview is the black tile in the left column — the one reading "No picture · the guest closed
+its display" in the user's screenshot. It is on screen whenever the box panel is, and it registers a
+surface of its own.
+
+So closing the computer pane removes one surface and leaves the other. `surfaces` is never empty,
+`detach` never reaches its `pump = null`, and the stream is never relaunched. Every recovery
+available *inside* the app — closing the pane, switching tasks, navigating back — leaves the
+preview attached and therefore does nothing.
+
+What is left is destroying the surfaces from outside: backgrounding the app hard enough that its
+window goes away, or swiping it out of recents. A user has no reason to guess that, and the failed
+placeholder does not hint at it.
 
 There is also no retry and no action on the card. `DesktopPlaceholder` gets `busy = false` and no
 button, so a failed desktop presents as a statement of fact with nothing to do about it.
@@ -127,6 +153,10 @@ Clear `pump` where `connection` is cleared — in the `finally`, under the same 
 pane then relaunches the stream, and the existing `attach` path does the rest. A retry button on
 the failed placeholder would be better, and an automatic reconnect with a backoff better still, but
 one line in the `finally` turns an unrecoverable state into a recoverable one.
+
+Note that the `detach` path cannot be the fix on its own, precisely because of the preview above:
+as long as any surface remains attached the stream will not restart, so the recovery has to happen
+where the failure did.
 
 ## What connects them, and what does not
 
