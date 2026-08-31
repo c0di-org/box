@@ -491,6 +491,7 @@ private object StubDesktop : DesktopTransport {
 
     override suspend fun attach(surface: Surface, widthPx: Int, heightPx: Int, preview: Boolean) = Unit
     override suspend fun detach(surface: Surface) = Unit
+    override suspend fun reconnect() = Unit
     override suspend fun send(input: DesktopInput) = Unit
     override suspend fun setControl(holder: ControlHolder) = Unit
 }

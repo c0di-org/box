@@ -47,6 +47,19 @@ interface DesktopTransport {
     /** Stops drawing into [surface]. The stream ends when the last surface has gone. */
     suspend fun detach(surface: Surface)
 
+    /**
+     * Opens the stream again after it has ended, for views that are still attached.
+     *
+     * A stream that dies leaves [DesktopState.Failed] and, until this existed, nothing anyone
+     * could do about it: the failed pane stated a fact and offered no way out of it. Backing all
+     * the way out of the computer and coming back was the only route, and it worked by accident —
+     * it is the one path that drops the last surface.
+     *
+     * A no-op when nothing is attached or a stream is already running, so it is safe to call from
+     * a button somebody may press twice.
+     */
+    suspend fun reconnect()
+
     /** Only delivered while the user holds control. */
     suspend fun send(input: DesktopInput)
 
