@@ -122,6 +122,7 @@ class FakeAgentBackend(
         harnessId: String,
         prompt: String?,
         attachments: List<Attachment>,
+        turnId: String,
     ): String {
         val id = "s-${ids.incrementAndGet()}"
         val title = prompt?.take(48)?.ifBlank { null } ?: "New task"
@@ -161,7 +162,12 @@ class FakeAgentBackend(
         return id
     }
 
-    override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
+    override suspend fun send(
+        sessionId: String,
+        text: String,
+        attachments: List<Attachment>,
+        turnId: String,
+    ) {
         emit(
             AgentEvent.UserMessage(
                 eventId = next(),

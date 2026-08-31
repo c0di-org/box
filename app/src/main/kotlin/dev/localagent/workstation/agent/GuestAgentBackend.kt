@@ -201,8 +201,46 @@ class GuestAgentBackend(
          * new session is written to a handle that does not exist yet. Without this queue that
          * prompt is silently dropped and the agent simply never begins.
          */
-        val outbox = mutableListOf<String>()
+        val outbox = mutableListOf<Pending>()
+
+        /**
+         * Turns handed to the guest that it has not said it took, oldest first.
+         *
+         * The gap this closes: the harness echoes a turn into the log the instant it reads it off
+         * stdin, and pushes it onto an in-memory array a line later. Die in between — and starting
+         * Claude Code is minutes of work, all of it before the first prompt can be read — and the
+         * durable half survives while the real half does not. The log says the user spoke; the
+         * model's context does not; nothing reconciled them, because `Record.write` stopped
+         * retaining a turn the moment a `oneway` call failed to throw.
+         *
+         * Held until `turn_accepted` says the model's queue has it, and handed to the next harness
+         * process if this one dies first. Guarded by [outbox]'s lock, because the two are one
+         * decision: what this session still owes the guest.
+         */
+        val unacked = LinkedHashMap<String, Pending>()
+
+        /**
+         * Whether this session's harness has promised to answer turns. See
+         * [HarnessWire.TurnSignal.Acknowledges].
+         *
+         * Redelivery is gated on it. A turn given to a harness that never acknowledges anything
+         * would sit in [unacked] forever and be sent again at every start — one silent duplicate
+         * per restart, which is a worse failure than the one being fixed.
+         */
+        @Volatile var acknowledgesTurns = false
+
+        /** Whether anybody is owed a reply by this session: something queued, or a turn unanswered. */
+        fun isWaiting(): Boolean =
+            synchronized(outbox) { outbox.isNotEmpty() || unacked.isNotEmpty() }
     }
+
+    /**
+     * A command on its way to the guest, and the turn it is, if it is one.
+     *
+     * Only a turn carries an id. A standing setting is stated afresh to every process that starts
+     * (see [Listener.onAttached]), so there is nothing for it to be owed.
+     */
+    private data class Pending(val json: String, val turnId: String? = null)
 
     init {
         // A restarted UI process starts knowing nothing. The index says which sessions exist; the
@@ -286,7 +324,7 @@ class GuestAgentBackend(
             // something typed while the box was shut, which is what the outbox is for.
             scope.launch {
                 records.values
-                    .filter { synchronized(it.outbox) { it.outbox.isNotEmpty() } }
+                    .filter { it.isWaiting() }
                     .forEach { attach(it) }
             }
         }
@@ -436,6 +474,7 @@ class GuestAgentBackend(
         harnessId: String,
         prompt: String?,
         attachments: List<Attachment>,
+        turnId: String,
     ): String {
         require(harnessRuntime(harnessId) != null) { "Unknown harness: $harnessId" }
         val id = "s-" + System.currentTimeMillis().toString(36)
@@ -450,11 +489,16 @@ class GuestAgentBackend(
         publish(record, SessionStatus.Active, prompt)
 
         attach(record)
-        if (prompt != null) send(id, prompt, attachments)
+        if (prompt != null) send(id, prompt, attachments, turnId)
         return id
     }
 
-    override suspend fun send(sessionId: String, text: String, attachments: List<Attachment>) {
+    override suspend fun send(
+        sessionId: String,
+        text: String,
+        attachments: List<Attachment>,
+        turnId: String,
+    ) {
         val record = records[sessionId] ?: return
         // The first thing the user says is the name of the task, the way it is in every chat app.
         // Only the first: a task is named after what it was for, not after the last thing said in
@@ -465,7 +509,7 @@ class GuestAgentBackend(
             record.named = true
         }
         attach(record)
-        record.write(promptCommand(text, attachments))
+        record.write(promptCommand(text, attachments, turnId), turnId = turnId)
         publish(record, SessionStatus.Active, text)
     }
 
@@ -479,13 +523,18 @@ class GuestAgentBackend(
      * second or so behind the keystroke and the alternative is an agent that looks too early and
      * tells the user it cannot see their picture.
      */
-    private fun promptCommand(text: String, attachments: List<Attachment>): Map<String, Any> =
+    private fun promptCommand(
+        text: String,
+        attachments: List<Attachment>,
+        turnId: String,
+    ): Map<String, Any> =
         if (attachments.isEmpty()) {
-            mapOf("type" to "prompt", "text" to text)
+            mapOf("type" to "prompt", "text" to text, "turnId" to turnId)
         } else {
             mapOf(
                 "type" to "prompt",
                 "text" to text,
+                "turnId" to turnId,
                 "attachments" to attachments.map {
                     mapOf(
                         "guestPath" to it.guestPath,
@@ -694,7 +743,7 @@ class GuestAgentBackend(
             if (session != null) {
                 // Read before the flush below empties it, because it is the difference between a
                 // session that has work and one that has only been looked at. See the publish.
-                val waiting = synchronized(record.outbox) { record.outbox.isNotEmpty() }
+                val waiting = record.isWaiting()
                 // Whatever the user asked for while the computer was still starting — with the
                 // standing settings ahead of it. Every harness process starts out asking, on no
                 // particular model, and knowing nothing about the window, including one that came
@@ -708,6 +757,10 @@ class GuestAgentBackend(
                         modelCommand(modelState.value),
                         viewport?.let(::viewportCommand),
                     ),
+                    // Only a process this attachment started can be missing turns the last one was
+                    // given: a reattachment is to a harness that has been running without us and
+                    // may be holding them still.
+                    redeliver = opening,
                 )
                 // A session that failed to open earlier is no longer failed, and the list has to
                 // stop saying so. What it must not say instead is that the agent is working.
@@ -783,6 +836,7 @@ class GuestAgentBackend(
             title = record.title,
             workingDirectory = record.workingDirectory,
         )
+        readTurnSignals(record, lines)
         for (line in lines) {
             val next = sessionStatusFor(line, context) ?: continue
             if (record.status == next) continue
@@ -812,27 +866,37 @@ class GuestAgentBackend(
      * conversation. Measured on device: three `claude` processes in a two-core guest to answer one
      * "hi", and 455 s to a first reply. See docs/runtime.md.
      */
-    private fun Record.write(command: Map<String, Any>) {
-        val json = HarnessWire.encode(command)
+    private fun Record.write(command: Map<String, Any>, turnId: String? = null) {
+        val pending = Pending(HarnessWire.encode(command), turnId)
         synchronized(outbox) {
             val live = handle
             if (live == null) {
-                if (!isStandingSetting(command)) outbox += json
+                if (!isStandingSetting(command)) outbox += pending
                 return
             }
             // Ordering, and it applies to settings too: one sent past a queued turn would reach
             // the agent after work that was meant to run under it.
             if (outbox.isNotEmpty()) {
-                outbox += json
+                outbox += pending
                 return
             }
-            runCatching { live.write((json + "\n").toByteArray()) }
-                .onFailure {
-                    Log.e(TAG, "could not answer the harness", it)
-                    outbox += json
-                }
+            if (!deliver(live, pending)) outbox += pending
         }
     }
+
+    /**
+     * Hand one command over, and keep a turn until the guest says it has it.
+     *
+     * Only ever called with [Record.outbox]'s lock held. The `oneway` write returning is not
+     * delivery and never was — it means the binder took the bytes, which is a fact about this
+     * process and not about the one that has to act on them. So a turn moves from "queued" to
+     * "unanswered" here rather than to "done".
+     */
+    private fun Record.deliver(live: IAgentSession, pending: Pending): Boolean =
+        runCatching { live.write((pending.json + "\n").toByteArray()) }
+            .onSuccess { if (pending.turnId != null) unacked[pending.turnId] = pending }
+            .onFailure { Log.e(TAG, "could not answer the harness", it) }
+            .isSuccess
 
 
     /**
@@ -840,19 +904,46 @@ class GuestAgentBackend(
      * behind [first] — which exists so a session's standing settings can be stated to a brand new
      * process before the work it was queued to do, in the order given.
      */
-    private fun Record.flushOutbox(first: List<Map<String, Any>> = emptyList()) {
+    private fun Record.flushOutbox(first: List<Map<String, Any>> = emptyList(), redeliver: Boolean = false) {
         synchronized(outbox) {
             val live = handle ?: return
-            val undelivered = mutableListOf<String>()
-            for (json in first.map(HarnessWire::encode) + outbox) {
-                runCatching { live.write((json + "\n").toByteArray()) }
-                    .onFailure {
-                        Log.e(TAG, "could not deliver a queued command", it)
-                        undelivered += json
-                    }
+            // Turns the last process was handed and never answered for, ahead of anything typed
+            // since, because that is the order they were said in. Taken out of [unacked] first:
+            // [deliver] puts each one back as it goes, and a turn this process also fails to
+            // answer for is owed by it rather than by the one that died.
+            //
+            // Only for a process this Box started (see [Listener.opening]) and only to a harness
+            // that acknowledges turns. Reattaching to a *live* harness that already has them would
+            // deliver every one of them twice.
+            val again = if (redeliver && acknowledgesTurns) unacked.values.toList() else emptyList()
+            if (again.isNotEmpty()) {
+                Log.w(TAG, "session $id: redelivering ${again.size} unanswered turn(s) to a new harness")
+                unacked.clear()
+            }
+            val undelivered = mutableListOf<Pending>()
+            for (pending in first.map { Pending(HarnessWire.encode(it)) } + again + outbox) {
+                if (!deliver(live, pending)) undelivered += pending
             }
             outbox.clear()
             outbox += undelivered
+        }
+    }
+
+    /**
+     * The guest's own account of a turn, read off every chunk on the binder thread.
+     *
+     * Not routed through `events()`, deliberately: that flow exists only while somebody is looking
+     * at the conversation, and a turn has to be tracked for a session nobody is watching — which
+     * is the state it was lost in.
+     */
+    private fun readTurnSignals(record: Record, lines: List<String>) {
+        for (line in lines) {
+            when (val signal = HarnessWire.turnSignal(line)) {
+                HarnessWire.TurnSignal.Acknowledges -> record.acknowledgesTurns = true
+                is HarnessWire.TurnSignal.Accepted ->
+                    synchronized(record.outbox) { record.unacked.remove(signal.turnId) }
+                null -> Unit
+            }
         }
     }
 

@@ -469,6 +469,59 @@ class HarnessWireTest {
     }
 
     @Test
+    fun `an echoed turn carries the name it was sent under`() {
+        val event = parse("""{"v":1,"type":"user_message","text":"clone it","turnId":"t-7"}""")
+
+        assertEquals("t-7", (event as AgentEvent.UserMessage).turnId)
+        assertEquals("clone it", event.text)
+    }
+
+    @Test
+    fun `a turn from before turns had names parses with none`() {
+        // Every historical line in every log that already exists, and every turn from an image
+        // older than the acknowledgement. Absent is not the empty string.
+        val event = parse("""{"v":1,"type":"user_message","text":"clone it"}""")
+
+        assertNull((event as AgentEvent.UserMessage).turnId)
+    }
+
+    @Test
+    fun `an acknowledged turn is read off the raw line`() {
+        // Read on the binder thread, off every chunk, whether or not anybody is watching the
+        // conversation -- which is why it is not an AgentEvent. See HarnessWire.turnSignal.
+        assertEquals(
+            HarnessWire.TurnSignal.Accepted("t-7"),
+            HarnessWire.turnSignal("""{"v":1,"type":"turn_accepted","turnId":"t-7"}"""),
+        )
+    }
+
+    @Test
+    fun `an acknowledgement with no turn named is not one`() {
+        assertNull(HarnessWire.turnSignal("""{"v":1,"type":"turn_accepted"}"""))
+        assertNull(HarnessWire.turnSignal("""{"v":1,"type":"turn_accepted","turnId":""}"""))
+    }
+
+    @Test
+    fun `a harness says whether it answers turns at all`() {
+        assertEquals(
+            HarnessWire.TurnSignal.Acknowledges,
+            HarnessWire.turnSignal(
+                """{"v":1,"type":"session_started","harness":"claude-code","acknowledgesTurns":true}""",
+            ),
+        )
+        // A guest image older than the acknowledgement. Box must read this as "makes no promise"
+        // and never redeliver to it, rather than as a harness that is merely slow to answer.
+        assertNull(HarnessWire.turnSignal("""{"v":1,"type":"session_started","harness":"claude-code"}"""))
+    }
+
+    @Test
+    fun `an ordinary line is not mistaken for a turn signal`() {
+        assertNull(HarnessWire.turnSignal("""{"v":1,"type":"message","text":"turn_accepted"}"""))
+        assertNull(HarnessWire.turnSignal("not json at all"))
+        assertNull(HarnessWire.turnSignal("""{"v":1,"type":"user_message","text":"hi","turnId":"t-7"}"""))
+    }
+
+    @Test
     fun `a label that already ends in an ellipsis does not get a second one`() {
         // The view appends its own. A guest image older than this app sends the ellipsis itself,
         // which rendered as "Starting Claude Code......" on the device.

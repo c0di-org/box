@@ -68,6 +68,16 @@ sealed interface AgentEvent {
         override val at: Long,
         val text: String,
         val attachments: List<Attachment> = emptyList(),
+        /**
+         * The turn this echoes, when the harness was told one.
+         *
+         * Null for a line written before turns had names, which is every historical turn in every
+         * log that already exists. Nothing may treat this echo as proof the model has the turn —
+         * that is `turn_accepted`, and it is deliberately a different event. This is only how the
+         * UI knows *which* queued copy the echo belongs to, and it replaces matching on the text,
+         * which could not tell the same message sent twice apart.
+         */
+        val turnId: String? = null,
     ) : AgentEvent
 
     /**
