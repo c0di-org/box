@@ -69,6 +69,7 @@ internal object HarnessWire {
             "user_message" -> AgentEvent.UserMessage(
                 eventId, session, at,
                 text = json.optString("text"),
+                turnId = json.optString("turnId").ifBlank { null },
                 // Absent on every turn that carried nothing, and on every turn at all from a
                 // harness older than the feature. Both read as an empty list.
                 attachments = json.optJSONArray("attachments").mapObjects(::attachment)
@@ -483,6 +484,44 @@ internal object HarnessWire {
         }
         append('"')
     }
+
+    /**
+     * What a harness line says about the delivery of turns, if anything.
+     *
+     * Read on the binder thread, off every chunk, whether or not anybody is watching the
+     * conversation — which is the reason it is not an [AgentEvent]. `events()` exists only while
+     * a transcript is on screen, and a turn's delivery has to be tracked for a session nobody is
+     * looking at: that is the case it was lost in.
+     *
+     * Cheap on purpose. Almost every line is neither of these, so the string test comes before the
+     * parse.
+     */
+    sealed interface TurnSignal {
+        /**
+         * This harness answers turns it is given. Until Box has heard this from a session it will
+         * not redeliver a turn to it, so an image older than the acknowledgement behaves exactly
+         * as it did rather than collecting turns that will never be answered.
+         */
+        data object Acknowledges : TurnSignal
+
+        /** The model's queue has [turnId]. It is no longer Box's to redeliver. */
+        data class Accepted(val turnId: String) : TurnSignal
+    }
+
+    fun turnSignal(line: String): TurnSignal? {
+        if (!line.contains(TURN_HINT) && !line.contains(SESSION_START_HINT)) return null
+        val json = runCatching { JSONObject(line) }.getOrNull() ?: return null
+        return when (json.optString("type")) {
+            "turn_accepted" -> json.optStringOrNull("turnId")?.let(TurnSignal::Accepted)
+            "session_started" ->
+                if (json.optBoolean("acknowledgesTurns", false)) TurnSignal.Acknowledges else null
+            else -> null
+        }
+    }
+
+    /** Match before parsing; the overwhelming majority of lines are neither. */
+    private const val TURN_HINT = "turn_accepted"
+    private const val SESSION_START_HINT = "session_started"
 
     /** A harness naming a secret it needs. An ask with no id is not one; it is noise. */
     private fun credentialAsk(json: JSONObject): CredentialAsk? {

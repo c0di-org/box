@@ -49,7 +49,9 @@ import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
+import dev.localagent.workstation.agent.newTurnId
 import dev.localagent.workstation.agent.SessionConnection
+import dev.localagent.workstation.agent.SignInStatus
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.GuestScreen
@@ -63,6 +65,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -167,7 +170,7 @@ class BoxViewModel @JvmOverloads constructor(
         refreshFiles()
         // Whether the guest already holds a credential is only answerable once there is a guest to
         // ask. Until then the sign-in state is honestly Unknown.
-        auth.check(bound)
+        checkSignIn(bound)
         // A sheet raised while the box was still starting has been sitting on "Waiting for your
         // box…". It can answer now, so the code it was meant to be showing arrives without the
         // person having to press anything.
@@ -181,6 +184,39 @@ class BoxViewModel @JvmOverloads constructor(
             // went looking for it in diagnostics. A box that is connected should be able to say so
             // without being interrogated.
             github.check(bound)
+        }
+    }
+
+    private var signInCheck: Job? = null
+
+    /**
+     * Asks the guest about the credential, and keeps asking for as long as it cannot answer.
+     *
+     * One ask was not enough, and the failure was invisible. Ready means the VM, not the guest's
+     * userland — a box resuming from a snapshot reaches Ready a beat before `agentd` will open a
+     * session — so the single ask could land in a window where nothing could answer it. The state
+     * it produced then stood for the rest of the app's life, because [greetReadyComputer] fires
+     * once. That is a person force-quitting Box, coming back, and being told they are signed out
+     * of a box that is holding their credential the whole time.
+     *
+     * Only [GuestAuth.State.Unknown] is retried: it is now the only state meaning *nobody
+     * answered*. A real "signed out" is an answer and is left alone, and a sign-in the user has
+     * since started is not interrupted — [GuestAuth.check] declines to run underneath one.
+     */
+    private fun checkSignIn(control: IRuntimeControl) {
+        if (signInCheck?.isActive == true) return
+        signInCheck = viewModelScope.launch {
+            var attempt = 0
+            while (true) {
+                auth.check(control)
+                // Waits on the answer rather than on a timer: the ask is a guest process, and how
+                // long it takes is not something this can usefully guess.
+                val settled = auth.state.first { it != GuestAuth.State.Checking }
+                if (settled != GuestAuth.State.Unknown) return@launch
+                delay(SignInStatus.retryAfterMillis(attempt++) ?: return@launch)
+                // A box that has gone away since is not a box that is about to answer.
+                if (!mutableUiState.value.computerReady) return@launch
+            }
         }
     }
 
@@ -549,19 +585,21 @@ class BoxViewModel @JvmOverloads constructor(
                     replayingSession = null
                     raiseOutstandingConnection(id)
                 }
-                // The harness echoing a prompt is the proof it arrived, so the queued copy the UI
-                // was showing in its place can go. One echo clears one copy, so the same message
-                // sent twice stays visible twice.
-                if (event is AgentEvent.UserMessage) {
+                // The queued copy the UI was drawing goes when the harness echoes the turn it
+                // stands for, by name.
+                //
+                // It used to go on a text match against the echo, with an index and a session
+                // guess, and that heuristic existed only because a turn had no identity. It could
+                // not tell the same message sent twice apart — its own comment said so — and a
+                // replayed log could clear a live queued message with a line from last week.
+                //
+                // Still the *echo*, not `turn_accepted`: this is about what is on screen, and a
+                // turn the harness has read is no longer waiting to be handed over. Whether the
+                // model actually got it is a different question, tracked in the backend, where the
+                // answer can outlive this screen.
+                if (event is AgentEvent.UserMessage && event.turnId != null) {
                     mutableUiState.update { state ->
-                        val index = state.queued.indexOfFirst {
-                            it.text == event.text && (it.sessionId == null || it.sessionId == id)
-                        }
-                        if (index < 0) {
-                            state
-                        } else {
-                            state.copy(queued = state.queued.filterIndexed { at, _ -> at != index })
-                        }
+                        state.copy(queued = state.queued.filterNot { it.turnId == event.turnId })
                     }
                 }
                 val transcript = builder.build()
@@ -665,9 +703,18 @@ class BoxViewModel @JvmOverloads constructor(
         // for certainty here would mean waiting for the guest, and the guest answers at exactly the
         // moment the harness starts taking work, which is the race this exists to lose safely.
         val held = state.signInWanted
+        // Minted here, before anything is drawn or sent, so the copy on screen and the turn the
+        // model is given have the same name. Everything downstream carries it: see [newTurnId].
+        val turn = newTurnId()
         mutableUiState.update {
             it.copy(
-                queued = it.queued + QueuedPrompt(sessionId, trimmed, heldForSignIn = held, attachments = attachments),
+                queued = it.queued + QueuedPrompt(
+                    sessionId,
+                    trimmed,
+                    heldForSignIn = held,
+                    attachments = attachments,
+                    turnId = turn,
+                ),
                 // Cleared here rather than after the send lands: they are on their way with this
                 // turn, and a second tap must not send them twice. They ride on the queued copy
                 // rather than staying on the composer, which is what lets a turn held for a sign-in
@@ -686,9 +733,9 @@ class BoxViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             if (sessionId == null) {
                 val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@launch
-                startSession(harness.id, trimmed, attachments)
+                beginSession(harness.id, trimmed, attachments, turn)
             } else {
-                agents.send(sessionId, trimmed, attachments)
+                agents.send(sessionId, trimmed, attachments, turn)
             }
         }
     }
@@ -783,9 +830,9 @@ class BoxViewModel @JvmOverloads constructor(
                 // message was typed, possibly minutes and a sign-in ago.
                 if (sessionId == null) {
                     val harness = mutableUiState.value.harnesses.firstOrNull() ?: return@forEach
-                    started = beginSession(harness.id, prompt.text, prompt.attachments)
+                    started = beginSession(harness.id, prompt.text, prompt.attachments, prompt.turnId)
                 } else {
-                    agents.send(sessionId, prompt.text, prompt.attachments)
+                    agents.send(sessionId, prompt.text, prompt.attachments, prompt.turnId)
                 }
             }
         }
@@ -831,9 +878,10 @@ class BoxViewModel @JvmOverloads constructor(
         harnessId: String,
         prompt: String? = null,
         attachments: List<Attachment> = emptyList(),
+        turnId: String = newTurnId(),
     ): String? {
         mutableUiState.update { it.copy(startingSession = true) }
-        val id = runCatching { agents.startSession(harnessId, prompt, attachments) }
+        val id = runCatching { agents.startSession(harnessId, prompt, attachments, turnId) }
             .onFailure { error -> showNotice(error.message ?: "Box could not start that task.") }
             .getOrNull()
         mutableUiState.update { state ->

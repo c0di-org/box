@@ -11,11 +11,13 @@ import android.view.Surface
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import kotlin.coroutines.coroutineContext
 
 /**
  * The agent's screen, on a Surface.
@@ -70,13 +72,49 @@ class VncDesktop(
             // window drag all arrive, and each of those is a resize of a surface already here.
             surfaces[surface] = Attached(GuestScreen(widthPx, heightPx), preview)
             publishWantedScreen()
-            if (pump != null) {
+            if (pump?.isActive == true) {
                 // Already streaming; a view was resized, recreated, or newly opened. Repaint into
                 // it rather than reconnecting, which would cost a full framebuffer resend.
                 connection?.let { redraw(it) }
                 return
             }
+            // `isActive`, not `!= null`. The test used to be "is there a pump", and a pump whose
+            // stream had already died passed it: `connection` was null so the repaint above was
+            // skipped, and this method returned having done nothing at all. Nothing relaunched
+            // `stream`, and the field was only ever cleared by `detach` once the *last* surface had
+            // gone — which is why backing all the way out and coming back in was the one thing that
+            // brought the picture back. The comment above was right about the resize it was written
+            // for and wrong about the dead stream it also caught.
+            startStream()
         }
+    }
+
+    /**
+     * Opens the stream again after it has ended, for a desktop somebody is still looking at.
+     *
+     * A stream that dies takes the picture with it and there is no way back into it from the pane
+     * — no retry, no reconnect. This is the way back. Deliberately something the user asks for
+     * rather than a timer: the failures seen so far are not transient, and a client reconnecting
+     * to a guest that has stopped serving frames would spend the battery to redraw the same black.
+     */
+    override suspend fun reconnect() {
+        synchronized(lock) {
+            // Nothing to draw into, or already drawing. Both make this a no-op rather than a
+            // second connection.
+            if (surfaces.isEmpty() || pump?.isActive == true) return
+            startStream()
+        }
+    }
+
+    /**
+     * Starts the pump. Only ever called with [lock] held, and that is what makes it safe.
+     *
+     * [stream]'s own `finally` clears `pump` under this same lock, so a stream that fails before
+     * the assignment below has run cannot clear a field that has not been set yet — it blocks
+     * until this returns. Assigning outside the lock would leave a completed job in `pump` with
+     * nothing to clear it, which is the original bug wearing a different hat.
+     */
+    private fun startStream() {
         desktopState.value = DesktopState.Starting
         pump = scope.launch(Dispatchers.IO) { stream() }
     }
@@ -137,7 +175,7 @@ class VncDesktop(
 
     // ---- the stream --------------------------------------------------------
 
-    private fun stream() {
+    private suspend fun stream() {
         val socket = LocalSocket()
         try {
             // FILESYSTEM, not the abstract namespace: an abstract socket is reachable by any
@@ -153,7 +191,11 @@ class VncDesktop(
 
             // The first request is non-incremental: there is no previous frame to be a delta from.
             rfb.requestUpdate(incremental = false)
-            while (!Thread.currentThread().isInterrupted) {
+            // The coroutine's own liveness, not the thread's. `cancel` does not interrupt a
+            // thread parked in a blocking read, so a pump cancelled by `detach` used to run on
+            // until the socket happened to fail — painting frames nobody was looking at, and
+            // outliving the surfaces it was started for.
+            while (coroutineContext.isActive) {
                 val damage = rfb.pump()
                 if (damage != null) {
                     if (bitmapMatches(rfb)) {
@@ -183,6 +225,14 @@ class VncDesktop(
             synchronized(lock) {
                 connection = null
                 bitmap = null
+                // Cleared here, not only in `detach`. This is the field `attach` and `reconnect`
+                // test to decide whether a stream is running, and leaving a finished job in it
+                // said "yes" to both of them forever.
+                //
+                // Guarded on identity because a `detach` that has already cancelled this job may
+                // have started nothing, while a `reconnect` racing it may have started a *new*
+                // pump: this coroutine may only retire its own.
+                if (pump === coroutineContext[Job]) pump = null
             }
         }
     }

@@ -9,6 +9,7 @@ import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
 import dev.localagent.workstation.agent.CredentialAsk
+import dev.localagent.workstation.agent.newTurnId
 import dev.localagent.workstation.agent.ConnectService
 import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
@@ -118,6 +119,14 @@ data class QueuedPrompt(
     val text: String,
     val heldForSignIn: Boolean = false,
     val attachments: List<Attachment> = emptyList(),
+    /**
+     * The turn this copy stands for, minted before it was sent.
+     *
+     * What it replaces: the copy used to be cleared by matching the harness's echo against the
+     * *text*, which cannot tell one message from the same message sent twice — its own comment
+     * conceded as much — and which a replayed log could satisfy with a line from last week.
+     */
+    val turnId: String = newTurnId(),
 )
 
 /**

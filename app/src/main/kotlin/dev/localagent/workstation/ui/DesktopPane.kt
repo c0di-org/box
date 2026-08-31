@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -152,6 +153,11 @@ internal fun DesktopSurface(
                 title = "No picture",
                 body = snapshot.message,
                 busy = false,
+                // The one thing a failed desktop was missing. Without it the pane states a fact
+                // and offers nothing to do about it, and the only route back to a picture is to
+                // leave the computer entirely and come back — which works by accident, because it
+                // happens to drop the last surface. See [DesktopTransport.reconnect].
+                action = "Try again" to { scope.launch { transport.reconnect() } },
             )
 
             is DesktopState.Live -> Unit
@@ -191,7 +197,12 @@ private fun TouchCursor(at: Offset) {
 }
 
 @Composable
-private fun DesktopPlaceholder(title: String, body: String, busy: Boolean) {
+private fun DesktopPlaceholder(
+    title: String,
+    body: String,
+    busy: Boolean,
+    action: Pair<String, () -> Unit>? = null,
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -215,5 +226,9 @@ private fun DesktopPlaceholder(title: String, body: String, busy: Boolean) {
             color = CodeColors.muted,
             textAlign = TextAlign.Center,
         )
+        if (action != null) {
+            Spacer(Modifier.height(14.dp))
+            OutlinedButton(onClick = action.second) { Text(action.first) }
+        }
     }
 }

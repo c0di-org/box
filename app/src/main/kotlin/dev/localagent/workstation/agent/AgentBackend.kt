@@ -11,6 +11,22 @@ import kotlinx.coroutines.flow.StateFlow
  * folds [AgentEvent]s. Implementations live behind the runtime boundary; [FakeAgentBackend]
  * satisfies it entirely in-process so the whole UI can be built and demoed without a VM.
  */
+/**
+ * A name for one turn, unique for as long as anything can still be said about it.
+ *
+ * Minted by whoever is about to send the turn, and carried the whole way: onto the queued copy the
+ * UI draws, into the `prompt` command, into the harness's echo of it, and back in the
+ * `turn_accepted` that says the model has it. Before this a turn had no identity at all, and
+ * everything that needed one guessed — the UI matched echoes by their text, and conceded in a
+ * comment that the same message sent twice stayed visible twice.
+ *
+ * Time-seeded rather than a bare counter so that ids from an earlier app process cannot collide
+ * with this one's, which matters because a harness outlives the UI that started it.
+ */
+fun newTurnId(): String = "t-" + turnCounter.incrementAndGet().toString(36)
+
+private val turnCounter = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+
 interface AgentBackend {
     /** Harnesses installed in the guest. Empty is a legitimate first-run state. */
     val harnesses: StateFlow<List<HarnessDescriptor>>
@@ -66,6 +82,7 @@ interface AgentBackend {
         harnessId: String,
         prompt: String?,
         attachments: List<Attachment> = emptyList(),
+        turnId: String = newTurnId(),
     ): String
 
     /**
@@ -74,8 +91,19 @@ interface AgentBackend {
      * [attachments] are already in the box by the time this is called — they are files in the
      * shared folder, not bytes to be carried here — so this only has to name them. A backend that
      * ignores them still delivers the text, which is the whole reason they are a field.
+     *
+     * Returns nothing, and cannot: everything below this is `oneway`, and a receipt invented on
+     * this side of the boundary would be the same lie the harness's echo used to tell. Delivery
+     * comes back the other way, as `turn_accepted` against [turnId], from the component that did
+     * the work. The caller mints the id so that what it drew on screen and what the model was
+     * given have the same name — see [newTurnId].
      */
-    suspend fun send(sessionId: String, text: String, attachments: List<Attachment> = emptyList())
+    suspend fun send(
+        sessionId: String,
+        text: String,
+        attachments: List<Attachment> = emptyList(),
+        turnId: String = newTurnId(),
+    )
 
     /**
      * Hands a harness the secret it asked for in [AgentEvent.AgentError.credential].
