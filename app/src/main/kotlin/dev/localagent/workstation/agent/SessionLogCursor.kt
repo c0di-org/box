@@ -42,17 +42,63 @@ internal class SessionLogCursor {
     }
 
     /**
+     * Bytes of the log that a chunk starting at [offset] has left behind, or zero.
+     *
+     * `offset > consumed` is the one arithmetic fact that separates a chunk which went missing
+     * from one that merely overlaps what has been read, and it must be asked *before* [accept] —
+     * the bytes are on disk (the runtime service appends before it announces), so a gap is
+     * recoverable by [readFile] and only by [readFile].
+     *
+     * A chunk can go missing: `record.chunks` is a buffered flow whose live emission is a
+     * `tryEmit` that returns false on a full buffer. That branch exists because the code knows it
+     * can happen.
+     */
+    fun gapBefore(offset: Long): Long = (offset - consumed).coerceAtLeast(0L)
+
+    /**
      * A live chunk that begins at [offset] in the log.
      *
      * Chunks wholly behind the watermark were in the file already and are dropped. A chunk that
      * straddles it — the file was read part-way through this write — contributes only its tail.
+     *
+     * A chunk that begins *ahead* of the watermark is refused rather than guessed at: see
+     * [gapBefore]. This used to be `coerceAtLeast(0)`, which turned the gap into a zero skip and
+     * then wrote `consumed = end` — throwing away the signal and moving the watermark past bytes
+     * nobody had read, so the later re-read that could have recovered them skipped them too. And
+     * because [drain] holds a trailing partial line in `pending`, a chunk dropped mid-line welded
+     * its truncated head onto the next survivor's first fragment: a spliced string that either
+     * vanished at the parser or, worse, parsed — a transcript line nobody emitted.
+     *
+     * Refusing costs nothing: the watermark does not move, so the next chunk reports the same gap
+     * and the reader recovers from the file.
      */
     fun accept(offset: Long, bytes: ByteArray): List<String> {
         val end = offset + bytes.size
         if (end <= consumed) return emptyList()
-        val skip = (consumed - offset).coerceAtLeast(0L).toInt()
+        if (offset > consumed) return emptyList()
+        val skip = (consumed - offset).toInt()
         consumed = end
         return drain(bytes.copyOfRange(skip, bytes.size))
+    }
+
+    /**
+     * Give up on bytes this reader will never see, and carry on from [offset].
+     *
+     * For a reader with no way back to them, as opposed to one that can recover them with
+     * [readFile]. `readStatus` is the one: it is handed every chunk straight from the binder
+     * callback rather than through the buffered flow, so the only gap it can ever see is the jump
+     * at a reattachment — the log already holds a conversation and the first live chunk lands far
+     * past zero. There is nothing behind that worth reading for a *status*, and no log path there
+     * to read it from.
+     *
+     * Explicit, and named for what it costs, because that is the whole point of [accept] refusing
+     * to guess: skipping bytes and recovering them are different things, and `coerceAtLeast(0)`
+     * made them look like the same thing. `pending` is dropped with them — the partial line it
+     * holds ends where the missing bytes begin, so keeping it would weld it to whatever comes next.
+     */
+    fun resyncTo(offset: Long) {
+        pending.reset()
+        consumed = offset
     }
 
     /** Splits on newlines, holding back a trailing partial line until the rest of it arrives. */
