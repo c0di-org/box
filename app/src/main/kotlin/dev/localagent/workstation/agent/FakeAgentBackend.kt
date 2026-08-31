@@ -176,6 +176,12 @@ class FakeAgentBackend(
         scripts[sessionId] = scope.launch { runGenericScript(sessionId, text) }
     }
 
+    override suspend fun provideCredential(sessionId: String, credentialId: String, value: String) {
+        // The gallery has no guest to write a file in. Answering as the guest would is enough to
+        // exercise the sheet closing on a receipt rather than on the send.
+        emit(AgentEvent.CredentialAccepted(next(), sessionId, stamp(), credentialId))
+    }
+
     override suspend fun resolvePermission(
         sessionId: String,
         requestId: String,

@@ -106,6 +106,9 @@ fun BoxApp(
     onTour: () -> Unit = {},
     onShowSignIn: () -> Unit = {},
     onDismissSignIn: () -> Unit = {},
+    onShowPasteKey: () -> Unit = {},
+    onSubmitCredential: (String) -> Unit = {},
+    onDismissPasteKey: () -> Unit = {},
     onBeginSignIn: () -> Unit = {},
     onOpenSignInUrl: (String) -> Unit = {},
     onSubmitSignInCode: (String) -> Unit = {},
@@ -254,6 +257,7 @@ fun BoxApp(
                     // collide, so the banner is the only place it can be said at all.
                     showBoxState = layout == BoxLayout.Single,
                     onSignIn = onShowSignIn,
+                    onPasteKey = onShowPasteKey,
                     onConnectGitHub = onResumeConnection,
                     onDeclineConnection = onDeclineConnection,
                     onSetPermissionMode = onSetPermissionMode,
@@ -364,6 +368,16 @@ fun BoxApp(
             onSubmitCode = onSubmitSignInCode,
             onCancel = onCancelSignIn,
             onDismiss = onDismissSignIn,
+        )
+    }
+
+    // Raised only once somebody taps the card. An ask can arrive for a task nobody is looking at,
+    // and a sheet appearing over whatever they were doing would be Box interrupting them about it.
+    state.credentialRequest?.takeIf { it.visible }?.let { request ->
+        PasteKeySheet(
+            request = request,
+            onSubmit = onSubmitCredential,
+            onDismiss = onDismissPasteKey,
         )
     }
 

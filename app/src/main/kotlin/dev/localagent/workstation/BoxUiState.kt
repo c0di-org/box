@@ -8,6 +8,7 @@ import dev.localagent.workstation.agent.AgentActivity
 import dev.localagent.workstation.agent.AgentModel
 import dev.localagent.workstation.agent.AgentPermissionMode
 import dev.localagent.workstation.agent.Attachment
+import dev.localagent.workstation.agent.CredentialAsk
 import dev.localagent.workstation.agent.ConnectService
 import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAuth
@@ -98,6 +99,20 @@ data class UiNotice(val id: Long, val message: String)
  * it was typed into, and they are cleared from the composer as soon as the message is queued so a
  * second tap cannot send them twice. This is the only copy.
  */
+/**
+ * A harness waiting on a secret, and whether Box is showing the field for it.
+ *
+ * [saving] is set when the value has been handed over and cleared by
+ * [AgentEvent.CredentialAccepted] — the guest's own word that it wrote the file. Not by the send:
+ * handing bytes to a `oneway` write says nothing about what happened at the other end.
+ */
+data class CredentialRequest(
+    val sessionId: String,
+    val ask: CredentialAsk,
+    val visible: Boolean = false,
+    val saving: Boolean = false,
+)
+
 data class QueuedPrompt(
     val sessionId: String?,
     val text: String,
@@ -205,6 +220,19 @@ data class BoxUiState(
     val signInVisible: Boolean = false,
     /** The hint that survives a restart. See [SignInHistory]. */
     val signedInBefore: Boolean = false,
+
+    /**
+     * A secret a harness has stopped for want of, and the task that is waiting on it.
+     *
+     * Held on the box rather than inside the card, for the same reason [connectRequest] is: the
+     * ask outlives the row that raised it. Somebody may answer from the card, or from the sheet
+     * after scrolling away and back, and the value has to reach the session that asked wherever it
+     * was given.
+     *
+     * **The value itself is never held here.** It lives in the sheet's own field until it is sent,
+     * and this state is only ever the question.
+     */
+    val credentialRequest: CredentialRequest? = null,
 
     // ---- GitHub ----
     val github: GitHubAuth.State = GitHubAuth.State.Unknown,

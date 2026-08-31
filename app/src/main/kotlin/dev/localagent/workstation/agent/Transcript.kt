@@ -149,6 +149,8 @@ sealed interface TranscriptItem {
         val message: String,
         val detail: String?,
         val recoverable: Boolean,
+        /** A secret the agent is stopped for want of. See [CredentialAsk]. */
+        val credential: CredentialAsk? = null,
     ) : TranscriptItem
 
     data class Ended(
@@ -390,6 +392,13 @@ class TranscriptBuilder(
             /** A marker about this reading of the log, not a thing that happened in it. */
             is AgentEvent.CaughtUp -> Unit
 
+            /**
+             * Nothing to draw. The card that asked is the thing that changes: the agent's next
+             * line is what says the key worked, and a replayed transcript should not offer a
+             * field for a secret that was given a week ago.
+             */
+            is AgentEvent.CredentialAccepted -> Unit
+
             is AgentEvent.AgentError ->
                 put(
                     TranscriptItem.Error(
@@ -398,6 +407,7 @@ class TranscriptBuilder(
                         message = event.message,
                         detail = event.detail,
                         recoverable = event.recoverable,
+                        credential = event.credential,
                     ),
                 )
         }

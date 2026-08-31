@@ -18,8 +18,9 @@
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, readFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
+import { dirname } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { createInterface } from 'node:readline'
 import {
@@ -40,11 +41,24 @@ const API_KEY_FILE = process.env.BOX_DEEPSEEK_API_KEY_FILE
 const ATTACHMENT_WAIT_MS = 10_000
 const ATTACHMENT_POLL_MS = 100
 
+/** The name Box asks for this secret by. One harness, one secret, for now. */
+const CREDENTIAL = 'deepseek-api-key'
+/** Thrown when the only thing missing is the key, so a turn can be held rather than failed. */
+const NEEDS_KEY = 'BOX_NEEDS_CREDENTIAL'
+
 let permissionMode = 'default'
 let acp = null
 let promptChain = Promise.resolve()
 let messageCounter = 0
 const pendingPermissions = new Map()
+
+/**
+ * The turn that could not run for want of a key.
+ *
+ * Held rather than failed, because "then send the task again" is a step the machine can take
+ * itself, and because the alternative is asking someone to retype a message they already sent.
+ */
+let heldForCredential = null
 
 function emit(event) {
   process.stdout.write(`${JSON.stringify({ at: Date.now(), ...event })}\n`)
@@ -135,10 +149,13 @@ async function startAcp() {
 
   const apiKey = await readApiKey()
   if (!apiKey) {
-    throw new Error(
-      `DeepSeek is not configured. Put a DeepSeek API key in ${API_KEY_FILE} `
-      + 'from the Box terminal, then send the task again.',
-    )
+    // Tagged rather than described. The old message named a guest filesystem path to somebody
+    // holding a phone, and told them to use a terminal they had no way to type into -- so it was
+    // accurate and useless. What Box needs to know is *which* secret is missing, so it can ask for
+    // it; what to do about it is the app's to say, in its own words.
+    const error = new Error('DeepSeek needs an API key before it can start a task.')
+    error.code = NEEDS_KEY
+    throw error
   }
 
   await mkdir(DSH_HOME, { recursive: true })
@@ -211,7 +228,7 @@ async function startAcp() {
   return acp
 }
 
-async function runPrompt(command) {
+async function runPrompt(command, { echo = true } = {}) {
   let text
   try {
     text = await promptText(command)
@@ -225,11 +242,15 @@ async function runPrompt(command) {
     return
   }
 
-  emit({
-    type: 'user_message',
-    text: command.text ?? '',
-    attachments: Array.isArray(command.attachments) ? command.attachments : [],
-  })
+  // Not on a retry: the turn is the same one, already in the transcript. Echoing it again would
+  // draw the user saying it twice because Box asked them for a key in between.
+  if (echo) {
+    emit({
+      type: 'user_message',
+      text: command.text ?? '',
+      attachments: Array.isArray(command.attachments) ? command.attachments : [],
+    })
+  }
   emit({ type: 'activity', activity: { kind: 'thinking', label: 'DeepSeek' } })
 
   try {
@@ -242,6 +263,24 @@ async function runPrompt(command) {
       state.exited,
     ])
   } catch (error) {
+    if (error?.code === NEEDS_KEY) {
+      heldForCredential = command
+      // `recoverable: false` because the one action the card offers otherwise is Reconnect, and
+      // nothing is wrong with the connection -- retrying would fail identically. The credential
+      // block is what the card offers instead.
+      emit({
+        type: 'error',
+        message: 'DeepSeek needs an API key.',
+        detail: 'Paste one here and this task will carry on where it left off.',
+        recoverable: false,
+        credential: {
+          id: CREDENTIAL,
+          label: 'DeepSeek API key',
+          help: 'Create one in your DeepSeek account, then paste it here.',
+        },
+      })
+      return
+    }
     emit({
       type: 'error',
       message: 'DeepSeek Harness could not complete this turn.',
@@ -251,6 +290,59 @@ async function runPrompt(command) {
     diagnostic(errorMessage(error))
   } finally {
     emit({ type: 'activity', activity: { kind: 'idle' } })
+  }
+}
+
+/**
+ * Writes the key where this harness already looks for it, and picks the held turn back up.
+ *
+ * The value never leaves this function: it is not echoed, not logged, and not put in the event
+ * stream. That is the same rule the Claude harness states over `auth_code` -- the one command
+ * whose payload is credential material -- and it is the reason a key must never be pasted into
+ * the ordinary composer, where `user_message` would write it to the session log in the clear and
+ * draw it in the transcript forever after.
+ *
+ * `0600`, and the directory `0700`, matching what is already in /workspace/.config/box.
+ */
+async function saveApiKey(value) {
+  const key = typeof value === 'string' ? value.trim() : ''
+  if (!key) {
+    // An empty key and no key are the same state to `readApiKey`, so nothing is written and the
+    // ask stands. A half-finished paste cannot leave a broken intermediate behind.
+    emit({
+      type: 'error',
+      message: 'That looked empty.',
+      detail: 'Paste the whole key, including any prefix.',
+      recoverable: false,
+      credential: { id: CREDENTIAL, label: 'DeepSeek API key' },
+    })
+    return
+  }
+  try {
+    await mkdir(dirname(API_KEY_FILE), { recursive: true, mode: 0o700 })
+    await writeFile(API_KEY_FILE, `${key}\n`, { mode: 0o600 })
+    // Again explicitly: `writeFile`'s mode applies only when it creates the file, and this one may
+    // already exist from an earlier attempt.
+    await chmod(API_KEY_FILE, 0o600)
+  } catch (error) {
+    emit({
+      type: 'error',
+      message: 'Box could not save the key.',
+      detail: errorMessage(error),
+      recoverable: false,
+      credential: { id: CREDENTIAL, label: 'DeepSeek API key' },
+    })
+    return
+  }
+  emit({ type: 'credential_saved', credential: CREDENTIAL })
+  const held = heldForCredential
+  heldForCredential = null
+  // "Then send the task again" was a step the machine could take itself.
+  if (held) {
+    promptChain = promptChain.then(
+      () => runPrompt(held, { echo: false }),
+      () => runPrompt(held, { echo: false }),
+    )
   }
 }
 
@@ -285,6 +377,10 @@ async function handle(command) {
       break
     case 'permission_mode':
       permissionMode = command.mode ?? 'default'
+      break
+    case 'api_key':
+      // Never echoed, never logged. See `saveApiKey`.
+      await saveApiKey(command.value)
       break
     // Claude-specific model switching, viewport hints, Box connect results and
     // targeted subagent interruption are deliberately ignored in this ACP-backed

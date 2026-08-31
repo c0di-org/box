@@ -180,7 +180,12 @@ internal object HarnessWire {
                 message = json.optString("message", "The agent reported an error."),
                 detail = json.optStringOrNull("detail"),
                 recoverable = json.optBoolean("recoverable", true),
+                credential = json.optJSONObject("credential")?.let(::credentialAsk),
             )
+
+            "credential_saved" -> json.optStringOrNull("credential")?.let {
+                AgentEvent.CredentialAccepted(eventId, session, at, it)
+            }
 
             else -> null
         }
@@ -477,6 +482,16 @@ internal object HarnessWire {
             }
         }
         append('"')
+    }
+
+    /** A harness naming a secret it needs. An ask with no id is not one; it is noise. */
+    private fun credentialAsk(json: JSONObject): CredentialAsk? {
+        val id = json.optStringOrNull("id") ?: return null
+        return CredentialAsk(
+            id = id,
+            label = json.optStringOrNull("label") ?: id,
+            help = json.optStringOrNull("help"),
+        )
     }
 
     // ---- json helpers ------------------------------------------------------
