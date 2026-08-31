@@ -163,8 +163,8 @@ interface AgentBackend {
     suspend fun setViewport(viewport: AgentViewport)
     fun events(sessionId: String): Flow<AgentEvent>          // replay, then live
     fun connection(sessionId: String): StateFlow<SessionConnection>
-    suspend fun startSession(harnessId: String, prompt: String?, attachments: List<Attachment>): String
-    suspend fun send(sessionId: String, text: String, attachments: List<Attachment>)
+    suspend fun startSession(harnessId: String, prompt: String?, attachments: List<Attachment>, turnId: String): String
+    suspend fun send(sessionId: String, text: String, attachments: List<Attachment>, turnId: String)
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
     suspend fun resolveConnect(sessionId: String, requestId: String, outcome: ConnectOutcome)
     suspend fun interrupt(sessionId: String)
@@ -177,6 +177,12 @@ Two requirements that are easy to miss:
 
 - `events()` must replay history before live events, and collecting twice must produce the same
   prefix. The UI relies on it to restore a transcript after process death.
+- `send()` returns nothing, and **must not** be changed to return a receipt. Everything below it
+  is `oneway`, so any value invented on this side would describe the binder rather than the model —
+  which is precisely the mistake that lost a turn. Delivery comes back the other way, as
+  `turn_accepted` against the `turnId` the caller minted, from the component that did the work. The
+  caller mints it so that the copy drawn on screen and the turn given to the model have the same
+  name; a backend is free to ignore it, and one that does simply never has a turn to redeliver.
 - `connection()` is **orthogonal** to whether the agent is busy. A finished session can be
   disconnected and a running one can survive a reconnect. `Disconnected` is a normal state, not an
   error: the VM takes ~90s to boot and Android reclaims it whenever it likes.

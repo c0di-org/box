@@ -306,12 +306,28 @@ function handleCommand(line) {
     case 'prompt': {
       const text = String(command.text ?? '');
       const attachments = readAttachments(command.attachments);
+      // The turn's own name, minted by whoever typed it and carried the whole way.
+      //
+      // Absent from a Box that predates this, in which case nothing below acknowledges anything and
+      // the app is told so by `session_started` rather than left waiting for an ack that is never
+      // coming.
+      const turnId = command.turnId ? String(command.turnId) : null;
       // Echoed into the log so the transcript has one source of truth in one order. The app could
       // record what the user typed itself, but then a replay would have to interleave two logs and
       // guess where each turn belonged. The attachments ride in that echo for the same reason: the
       // thumbnail on a restored transcript is drawn from this line, not from anything the app kept.
-      emit(attachments.length > 0 ? { type: 'user_message', text, attachments } : { type: 'user_message', text });
-      pushPrompt({ text, attachments });
+      //
+      // This echo is *not* a receipt and must never be read as one. It says the harness read the
+      // line off stdin; `turn_accepted` says the model's queue took it, and between the two is a
+      // process that can die. The app used to treat this as delivery, which is how a turn came to
+      // be shown as sent, permanently, having reached nobody.
+      emit({
+        type: 'user_message',
+        text,
+        ...(attachments.length > 0 ? { attachments } : {}),
+        ...(turnId ? { turnId } : {}),
+      });
+      pushPrompt({ text, attachments, turnId });
       // The turn has begun as far as anyone watching is concerned.
       //
       // The SDK narrates the *session* once, at `init`, and then says nothing about a turn
@@ -1451,7 +1467,7 @@ async function* prompts() {
   while (true) {
     const turn = await nextPrompt();
     if (turn === null) return;
-    const { text, attachments = [] } = turn;
+    const { text, attachments = [], turnId = null } = turn;
     // Blocking here is the point: this generator *is* the model's queue, so waiting for the file
     // holds the turn rather than the whole harness, and everything else — a decision, an
     // interrupt, a viewport — keeps being read off stdin while it waits.
@@ -1462,6 +1478,17 @@ async function* prompts() {
     // session that never changes shape mentions it exactly once.
     const note = viewport && JSON.stringify(viewport) !== viewportTold ? viewportNote(viewport) : null;
     if (note) viewportTold = JSON.stringify(viewport);
+    // The receipt, and this is the only place entitled to write it.
+    //
+    // Reaching this line means the SDK asked this generator for its next value and everything the
+    // turn was waiting on is done -- so the turn is leaving the harness's own queue for the
+    // model's. Emitted before the `yield` rather than after, because the `yield` does not return
+    // until the *next* turn is wanted, which may be an hour of work away.
+    //
+    // What it is worth: the app holds a turn until it sees this, and hands it to the next harness
+    // process if that one dies first. Emitting it beside `pushPrompt` -- where the echo is -- would
+    // acknowledge a turn sitting in an in-memory array, which is exactly the claim that was wrong.
+    if (turnId) emit({ type: 'turn_accepted', turnId });
     yield {
       type: 'user',
       // The event log already carries the user's own words, emitted by `prompt` above; this is the
@@ -1796,7 +1823,11 @@ async function main() {
     process.exit(0);
   }
 
-  emit({ type: 'session_started', cwd, harness: 'claude-code' });
+  // `acknowledgesTurns` is a promise about the two lines above: that every turn carrying a
+  // `turnId` will be answered with `turn_accepted` once the model's queue has it. The app only
+  // redelivers a turn after a crash if it has heard this, so an older image is left behaving
+  // exactly as it did rather than accumulating turns nobody will ever acknowledge.
+  emit({ type: 'session_started', cwd, harness: 'claude-code', acknowledgesTurns: true });
 
   // The import is behind us; what is left is the CLI's own start-up, which is the longer half.
   // A second label is the only progress signal available for a wait with no output of its own.
