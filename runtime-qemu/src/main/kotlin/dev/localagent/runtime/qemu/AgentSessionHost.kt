@@ -53,7 +53,19 @@ internal class AgentSessionHost(
 
     private val handle = object : IAgentSession.Stub() {
         override fun write(data: ByteArray) {
-            val live = synchronized(lock) { session } ?: return
+            val live = synchronized(lock) { session } ?: run {
+                // The one trace these bytes will ever leave. `session` is assigned only after the
+                // suspending `openSession` returns, so this window is real, and what travels
+                // through here is a user's turn or a permission decision.
+                //
+                // The caller cannot be told: the AIDL write is `oneway`, so it returned long
+                // before this ran, and the `Log.e` below has the same problem. Box happens to be
+                // careful on the other side — `Record.outbox` exists for exactly this — but a host
+                // cannot rely on its caller, and when that assumption breaks there has to be
+                // something in the log to show that it did. The byte count, not the bytes.
+                Log.w(TAG, "Session $sessionId dropped a ${data.size}-byte write: no live session")
+                return
+            }
             scope.launch {
                 runCatching { live.write(data) }
                     .onFailure { Log.e(TAG, "Could not reach session $sessionId", it) }

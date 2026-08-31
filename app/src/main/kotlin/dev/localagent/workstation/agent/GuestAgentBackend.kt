@@ -355,12 +355,36 @@ class GuestAgentBackend(
         var ordinal = 0L
         val gate = Mutex()
         var replayed = false
+        var logFile: String? = null
         val held = mutableListOf<Pair<Long, ByteArray>>()
 
         suspend fun emitLines(lines: List<String>) {
             for (line in lines) {
                 HarnessWire.parse(line, context, ordinal++)?.let { send(it) }
             }
+        }
+
+        /**
+         * One live chunk, recovering first if anything was lost on the way here.
+         *
+         * A chunk can go missing — `record.chunks` is emitted with `tryEmit`, which returns false
+         * on a full buffer, and the drop was reasoned away with "the log replay will still carry
+         * it". It did not: the log is read once, at `replayed`, and after that the watermark moved
+         * only on live chunks. The gap was then coerced to zero and the watermark pushed past
+         * bytes nobody had read, so nothing could ever go back for them.
+         *
+         * This is what makes that comment true. The bytes are on disk before the callback fires —
+         * `AgentSessionHost.consume` appends and flushes, *then* notifies — so re-reading from the
+         * watermark recovers the lost chunk and this one together, in order, with the partial line
+         * held in the cursor still valid because the re-read starts exactly where it left off.
+         */
+        suspend fun applyChunk(logPath: String?, offset: Long, bytes: ByteArray) {
+            val missing = cursor.gapBefore(offset)
+            if (missing > 0 && logPath != null) {
+                Log.w(TAG, "session ${record.id}: $missing bytes never reached the reader; re-reading the log")
+                emitLines(cursor.readFile(File(logPath)))
+            }
+            emitLines(cursor.accept(offset, bytes))
         }
 
         val subscribed = CompletableDeferred<Unit>()
@@ -371,7 +395,7 @@ class GuestAgentBackend(
                     gate.withLock {
                         // Anything arriving before the log has been replayed is held, not applied:
                         // letting it through first would move the cursor past history not yet read.
-                        if (replayed) emitLines(cursor.accept(chunk.first, chunk.second))
+                        if (replayed) applyChunk(logFile, chunk.first, chunk.second)
                         else held += chunk
                     }
                 }
@@ -386,9 +410,13 @@ class GuestAgentBackend(
         // session finally attached the only thing left to show was whatever it said next. The
         // history was on disk the whole time, and the transcript said "Nothing yet".
         val log = record.logPath.await()
+        // Published for the live collector above, which starts before the path is known and needs
+        // it to recover a chunk that went missing. Written under the same lock that guards the
+        // cursor, so a chunk cannot read a half-assigned path.
         gate.withLock {
+            logFile = log
             emitLines(cursor.readFile(File(log)))
-            held.forEach { emitLines(cursor.accept(it.first, it.second)) }
+            held.forEach { applyChunk(log, it.first, it.second) }
             held.clear()
             replayed = true
             // Said once, inside the lock, so it lands between the last historical line and the
@@ -702,8 +730,14 @@ class GuestAgentBackend(
 
         override fun onData(offset: Long, chunk: ByteArray) {
             // tryEmit rather than emit: this is a binder thread and must never block `:computer`.
+            //
+            // The claim in this log line is now true, and was not before. A dropped chunk leaves a
+            // gap between the reader's watermark and the next chunk's offset, and `events()` sees
+            // it and re-reads the log from the watermark. Until that existed the gap was coerced
+            // to zero, the watermark was pushed past bytes nobody had read, and the next surviving
+            // fragment was welded onto the truncated line this one ended in the middle of.
             if (!record.chunks.tryEmit(offset to chunk)) {
-                Log.w(TAG, "dropped a live chunk; the log replay will still carry it")
+                Log.w(TAG, "dropped a live chunk at $offset; the reader will re-read the log for it")
             }
             readStatus(record, offset, chunk)
         }

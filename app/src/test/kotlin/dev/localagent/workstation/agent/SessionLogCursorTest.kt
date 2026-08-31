@@ -131,6 +131,68 @@ class SessionLogCursorTest {
     }
 
     @Test
+    fun `a chunk that never arrived is reported rather than coerced away`() {
+        val cursor = SessionLogCursor()
+        cursor.accept(0, "one\n".toByteArray())
+
+        // The next chunk starts four bytes further on than the reader has got to. Those four bytes
+        // are a chunk `tryEmit` dropped on a full buffer.
+        assertEquals(4L, cursor.gapBefore(offset = 8))
+        // An overlap is not a gap, and neither is a chunk that lands exactly on the watermark.
+        assertEquals(0L, cursor.gapBefore(offset = 4))
+        assertEquals(0L, cursor.gapBefore(offset = 0))
+    }
+
+    @Test
+    fun `a chunk ahead of the watermark does not move it`() {
+        val cursor = SessionLogCursor()
+        cursor.accept(0, "one\n".toByteArray())
+
+        // Refused, because consuming it would push the watermark past the missing bytes and make
+        // the loss permanent -- the later re-read would skip them too.
+        assertEquals(emptyList<String>(), cursor.accept(offset = 8, bytes = "three\n".toByteArray()))
+        assertEquals(4L, cursor.consumed)
+        // So the gap is still reported, and the next chunk recovers it rather than compounding it.
+        assertEquals(4L, cursor.gapBefore(offset = 8))
+    }
+
+    @Test
+    fun `a chunk dropped mid-line is recovered whole from the log, never spliced`() {
+        // The positive test #75 asked for, and the shape that made the old behaviour dangerous:
+        // the drop falls *inside* a line, so the truncated head was held in `pending` and welded
+        // onto the next survivor's first fragment. The result either vanished at the parser or --
+        // worse -- parsed, and became a transcript line nobody emitted.
+        val file = log("")
+        val cursor = SessionLogCursor()
+
+        // The writer appends and flushes before it announces, so every byte is on disk by the time
+        // the reader hears about it. That is what makes recovery possible at all.
+        val one = """{"type":"text","text":"first"}""" + "\n"
+        val two = """{"type":"text","text":"second"}""" + "\n"
+        val three = """{"type":"text","text":"third"}""" + "\n"
+        file.writeText(one + two + three)
+
+        val seen = mutableListOf<String>()
+        fun announce(offset: Long, bytes: ByteArray) {
+            // Exactly what `events()` does with a live chunk.
+            if (cursor.gapBefore(offset) > 0) seen += cursor.readFile(file)
+            seen += cursor.accept(offset, bytes)
+        }
+
+        // The first chunk is a whole line and half of the next.
+        val firstChunk = (one + two.take(12)).toByteArray()
+        announce(0, firstChunk)
+        // The middle chunk -- the rest of line two and the start of line three -- is dropped. It is
+        // never announced at all.
+        val dropped = (two.drop(12) + three.take(8)).toByteArray()
+        // The chunk after it arrives with an offset past everything that went missing.
+        announce((firstChunk.size + dropped.size).toLong(), three.drop(8).toByteArray())
+
+        // Every line, once, whole. Not a `second` welded to a `third`.
+        assertEquals(listOf(one, two, three).map { it.trimEnd('\n') }, seen)
+    }
+
+    @Test
     fun `a resumed session continues the log's numbering rather than starting over`() {
         // What went wrong on a real phone: the UI process was replaced, the session was re-opened
         // against the same log, and the new writer counted its bytes from zero while the file

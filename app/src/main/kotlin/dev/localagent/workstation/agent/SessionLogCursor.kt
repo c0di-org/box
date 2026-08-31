@@ -42,15 +42,41 @@ internal class SessionLogCursor {
     }
 
     /**
+     * Bytes of the log that a chunk starting at [offset] has left behind, or zero.
+     *
+     * `offset > consumed` is the one arithmetic fact that separates a chunk which went missing
+     * from one that merely overlaps what has been read, and it must be asked *before* [accept] —
+     * the bytes are on disk (the runtime service appends before it announces), so a gap is
+     * recoverable by [readFile] and only by [readFile].
+     *
+     * A chunk can go missing: `record.chunks` is a buffered flow whose live emission is a
+     * `tryEmit` that returns false on a full buffer. That branch exists because the code knows it
+     * can happen.
+     */
+    fun gapBefore(offset: Long): Long = (offset - consumed).coerceAtLeast(0L)
+
+    /**
      * A live chunk that begins at [offset] in the log.
      *
      * Chunks wholly behind the watermark were in the file already and are dropped. A chunk that
      * straddles it — the file was read part-way through this write — contributes only its tail.
+     *
+     * A chunk that begins *ahead* of the watermark is refused rather than guessed at: see
+     * [gapBefore]. This used to be `coerceAtLeast(0)`, which turned the gap into a zero skip and
+     * then wrote `consumed = end` — throwing away the signal and moving the watermark past bytes
+     * nobody had read, so the later re-read that could have recovered them skipped them too. And
+     * because [drain] holds a trailing partial line in `pending`, a chunk dropped mid-line welded
+     * its truncated head onto the next survivor's first fragment: a spliced string that either
+     * vanished at the parser or, worse, parsed — a transcript line nobody emitted.
+     *
+     * Refusing costs nothing: the watermark does not move, so the next chunk reports the same gap
+     * and the reader recovers from the file.
      */
     fun accept(offset: Long, bytes: ByteArray): List<String> {
         val end = offset + bytes.size
         if (end <= consumed) return emptyList()
-        val skip = (consumed - offset).coerceAtLeast(0L).toInt()
+        if (offset > consumed) return emptyList()
+        val skip = (consumed - offset).toInt()
         consumed = end
         return drain(bytes.copyOfRange(skip, bytes.size))
     }
