@@ -58,6 +58,17 @@ class SignInGateTest {
     }
 
     @Test
+    fun `a box that could not answer does not put a sign-in in front of a signed-in user`() {
+        // Force-quit Box and come back: a fresh process asks the guest once, and on a box that is
+        // Ready-but-not-yet-answering the ask fails. That is Unknown, not SignedOut — and Unknown
+        // must not raise the banner over a phone that has signed in before.
+        //
+        // See `SignInStatus.unanswered`, which is what turns a failed ask into this state.
+        assertFalse(state(GuestAuth.State.Unknown, signedInBefore = true).needsSignIn)
+        assertFalse(state(GuestAuth.State.Unknown, signedInBefore = true).signInWanted)
+    }
+
+    @Test
     fun `held messages are told apart from queued ones`() {
         // Queued means "already with the backend, waiting on the guest". Held means "deliberately
         // not handed over" — and only the held ones are the sign-in's to send.

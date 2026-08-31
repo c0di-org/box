@@ -48,11 +48,20 @@ class GuestAuth {
 
     private var live: IAgentSession? = null
 
-    /** Whether the guest already holds a usable credential. */
+    /**
+     * Whether the guest already holds a usable credential.
+     *
+     * Safe to call again, and meant to be: an ask that goes unanswered leaves the state
+     * [State.Unknown] rather than asserting a signed-out guest, so somebody has to come back. See
+     * [SignInStatus.unanswered] and [SignInStatus.retryAfterMillis].
+     */
     fun check(control: IRuntimeControl) {
         // `:computer` can reconnect at any time, including while the user is in their browser
         // holding a code. A sign-in already under way is the better answer than asking again.
         if (live != null) return
+        // What was known before the question, because an unanswered question must leave it
+        // standing. Read before `Checking` overwrites it.
+        val before = stateFlow.value
         stateFlow.value = State.Checking
         val output = StringBuilder()
         runCatching {
@@ -71,11 +80,24 @@ class GuestAuth {
                         // computer the check can take longer than the user's patience. Answering
                         // now would replace a live URL with "signed out" and strand them.
                         if (stateFlow.value != State.Checking) return
-                        stateFlow.value = readStatus(output.toString(), exitCode)
+                        val answer = SignInStatus.read(output.toString())
+                        if (answer == null) {
+                            // `error` is the app's own account of why the session could not run —
+                            // `AgentSessionHost` reports a session that never started as
+                            // `onClosed(-1, …)`. It is the difference between "the guest says no"
+                            // and "nobody asked the guest", and it used to be discarded here.
+                            Log.w(TAG, "auth status went unanswered (exit $exitCode): $error")
+                        }
+                        stateFlow.value = answer ?: SignInStatus.unanswered(before)
                     }
                 },
             )
-        }.onFailure { stateFlow.value = State.Failed("Could not reach the computer") }
+        }.onFailure {
+            // Not `Failed`: a binder that has gone away says nothing about a credential, and
+            // `Failed` raises the sign-in banner just as `SignedOut` does.
+            Log.w(TAG, "could not ask the computer about the credential", it)
+            stateFlow.value = SignInStatus.unanswered(before)
+        }
     }
 
     /**
@@ -191,25 +213,6 @@ class GuestAuth {
 
     private fun transcriptOf(diagnostics: StringBuilder) =
         diagnostics.toString().takeLast(MAX_TRANSCRIPT)
-
-    private fun readStatus(output: String, exitCode: Int): State {
-        if (exitCode != 0 && output.isBlank()) return State.SignedOut
-        val json = runCatching { JSONObject(output.trim()) }.getOrElse {
-            Log.w(TAG, "auth status was not JSON; treating as signed out")
-            return State.SignedOut
-        }
-        // Field names have moved between versions, so accept any of the shapes that mean "yes"
-        // and treat everything else as a signed-out state the user can act on.
-        val signedIn = json.optBoolean("loggedIn", false) ||
-            json.optBoolean("authenticated", false) ||
-            json.optString("status").equals("authenticated", ignoreCase = true)
-        return if (signedIn) State.SignedIn(accountOf(json)) else State.SignedOut
-    }
-
-    /** The email sits at the top level, but has been nested before; look in both. */
-    private fun accountOf(json: JSONObject): String? =
-        json.optString("email").ifBlank { null }
-            ?: json.optJSONObject("account")?.optString("email")?.ifBlank { null }
 
     private fun guestEnvironment() = android.os.Bundle().apply {
         // Claude Code writes its credential under HOME. Pinning it keeps that inside the guest's
