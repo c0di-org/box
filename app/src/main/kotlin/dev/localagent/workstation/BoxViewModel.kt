@@ -18,6 +18,7 @@ import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.localagent.runtime.api.FileEntry
@@ -1587,6 +1588,51 @@ class BoxViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Hand the person an APK the agent built, and let Android take it from there.
+     *
+     * Box does not install anything itself. It hands the file to the system installer, which shows
+     * its own screen naming the app and its permissions, and the person taps Install or does not.
+     * That screen is the consent, and it is a better one than anything Box could draw — so this
+     * method's whole job is to get a real file in front of it.
+     *
+     * The bytes come from the shared folder rather than over the runtime's file API, because that
+     * API hands back a String and an APK is not text — and because a Binder transaction cannot
+     * carry a file this size anyway. The folder is already mirrored to the phone as real files,
+     * which is why an installable must live there and why the harness refuses one that does not.
+     *
+     * A file that has not arrived yet is the ordinary case rather than an error: the copy out runs
+     * when the agent goes quiet, so an artifact offered mid-turn is a button that exists slightly
+     * before its file does. Saying so is the honest answer; failing would be a lie about the file.
+     */
+    fun installApk(artifact: Artifact.Install) {
+        val relative = artifact.guestPath.removePrefix(SharedFolder.IN_BOX).trimStart('/')
+        val file = File(SharedFolder.on(getApplication()), relative)
+        if (!file.isFile) {
+            showNotice("${artifact.name} is still coming out of the box. Try again in a moment.")
+            return
+        }
+        val uri = runCatching {
+            FileProvider.getUriForFile(
+                getApplication(),
+                "${getApplication<Application>().packageName}.files",
+                file,
+            )
+        }.getOrElse {
+            Log.w(TAG, "could not publish ${artifact.name} for install", it)
+            showNotice("Box could not hand that file to Android.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, APK_MIME)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { getApplication<Application>().startActivity(intent) }
+            .onFailure {
+                Log.w(TAG, "no installer handled ${artifact.name}", it)
+                showNotice("This phone has no installer that can open that APK.")
+            }
+    }
+
     fun noticeShown() {
         mutableUiState.update { it.copy(notice = null) }
     }
@@ -1597,6 +1643,9 @@ class BoxViewModel @JvmOverloads constructor(
 
     private companion object {
         const val TAG = "BoxViewModel"
+
+        /** What Android's installer answers to. */
+        const val APK_MIME = "application/vnd.android.package-archive"
 
         /** See [setOpenFaster]. Absent means true: saving an idle box is the older behaviour. */
         const val OPEN_FASTER_KEY = "open_faster"

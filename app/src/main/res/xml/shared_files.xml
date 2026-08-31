@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Exactly one directory: the shared folder, which is the one part of Box's storage the user is
+    already invited into. Everything else under filesDir is the VM's - disks, sockets, session logs,
+    the credential - and none of it is anyone else's business.
+-->
+<paths>
+    <files-path name="shared" path="shared/" />
+</paths>

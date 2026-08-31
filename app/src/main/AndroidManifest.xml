@@ -1,4 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        So the agent can hand over an APK it built and have Android offer to install it.
+
+        Box never installs anything itself: it passes the file to the system installer, which names
+        the app and its permissions on its own screen and takes the person's answer there. This
+        permission only buys the right to raise that screen.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!--
@@ -58,6 +67,25 @@
             that should have them. Box neither holds that permission nor needs it — other apps
             reach a file through the per-URI grant the user makes by picking it.
         -->
+        <!--
+            The shared folder, published for one purpose: handing a file to another app when the
+            person asked for it. That is how an APK the agent built reaches Android's installer,
+            which needs a readable content uri and will not take a path into this app's storage.
+
+            Not exported, and it never needs to be: every grant is a per-uri, read-only,
+            single-use one attached to an Intent this app sends. Nothing can ask this provider for
+            anything; it can only be handed something.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
+
         <provider
             android:name=".files.SharedFolderProvider"
             android:authorities="${applicationId}.documents"

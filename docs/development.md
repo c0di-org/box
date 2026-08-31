@@ -121,67 +121,96 @@ release is published.
 
 ## Releases
 
-`.github/workflows/release.yml` builds the app and publishes it. Push a tag and it goes:
+Box is distributed through **Library**, which signs it centrally. `.github/workflows/library-unsigned-apk.yml`
+builds a deliberately **unsigned** APK and uploads it as an artifact; Library takes that artifact,
+signs it, and publishes the GitHub release with a `provenance.json` beside it. There is no tag
+trigger and no signing secret in this repository — direct release signing was retired in `0026358`.
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+gh workflow run library-unsigned-apk.yml -f version=0.1.4
 ```
 
-Three things about it are deliberate.
+The version input becomes `versionName`; `versionCode` comes from the workflow run number, so it
+climbs on its own and a rebuild is always installable over the last one.
 
-**Only tags on main.** A tag is a pointer, not a promise — `git tag` on a side branch
-pushes just as happily — so the first job asks git whether the tagged commit is an
-ancestor of `origin/main` and stops the workflow if it is not.
+Three things about it are worth knowing.
 
-**The guest image is built in CI, not committed.** It is an input to the APK and it is
-gitignored, so the workflow builds it exactly the way you do, with
-`guest/build-container.sh`. That job runs on `ubuntu-24.04-arm` because the builder is a
-`linux/arm64` container: native there, and binfmt emulation on an x64 runner, which is the
-difference between minutes and the better part of an hour. The Arm runner images carry no
-Android SDK, which is why the APK is built in a second job on x64 and the image travels
-between them as a one-day artifact that the last step deletes outright.
+**The guest image is built in CI, not committed.** It is an input to the APK and it is gitignored,
+so the workflow builds it exactly the way you would, with `guest/build-container.sh`. That job runs
+on `ubuntu-24.04-arm` because the builder is a `linux/arm64` container: native there, against
+binfmt emulation on an x64 runner, which is the difference between minutes and the better part of
+an hour.
 
-**One release at a time.** Each APK is around 950 MB, because the Linux image is inside
-it. After publishing, the workflow deletes every other release. The *tags* stay: they cost
-nothing, and they are what makes an old release reproducible after its APK is gone.
+**The APK is over a gigabyte**, because the Linux image is inside it. The `library-guest-image`
+artifact is another gigabyte and expires the next day.
 
-### Signing
+**The catalog is polled, not pushed.** Library cuts a `catalog-*` release containing `catalog.json`
+a couple of minutes after yours; phones pick it up on their own schedule, which is slower. A
+release that has not appeared on a device yet is almost always this, and not a failure.
 
-With no secrets configured, the release APK is signed with the debug key, and the release
-notes say so. That is not a formality — the debug key is shared by every Android developer
-on earth, and an APK signed with it can never be upgraded in place by a properly signed
-one. It is there because an *unsigned* release APK cannot be installed at all, and a build
-nobody can put on a phone is not a delivery.
+### You cannot install a local build over a Library one
 
-To sign for real, set four repository secrets:
+Local builds are signed with the debug key. Library signs with its own. Android refuses an
+in-place upgrade across different signing certificates, and **the only way past it is an uninstall,
+which destroys `/workspace` — the agent's home, its credential, and every session log.** So this
+matters most in exactly the situation where you are tempted to rush: a device that is misbehaving
+and a fix you have built locally.
 
-| Secret | What it is |
-| --- | --- |
-| `RELEASE_KEYSTORE_BASE64` | the keystore file, base64-encoded |
-| `RELEASE_KEYSTORE_PASSWORD` | its store password |
-| `RELEASE_KEY_ALIAS` | the key inside it |
-| `RELEASE_KEY_PASSWORD` | that key's password |
+Check before building anything. `dumpsys` prints `Signature.hashCode()`, and the same number can
+be computed from a keystore's certificate:
 
 ```bash
-keytool -genkeypair -v -keystore box-release.jks -storetype PKCS12 \
-  -keyalg RSA -keysize 4096 -validity 10000 -alias box
-base64 -i box-release.jks | gh secret set RELEASE_KEYSTORE_BASE64
+adb shell dumpsys package dev.localagent.workstation.stock | grep signatures
+keytool -exportcert -keystore ~/.android/debug.keystore -alias androiddebugkey \
+  -storepass android -file /tmp/debug.der
+python3 -c "h=1
+for b in open('/tmp/debug.der','rb').read(): h=(31*h+(b-256 if b>127 else b))&0xFFFFFFFF
+print('%08x'%h)"
 ```
 
-Keep `box-release.jks` somewhere safe and out of the repository. Losing it means the app
-can never be updated in place again, only uninstalled and reinstalled.
+Two matching numbers mean your build can go on that phone. Two different ones mean it cannot, and
+finding that out here costs seconds instead of a gigabyte-sized install that fails.
 
-The same properties work locally, which is how to reproduce what CI builds:
+A Library-published APK carries the answer directly: `provenance.json` on the release has
+`signingCertSha256`, and two releases sharing it upgrade in place.
+
+### Guest changes cost a release
+
+Anything under `guest/` — the harness, `agentd`, `build-image.sh`, the packages list — is only real
+once an image is built and shipped. There is no fast path: the slim-APK trick under
+"Starting the VM on a device" strips the payloads, which is precisely what a guest change is.
+
+So the device is the *first* place guest code runs. Ship one or two guest changes per image rather
+than a batch, and get a hardware run between them. Five went out in 0.1.3 at once, sessions stopped
+starting, and there was nothing to bisect against — the first hardware run had also been the first
+integration test. Batching saves a twenty-minute build and can cost an evening.
+
+### When the guest misbehaves
+
+On a release build nothing on the phone can reach the guest from outside: `run-as` refuses,
+`allowBackup` is false, and the app's storage is private. Box's own **Terminal panel** (Computer →
+Terminal) is the shell, running as `agent` with agentd's environment. Driving it from a laptop:
 
 ```bash
-./gradlew :app:assembleStockRelease \
-  -PboxKeystoreFile=$PWD/box-release.jks -PboxKeystorePassword=... \
-  -PboxKeyAlias=box -PboxKeyPassword=...
+adb shell input tap <composer x> <y>
+adb shell input text "pgrep%s-af%ssdk-linux-arm64"   # %s is a space
+adb shell input keyevent 66
+adb shell uiautomator dump /sdcard/t.xml             # read the output back
 ```
 
-`boxVersionName` and `boxVersionCode` are the other two: the workflow passes the tag and
-the run number, so the APK reports the version it was released as. Without them the build
-falls back to the `0.1.0` in `app/build.gradle.kts`, which is what a local build gets.
+`|` does not survive `input text`, so a piped command silently runs as only its first half — reach
+for `pgrep -af`, `ss state established` or `grep -r` instead. `input text` also capitalises some
+words, so check the echoed command before believing an error about a path.
+
+The question worth asking first, when an agent session will not start:
+
+```bash
+claude -p hi --model claude-opus-5
+```
+
+Run by hand in the guest, that separates a broken environment from a harness driving the CLI
+wrongly, in one command. It is what ruled out the credential, the model, the network and the binary
+in #71 — leaving the SDK streaming path as the only remaining suspect.
 
 ## The mark
 

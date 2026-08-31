@@ -178,6 +178,8 @@ private fun BoxRoot(boxViewModel: BoxViewModel = viewModel(factory = BoxContaine
                         boxViewModel.openPreview(artifact)
                     is dev.localagent.workstation.agent.Artifact.Document ->
                         boxViewModel.openDocument(artifact)
+                    is dev.localagent.workstation.agent.Artifact.Install ->
+                        boxViewModel.installApk(artifact)
                 }
             },
             // Both routes to closing — the swipe and the header menu — go the same way: the row

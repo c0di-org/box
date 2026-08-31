@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.InstallMobile
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Psychology
@@ -1013,6 +1014,7 @@ private fun ArtifactRow(
                     when (artifact) {
                         Artifact.Computer -> Icons.Outlined.Computer
                         is Artifact.Preview -> Icons.Outlined.Language
+                        is Artifact.Install -> Icons.Outlined.InstallMobile
                         is Artifact.Document ->
                             if (artifact.mimeType.startsWith("image/")) {
                                 Icons.Outlined.Image
@@ -1030,6 +1032,7 @@ private fun ArtifactRow(
                         is Artifact.Preview -> "Open preview"
                         // Named, unlike the other two: there is only ever one computer and one
                         // preview to open, and there can be any number of documents.
+                        is Artifact.Install -> "Install ${artifact.name}"
                         is Artifact.Document -> "Open ${artifact.name}"
                     },
                     maxLines = 1,
