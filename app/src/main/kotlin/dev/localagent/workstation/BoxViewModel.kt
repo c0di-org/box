@@ -44,6 +44,7 @@ import dev.localagent.workstation.agent.Artifact
 import dev.localagent.workstation.files.Inbox
 import dev.localagent.workstation.agent.FakeAgentBackend
 import dev.localagent.workstation.agent.ConnectOutcome
+import dev.localagent.workstation.agent.CredentialAsk
 import dev.localagent.workstation.agent.GitHubAuth
 import dev.localagent.workstation.agent.GuestAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
@@ -576,6 +577,10 @@ class BoxViewModel @JvmOverloads constructor(
                 if (event is AgentEvent.PermissionRequested) autoApprove(id, event)
                 if (event is AgentEvent.ConnectRequested) offerConnection(id, event)
                 if (event is AgentEvent.ConnectResolved) settleConnection(event.requestId)
+                // Raised from the event rather than from a tap on the card, so a person who has
+                // scrolled away, or who was not looking when the turn failed, is still asked.
+                if (event is AgentEvent.AgentError) event.credential?.let { askForCredential(id, it) }
+                if (event is AgentEvent.CredentialAccepted) settleCredential(event.credential)
                 if (event is AgentEvent.CaughtUp && replayingSession == id) {
                     replayingSession = null
                     raiseOutstandingConnection(id)
@@ -606,6 +611,60 @@ class BoxViewModel @JvmOverloads constructor(
                     }
                 }
             }
+        }
+    }
+
+    // ---- a secret the agent cannot get for itself -------------------------
+
+    /**
+     * A harness has stopped for want of a credential.
+     *
+     * The sheet is not raised here. A card in the conversation is, and the sheet opens when
+     * somebody taps it — because this can fire for a task nobody is looking at, and a modal that
+     * appeared over whatever the user was doing would be Box interrupting them about a task they
+     * had put down.
+     *
+     * Replaces an earlier ask for the same session rather than stacking: it is the same question
+     * being asked again.
+     */
+    private fun askForCredential(sessionId: String, ask: CredentialAsk) {
+        mutableUiState.update {
+            it.copy(credentialRequest = CredentialRequest(sessionId = sessionId, ask = ask))
+        }
+    }
+
+    fun showCredentialSheet() {
+        mutableUiState.update { it.copy(credentialRequest = it.credentialRequest?.copy(visible = true)) }
+    }
+
+    fun dismissCredentialSheet() {
+        mutableUiState.update {
+            it.copy(credentialRequest = it.credentialRequest?.copy(visible = false, saving = false))
+        }
+    }
+
+    /**
+     * Hands the value to the guest, and leaves the sheet standing until the guest says it landed.
+     *
+     * The value is not kept: it goes to [AgentBackend.provideCredential] and this holds nothing
+     * but the fact that an answer is in flight. Closing on the send instead would be Box saying
+     * "saved" about a `oneway` write — the same claim, in a third place, that this codebase has
+     * now had to unpick twice.
+     */
+    fun submitCredential(value: String) {
+        val request = mutableUiState.value.credentialRequest ?: return
+        if (value.isBlank()) return
+        mutableUiState.update { it.copy(credentialRequest = request.copy(visible = true, saving = true)) }
+        viewModelScope.launch {
+            agents.provideCredential(request.sessionId, request.ask.id, value)
+        }
+    }
+
+    /** The guest wrote the file. The question is over, so the card and the sheet both go. */
+    private fun settleCredential(credentialId: String) {
+        mutableUiState.update { state ->
+            val request = state.credentialRequest ?: return@update state
+            if (request.ask.id != credentialId) state else state.copy(credentialRequest = null)
         }
     }
 

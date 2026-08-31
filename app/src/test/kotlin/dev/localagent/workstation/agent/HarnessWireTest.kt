@@ -469,6 +469,55 @@ class HarnessWireTest {
     }
 
     @Test
+    fun `an error naming a credential carries the ask`() {
+        val event = parse(
+            """{"v":1,"type":"error","message":"DeepSeek needs an API key.","recoverable":false,
+               "credential":{"id":"deepseek-api-key","label":"DeepSeek API key","help":"Create one."}}""",
+        ) as AgentEvent.AgentError
+
+        assertEquals(CredentialAsk("deepseek-api-key", "DeepSeek API key", "Create one."), event.credential)
+        // Not recoverable, because the card's other action is Reconnect and nothing is wrong with
+        // the connection. That is a wrong affordance, not a missing one.
+        assertEquals(false, event.recoverable)
+    }
+
+    @Test
+    fun `an ordinary error has no ask on it`() {
+        val event = parse("""{"v":1,"type":"error","message":"The agent stopped."}""")
+
+        assertNull((event as AgentEvent.AgentError).credential)
+        assertTrue(event.recoverable)
+    }
+
+    @Test
+    fun `an ask with no id is noise, not a question`() {
+        // A harness saying something this build has no name for must not raise a sheet for a
+        // secret nothing can be done with.
+        val event = parse(
+            """{"v":1,"type":"error","message":"nope","credential":{"label":"Something"}}""",
+        )
+        assertNull((event as AgentEvent.AgentError).credential)
+    }
+
+    @Test
+    fun `an ask with no label is asked for under its own name`() {
+        val event = parse(
+            """{"v":1,"type":"error","message":"nope","credential":{"id":"some-key"}}""",
+        ) as AgentEvent.AgentError
+
+        assertEquals("some-key", event.credential?.label)
+    }
+
+    @Test
+    fun `the guest confirms it wrote the key`() {
+        // What closes the sheet. Not the send -- handing bytes to a oneway write says nothing
+        // about what happened at the other end.
+        val event = parse("""{"v":1,"type":"credential_saved","credential":"deepseek-api-key"}""")
+
+        assertEquals("deepseek-api-key", (event as AgentEvent.CredentialAccepted).credential)
+    }
+
+    @Test
     fun `an echoed turn carries the name it was sent under`() {
         val event = parse("""{"v":1,"type":"user_message","text":"clone it","turnId":"t-7"}""")
 

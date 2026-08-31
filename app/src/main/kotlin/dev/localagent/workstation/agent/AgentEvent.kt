@@ -278,6 +278,30 @@ sealed interface AgentEvent {
         val message: String,
         val detail: String? = null,
         val recoverable: Boolean = true,
+        /**
+         * A secret the harness cannot run without and cannot obtain for itself.
+         *
+         * Present makes this a *different kind* of failure from the ones above it, and the card
+         * has to offer a different thing: nothing is wrong with the connection, so Reconnect is
+         * not merely a missing affordance but a wrong one — it invites a retry guaranteed to fail
+         * identically, and implies the problem might be transient.
+         */
+        val credential: CredentialAsk? = null,
+    ) : AgentEvent
+
+    /**
+     * The guest has the secret and has written it where it needs it.
+     *
+     * The only reason this exists: the sheet must not close on the *send*. Handing bytes to a
+     * `oneway` write is not the same as a key on disk, and a sheet that closes on the former says
+     * "done" about something that may not have happened — which is the shape of mistake this
+     * codebase has now been bitten by twice.
+     */
+    data class CredentialAccepted(
+        override val eventId: String,
+        override val sessionId: String,
+        override val at: Long,
+        val credential: String,
     ) : AgentEvent
 }
 
@@ -616,3 +640,25 @@ enum class ConnectService(val wire: String) {
         fun of(wire: String): ConnectService? = entries.firstOrNull { it.wire == wire }
     }
 }
+
+/**
+ * A secret a harness needs, named so that Box can ask for it.
+ *
+ * The harness says *which* secret is missing and what to call it; what to do about that is the
+ * app's to decide, in the app's own words. Before this the DeepSeek harness said "put a key in
+ * /workspace/.config/box/deepseek-api-key from the Box terminal", which was accurate and useless
+ * to somebody holding a phone — the guest's X session has no route from the phone's clipboard, and
+ * the on-screen keyboard draws keysyms one tap at a time.
+ *
+ * The value never travels as an [AgentEvent] or a `prompt`. It goes down the same non-echoed stdin
+ * channel the Claude sign-in uses for `auth_code`, for the same reason: a key pasted into the
+ * composer would be written to the session log in the clear and drawn in the transcript forever.
+ */
+data class CredentialAsk(
+    /** What the harness calls it, and what it will be sent back under. */
+    val id: String,
+    /** Shown to the user: "DeepSeek API key". */
+    val label: String,
+    /** Where to get one, if the harness knows. */
+    val help: String? = null,
+)

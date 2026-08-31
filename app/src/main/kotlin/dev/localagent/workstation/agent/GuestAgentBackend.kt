@@ -546,6 +546,20 @@ class GuestAgentBackend(
             )
         }
 
+    override suspend fun provideCredential(sessionId: String, credentialId: String, value: String) {
+        val record = records[sessionId] ?: return
+        attach(record)
+        // Deliberately not through `promptCommand`. A prompt is echoed back by the harness into
+        // the session log, which is on the workspace disk and is replayed in full every time the
+        // task is opened — so a key sent that way would be stored in the clear and redrawn
+        // forever. This command is consumed and never emitted; see `saveApiKey` in the harness.
+        //
+        // Nothing about it is logged here either, including its length.
+        record.write(
+            mapOf("type" to "api_key", "credential" to credentialId, "value" to value),
+        )
+    }
+
     override suspend fun resolvePermission(
         sessionId: String,
         requestId: String,

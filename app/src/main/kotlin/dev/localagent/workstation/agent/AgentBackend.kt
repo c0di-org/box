@@ -105,6 +105,21 @@ interface AgentBackend {
         turnId: String = newTurnId(),
     )
 
+    /**
+     * Hands a harness the secret it asked for in [AgentEvent.AgentError.credential].
+     *
+     * The one method here whose argument is credential material, and the rules that come with
+     * that: it is never echoed, never written to the session log, and never turned into an
+     * [AgentEvent]. It goes down the same non-echoed stdin channel the Claude sign-in uses for
+     * `auth_code`, and for the same reason — a key that reached `send()` instead would be
+     * mirrored into the log by the harness's own `user_message` echo and drawn in the transcript
+     * from then on.
+     *
+     * Returns nothing. The receipt is [AgentEvent.CredentialAccepted], from the guest that wrote
+     * the file.
+     */
+    suspend fun provideCredential(sessionId: String, credentialId: String, value: String)
+
     /** Answers the outstanding [AgentEvent.PermissionRequested]. Idempotent per request id. */
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
 

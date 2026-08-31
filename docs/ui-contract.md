@@ -165,6 +165,7 @@ interface AgentBackend {
     fun connection(sessionId: String): StateFlow<SessionConnection>
     suspend fun startSession(harnessId: String, prompt: String?, attachments: List<Attachment>, turnId: String): String
     suspend fun send(sessionId: String, text: String, attachments: List<Attachment>, turnId: String)
+    suspend fun provideCredential(sessionId: String, credentialId: String, value: String)
     suspend fun resolvePermission(sessionId: String, requestId: String, decision: PermissionDecision)
     suspend fun resolveConnect(sessionId: String, requestId: String, outcome: ConnectOutcome)
     suspend fun interrupt(sessionId: String)
@@ -183,6 +184,13 @@ Two requirements that are easy to miss:
   `turn_accepted` against the `turnId` the caller minted, from the component that did the work. The
   caller mints it so that the copy drawn on screen and the turn given to the model have the same
   name; a backend is free to ignore it, and one that does simply never has a turn to redeliver.
+- `provideCredential()` is the only method here whose argument is credential material, and it has
+  one rule: **it must never become a `prompt`.** A prompt is echoed back by the harness as
+  `user_message`, which is appended to the session log on the workspace disk and replayed in full
+  every time the task is opened — so a key sent that way is stored in the clear and drawn in the
+  transcript forever after. It travels on the same non-echoed stdin channel as the Claude
+  sign-in's `auth_code`. The receipt is `AgentEvent.CredentialAccepted`, from the guest that wrote
+  the file; nothing may treat the send itself as one.
 - `connection()` is **orthogonal** to whether the agent is busy. A finished session can be
   disconnected and a running one can survive a reconnect. `Disconnected` is a normal state, not an
   error: the VM takes ~90s to boot and Android reclaims it whenever it likes.

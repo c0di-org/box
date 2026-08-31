@@ -131,6 +131,7 @@ fun ConversationPane(
     onReviewRequest: (String) -> Unit,
     onOpenArtifact: (Artifact) -> Unit,
     onStartComputer: () -> Unit,
+    onPasteKey: () -> Unit,
     onOpenComputer: () -> Unit,
     onCloseSession: (String) -> Unit,
     onSaveTranscript: (Uri) -> Unit,
@@ -277,6 +278,7 @@ fun ConversationPane(
                     stopped = state.agentStopped,
                     onOpenArtifact = onOpenArtifact,
                     onRetry = onStartComputer,
+                    onPasteKey = onPasteKey,
                     onStopSubAgent = onStopSubAgent,
                     onPermissionDecision = { requestId, decision ->
                         // Answered is answered: the ticks have gone to the agent and holding a copy
@@ -638,6 +640,7 @@ private fun TranscriptList(
     stopped: Boolean,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
+    onPasteKey: () -> Unit,
     onStopSubAgent: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onReviewPermission: (String) -> Unit,
@@ -719,6 +722,7 @@ private fun TranscriptList(
                             harness = harness,
                             onOpenArtifact = onOpenArtifact,
                             onRetry = onRetry,
+                            onPasteKey = onPasteKey,
                             onStopSubAgent = onStopSubAgent,
                             onPermissionDecision = onPermissionDecision,
                             onReviewPermission = onReviewPermission,

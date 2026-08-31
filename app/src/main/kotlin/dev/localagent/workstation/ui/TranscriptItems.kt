@@ -111,6 +111,7 @@ fun TranscriptRow(
     harness: HarnessDescriptor?,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
+    onPasteKey: () -> Unit,
     onStopSubAgent: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onReviewPermission: (String) -> Unit,
@@ -124,7 +125,7 @@ fun TranscriptRow(
         is TranscriptItem.Thinking -> ThinkingBlock(item, modifier)
         is TranscriptItem.Tool -> ToolCard(item, modifier)
         is TranscriptItem.SubAgent -> SubAgentCard(
-            item, onOpenArtifact, onRetry, onStopSubAgent,
+            item, onOpenArtifact, onRetry, onPasteKey, onStopSubAgent,
             onPermissionDecision, onReviewPermission, answers, modifier,
         )
         is TranscriptItem.Diff -> DiffCard(item, modifier)
@@ -132,7 +133,7 @@ fun TranscriptRow(
         is TranscriptItem.Permission ->
             PermissionRecord(item, onPermissionDecision, onReviewPermission, answers, modifier)
         is TranscriptItem.Artifacts -> ArtifactRow(item, onOpenArtifact, modifier)
-        is TranscriptItem.Error -> ErrorCard(item, onRetry, modifier)
+        is TranscriptItem.Error -> ErrorCard(item, onRetry, onPasteKey, modifier)
         is TranscriptItem.Ended -> EndedRow(item, modifier)
     }
 }
@@ -473,6 +474,7 @@ private fun SubAgentCard(
     item: TranscriptItem.SubAgent,
     onOpenArtifact: (Artifact) -> Unit,
     onRetry: () -> Unit,
+    onPasteKey: () -> Unit,
     onStop: (String) -> Unit,
     onPermissionDecision: (String, PermissionDecision) -> Unit,
     onReviewPermission: (String) -> Unit,
@@ -588,6 +590,7 @@ private fun SubAgentCard(
                             harness = null,
                             onOpenArtifact = onOpenArtifact,
                             onRetry = onRetry,
+                            onPasteKey = onPasteKey,
                             onStopSubAgent = onStop,
                             onPermissionDecision = onPermissionDecision,
                             onReviewPermission = onReviewPermission,
@@ -1047,6 +1050,7 @@ private fun ArtifactRow(
 private fun ErrorCard(
     item: TranscriptItem.Error,
     onRetry: () -> Unit,
+    onPasteKey: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1064,7 +1068,20 @@ private fun ErrorCard(
                     Spacer(Modifier.height(3.dp))
                     Text(it, style = MaterialTheme.typography.bodyMedium)
                 }
-                if (item.recoverable) {
+                // A missing credential is not a connection failure, and Reconnect is a *wrong*
+                // affordance for it rather than merely a missing one: nothing is wrong with the
+                // connection, so it invites a retry guaranteed to fail identically and implies the
+                // problem might be transient. The action offered is the one that can help.
+                val credential = item.credential
+                if (credential != null) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(
+                        onClick = onPasteKey,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    ) {
+                        Text("Paste ${credential.label.replaceFirstChar { it.lowercase() }}")
+                    }
+                } else if (item.recoverable) {
                     Spacer(Modifier.height(6.dp))
                     TextButton(onClick = onRetry, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                         Text("Reconnect")
