@@ -768,6 +768,13 @@ class GuestAgentBackend(
      */
     private fun readStatus(record: Record, offset: Long, chunk: ByteArray) {
         val lines = synchronized(record.statusCursor) {
+            // This reader is handed every chunk directly from `onData`, never through the buffered
+            // flow, so a dropped chunk is not something it can see. The one gap it does see is the
+            // jump at a reattachment: the log already holds a conversation and the first live chunk
+            // lands far past zero. Nothing behind that is worth reading for a *status*, and there
+            // is no log path here to read it from — so this skips it deliberately instead of
+            // stalling on a gap it can never close.
+            if (record.statusCursor.gapBefore(offset) > 0) record.statusCursor.resyncTo(offset)
             runCatching { record.statusCursor.accept(offset, chunk) }.getOrElse { return }
         }
         val context = HarnessWire.Context(

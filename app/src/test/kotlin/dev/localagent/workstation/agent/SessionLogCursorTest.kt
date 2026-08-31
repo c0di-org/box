@@ -193,6 +193,33 @@ class SessionLogCursorTest {
     }
 
     @Test
+    fun `a reader with no log to go back to skips the gap rather than stalling on it`() {
+        // The status reader's case: it watches the live stream only, and a reattachment hands it a
+        // first chunk stamped far past zero because the log already holds a conversation. There is
+        // nothing behind that it could read even if it wanted to.
+        val cursor = SessionLogCursor()
+
+        assertEquals(400L, cursor.gapBefore(offset = 400))
+        cursor.resyncTo(400)
+
+        assertEquals(0L, cursor.gapBefore(offset = 400))
+        assertEquals(listOf("live"), cursor.accept(400, "live\n".toByteArray()))
+    }
+
+    @Test
+    fun `a skipped gap does not weld the line it interrupted onto the next one`() {
+        val cursor = SessionLogCursor()
+        cursor.accept(0, """{"type":"tex""".toByteArray())
+
+        // Those twelve bytes are the head of a line whose tail is inside the bytes being skipped.
+        // Keeping them would splice them onto whatever arrives next.
+        cursor.resyncTo(80)
+
+        val whole = """{"type":"whole"}"""
+        assertEquals(listOf(whole), cursor.accept(80, (whole + "\n").toByteArray()))
+    }
+
+    @Test
     fun `a resumed session continues the log's numbering rather than starting over`() {
         // What went wrong on a real phone: the UI process was replaced, the session was re-opened
         // against the same log, and the new writer counted its bytes from zero while the file

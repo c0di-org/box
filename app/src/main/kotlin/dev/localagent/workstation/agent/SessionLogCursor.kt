@@ -81,6 +81,26 @@ internal class SessionLogCursor {
         return drain(bytes.copyOfRange(skip, bytes.size))
     }
 
+    /**
+     * Give up on bytes this reader will never see, and carry on from [offset].
+     *
+     * For a reader with no way back to them, as opposed to one that can recover them with
+     * [readFile]. `readStatus` is the one: it is handed every chunk straight from the binder
+     * callback rather than through the buffered flow, so the only gap it can ever see is the jump
+     * at a reattachment — the log already holds a conversation and the first live chunk lands far
+     * past zero. There is nothing behind that worth reading for a *status*, and no log path there
+     * to read it from.
+     *
+     * Explicit, and named for what it costs, because that is the whole point of [accept] refusing
+     * to guess: skipping bytes and recovering them are different things, and `coerceAtLeast(0)`
+     * made them look like the same thing. `pending` is dropped with them — the partial line it
+     * holds ends where the missing bytes begin, so keeping it would weld it to whatever comes next.
+     */
+    fun resyncTo(offset: Long) {
+        pending.reset()
+        consumed = offset
+    }
+
     /** Splits on newlines, holding back a trailing partial line until the rest of it arrives. */
     private fun drain(bytes: ByteArray): List<String> {
         if (bytes.isEmpty()) return emptyList()
