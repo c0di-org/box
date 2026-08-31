@@ -353,7 +353,7 @@ test('desktop false is not a request to show the desktop', async () => {
   const events = await show({ desktop: false });
 
   assert.deepEqual(artifacts(events), []);
-  assert.match(told(events)[0], /exactly one of path, port or desktop/);
+  assert.match(told(events)[0], /exactly one of path, port, install or desktop/);
 });
 
 // ---- one thing at a time -----------------------------------------------------
@@ -369,7 +369,7 @@ test('nothing at all is refused', async () => {
   const events = await show({});
 
   assert.deepEqual(artifacts(events), []);
-  assert.match(told(events)[0], /exactly one of path, port or desktop/);
+  assert.match(told(events)[0], /exactly one of path, port, install or desktop/);
 });
 
 // ---- and when the guest cannot host the tool ---------------------------------
