@@ -49,6 +49,7 @@ import dev.localagent.workstation.agent.GuestAgentBackend
 import dev.localagent.workstation.agent.GuestAuth
 import dev.localagent.workstation.agent.PermissionDecision
 import dev.localagent.workstation.agent.SessionConnection
+import dev.localagent.workstation.agent.SignInStatus
 import dev.localagent.workstation.agent.TranscriptBuilder
 import dev.localagent.workstation.computer.ControlHolder
 import dev.localagent.workstation.computer.GuestScreen
@@ -62,6 +63,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -166,7 +168,7 @@ class BoxViewModel @JvmOverloads constructor(
         refreshFiles()
         // Whether the guest already holds a credential is only answerable once there is a guest to
         // ask. Until then the sign-in state is honestly Unknown.
-        auth.check(bound)
+        checkSignIn(bound)
         // A sheet raised while the box was still starting has been sitting on "Waiting for your
         // box…". It can answer now, so the code it was meant to be showing arrives without the
         // person having to press anything.
@@ -180,6 +182,39 @@ class BoxViewModel @JvmOverloads constructor(
             // went looking for it in diagnostics. A box that is connected should be able to say so
             // without being interrogated.
             github.check(bound)
+        }
+    }
+
+    private var signInCheck: Job? = null
+
+    /**
+     * Asks the guest about the credential, and keeps asking for as long as it cannot answer.
+     *
+     * One ask was not enough, and the failure was invisible. Ready means the VM, not the guest's
+     * userland — a box resuming from a snapshot reaches Ready a beat before `agentd` will open a
+     * session — so the single ask could land in a window where nothing could answer it. The state
+     * it produced then stood for the rest of the app's life, because [greetReadyComputer] fires
+     * once. That is a person force-quitting Box, coming back, and being told they are signed out
+     * of a box that is holding their credential the whole time.
+     *
+     * Only [GuestAuth.State.Unknown] is retried: it is now the only state meaning *nobody
+     * answered*. A real "signed out" is an answer and is left alone, and a sign-in the user has
+     * since started is not interrupted — [GuestAuth.check] declines to run underneath one.
+     */
+    private fun checkSignIn(control: IRuntimeControl) {
+        if (signInCheck?.isActive == true) return
+        signInCheck = viewModelScope.launch {
+            var attempt = 0
+            while (true) {
+                auth.check(control)
+                // Waits on the answer rather than on a timer: the ask is a guest process, and how
+                // long it takes is not something this can usefully guess.
+                val settled = auth.state.first { it != GuestAuth.State.Checking }
+                if (settled != GuestAuth.State.Unknown) return@launch
+                delay(SignInStatus.retryAfterMillis(attempt++) ?: return@launch)
+                // A box that has gone away since is not a box that is about to answer.
+                if (!mutableUiState.value.computerReady) return@launch
+            }
         }
     }
 
