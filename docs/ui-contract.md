@@ -177,6 +177,10 @@ Two requirements that are easy to miss:
 
 - `events()` must replay history before live events, and collecting twice must produce the same
   prefix. The UI relies on it to restore a transcript after process death.
+- `send()` returns `Unit`, and there is nowhere in this interface for a delivery receipt to live.
+  A turn can therefore be drawn as sent, and logged as sent, without ever reaching the model — see
+  [Turn delivery](turn-delivery.md) for the observed case and what an honest acknowledgement would
+  cost.
 - `connection()` is **orthogonal** to whether the agent is busy. A finished session can be
   disconnected and a running one can survive a reconnect. `Disconnected` is a normal state, not an
   error: the VM takes ~90s to boot and Android reclaims it whenever it likes.
